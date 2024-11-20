@@ -4,14 +4,13 @@
 from abc import ABC, abstractmethod
 from sklearn.base import BaseEstimator, TransformerMixin, RegressorMixin
 import numpy as np
-from sklearn.feature_selection import VarianceThreshold, SelectPercentile, SelectFwe, SelectFromModel, SequentialFeatureSelector, f_regression, mutual_info_regression
+from sklearn.feature_selection import VarianceThreshold, SelectPercentile, SelectFwe, SelectFromModel, SequentialFeatureSelector, f_regression
 from sklearn.linear_model import LinearRegression, ElasticNet, SGDRegressor, Lasso
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, ExtraTreesRegressor
 from sklearn.svm import SVR
-from sklearn.neural_network import MLPRegressor
 from typeguard import typechecked
-from typing import List, Tuple, Dict, Set
+from typing import Dict
 
 rng_t = np.random.Generator
 name_t = np.str_
