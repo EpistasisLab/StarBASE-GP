@@ -1,25 +1,23 @@
 # Will contain the definition of Pipeline class which will be used by both the Epistatic branch and the univariate branch.
 
-from sklearn.base import BaseEstimator
-from typing import List, Dict, Tuple, Set
+from typing import List, Set
 from .scikit_node import ScikitNode
 import numpy as np
 from typeguard import typechecked
 import numpy.typing as npt
-from typing_extensions import Self
 import copy as cp
 
 # numpy random number generator type
 gen_rng_t = np.random.Generator
 gen_snp_arr_t = npt.NDArray[np.str_]
-uni_snps_t = Set #YF
+uni_snps_t = Set
 uniq_chrombin_t = Set
 traits_t = List
 r2_t = np.float32
 feature_cnt_t = np.int16
 div_score_t = np.float32
 
-@typechecked # for debugging purposes
+@typechecked
 class Pipeline:
     def __init__(self,
                  uni_snps: uni_snps_t,

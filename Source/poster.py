@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import ray
 import logging
 import warnings
-from . import geno_hub
+from . import snp_hub
 
 from sklearn.exceptions import ConvergenceWarning, NotFittedError
 from sklearn.pipeline import FeatureUnion
@@ -110,7 +110,7 @@ def get_shap_values(pipeline, epi_pairs_df, epi_nodes, X_train_id, y_train_id, i
 
 
 class Poster:
-    def __init__(self, X_train, y_train, X_val,  y_val, hub: geno_hub.GenoHub):
+    def __init__(self, X_train, y_train, X_val,  y_val, hub: snp_hub.SnpHub):
         self.X_train_id = X_train
         self.y_train_id = y_train
         self.X_val = X_val
