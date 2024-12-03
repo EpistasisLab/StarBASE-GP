@@ -9,7 +9,6 @@
 import numpy as np
 from typeguard import typechecked
 from typing import List, Tuple, Set
-import numpy.typing as npt
 
 from .pipeline import Pipeline
 from .snp_hub import SnpHub
@@ -171,8 +170,7 @@ class Reproduction:
                           offspring_cnt: pop_size_t,
                           population: List[Pipeline],
                           parent_ids: List[pop_size_t],
-                          order: List[str],
-                          seed: int) -> List[Pipeline]:
+                          order: List[str]) -> List[Pipeline]:
         # quick checks
         assert len(parent_ids) > 0
         assert len(population) > 0
@@ -238,22 +236,18 @@ class Reproduction:
         # mutate the offspring
         uni_snps = set()
 
-        # get the customized step for possible wiggle mut
-        step = self.step
-
-        # go through the epi branches and mutate them + #YF
+        # go through the univariate snp and mutate them
         for uni_snp in parent_uni_snps:
             # mutate via wiggle or random replacement
             if rng.choice([True, False], p=[self.wiggle_mut_p, 1.0-self.wiggle_mut_p]):
                 # smart wiggle
                 if rng.choice([True, False], p=[self.mut_smt_p / (self.mut_smt_p + self.mut_ran_p), self.mut_ran_p / (self.mut_smt_p + self.mut_ran_p)]):
-                    # smart mutation
-                    uni_snps.add(self.mutate_uni_node_wiggle_smrt(rng,hub,uni_snp,step))
+                    uni_snps.add(self.mutate_uni_node_wiggle_smrt(rng,hub,uni_snp))
                 else: # dumb wiggle
-                    uni_snps.add(self.mutate_uni_node_wiggle_rand(rng,hub,uni_snp,step))
+                    uni_snps.add(self.mutate_uni_node_wiggle_rand(rng,hub,uni_snp))
             else:
                 # replace snp with a random one
-                uni_snps.add(hub.get_ran_snp(rng))
+                uni_snps.add(self.get_ran_snp_mut(rng, uni_snp, hub))
 
         # update the epi pairs + new interactions
         offspring.set_uni_snps(uni_snps.union(new_snps_list))
@@ -261,6 +255,10 @@ class Reproduction:
         # mutate the selector node
         if rng.choice([True, False], p=[self.mut_selector_p, 1.0-self.mut_selector_p]):
             offspring.mutate_selector_node(rng)
+
+        # mutate the ld node
+        if rng.choice([True, False], p=[self.mut_ld_p, 1.0-self.mut_ld_p]):
+            offspring.mutate_ld_node(rng)
 
         # mutate the regressor node
         if rng.choice([True, False], p=[self.mut_regressor_p, 1.0-self.mut_regressor_p]):
@@ -341,7 +339,7 @@ class Reproduction:
         elif num_add_range == 1:
             num_additions = 1
         # if the range is greater than self.num_add_interactions
-        elif num_add_range >= self.num_add_snps: #YF update
+        elif num_add_range >= self.num_add_snps:
             # get a random number between 1 and num_add_interactions
             num_additions = rng.integers(1, self.num_add_snps)
         # else pick a number between the range and 1 (range < self.num_add_interactions)
@@ -370,7 +368,7 @@ class Reproduction:
         # return the interactions
         return new_snps
 
-    def get_smt_snp_mut(self, rng_: rng_t, snp_name: snp_t, hub: SnpHub) -> snp_t:
+    def get_ran_snp_mut(self, rng_: rng_t, snp_name: snp_t, hub: SnpHub) -> snp_t:
         # set the random number generator
         rng = np.random.default_rng(rng_)
 
@@ -379,31 +377,40 @@ class Reproduction:
                                          self.smt_in_out_p / (self.smt_in_in_p + self.smt_in_out_p + self.smt_out_out_p),
                                          self.smt_out_out_p / (self.smt_in_in_p + self.smt_in_out_p + self.smt_out_out_p)])
 
+        roll = rng.choice([True,False], p=[self.mut_smt_p / (self.mut_smt_p + self.mut_ran_p),
+                                           self.mut_ran_p / (self.mut_smt_p + self.mut_ran_p)])
+
+        # in chromosome and in bin
         if mut_fun == 0:
-            # in chromosome and in bin
-            return hub.get_smt_snp_in_bin(snp=snp_name, rng_=rng)
+            if roll:
+                return hub.get_smt_snp_in_bin(snp=snp_name, rng_=rng)
+            else:
+                return hub.get_ran_snp_in_bin(snp=snp_name, rng_=rng)
+        # in chromosome and out of bin
         elif mut_fun == 1:
-            # in chromosome and out of bin
-            return hub.get_smt_snp_in_chrm(snp=snp_name, rng_=rng)
+            if roll:
+                return hub.get_smt_snp_in_chrm(snp=snp_name, rng_=rng)
+            else:
+                return hub.get_ran_snp_in_chrm(snp=snp_name, rng_=rng)
+        # out of chromosome
         elif mut_fun == 2:
-            # out of chromosome
-            return hub.get_smt_snp_out_chrm(snp=snp_name, rng_=rng)
+            if roll:
+                return hub.get_smt_snp_out_chrm(snp=snp_name, rng_=rng)
+            else:
+                return hub.get_ran_snp_out_chrm(snp=snp_name, rng_=rng)
         else:
             exit("Unknown mutation function", -1)
 
     def mutate_uni_node_wiggle_rand(self,
                                rng: rng_t,
                                hub: SnpHub,
-                               uni_snp: snp_t,
-                               step: np.uint16) -> snp_t:
-        # quick check
-        assert step >= 0
-
+                               uni_snp: snp_t) -> snp_t:
         # will hold new snp
         new_snp_name = None
 
         # randomly select snp within wiggle range from current snp
-        new_snp_name = hub.get_ran_snp_in_bin_wiggle(uni_snp,rng,step)
+        new_snp_name = hub.get_ran_snp_in_bin_wiggle(uni_snp,rng,self.step)
+
         # make sure the new snps are set and are in the same chromosome and bin
         assert new_snp_name != None
         assert new_snp_name != uni_snp
@@ -412,16 +419,12 @@ class Reproduction:
     def mutate_uni_node_wiggle_smrt(self,
                                rng: rng_t,
                                hub: SnpHub,
-                               uni_snp: snp_t,
-                               step: step_t) -> snp_t:
-        # quick check
-        assert step >= 0
-
+                               uni_snp: snp_t) -> snp_t:
         # will hold new snp
         new_snp_name = None
 
         # smartly select snp based on R2 as probability within wiggle range from current snp
-        new_snp_name = hub.get_smt_snp_in_bin_wiggle(uni_snp,rng,step)
+        new_snp_name = hub.get_smt_snp_in_bin_wiggle(uni_snp,rng,self.step)
 
          # make sure the new snps are set and are in the same chromosome and bin
         assert new_snp_name != None
@@ -433,48 +436,34 @@ class Reproduction:
                   rng: np.random.Generator,
                   parent1: Pipeline,
                   parent2: Pipeline) -> Tuple[Pipeline, Pipeline]:
-        # get the epi branches from the parents
-        p1_epi_pairs = cp.deepcopy(list(parent1.get_epi_pairs()))
-        p2_epi_pairs = cp.deepcopy(list(parent2.get_epi_pairs()))
 
         p1_uni_snps = list(parent1.get_uni_snps())
         p2_uni_snps = list(parent2.get_uni_snps())
 
         # get smallest half length from both
-        half_len_epi = min(len(p1_epi_pairs), len(p2_epi_pairs)) // 2
         half_len_uni = min(len(p1_uni_snps), len(p2_uni_snps)) // 2
 
         # randomly select indecies from both parents epi branches
-        p1_idx_epi = rng.choice(len(p1_epi_pairs), half_len_epi, replace=False)
-        p2_idx_epi = rng.choice(len(p2_epi_pairs), half_len_epi, replace=False)
-
         p1_idx_uni = rng.choice(len(p1_uni_snps), half_len_uni, replace=False)
         p2_idx_uni = rng.choice(len(p2_uni_snps), half_len_uni, replace=False)
-
-        # swap elements between parents
-        for i1, i2 in zip(p1_idx_epi, p2_idx_epi):
-            p1_epi_pairs[i1], p2_epi_pairs[i2] = p2_epi_pairs[i2], p1_epi_pairs[i1]
 
         for i1, i2 in zip(p1_idx_uni, p2_idx_uni):
             p1_uni_snps[i1], p2_uni_snps[i2] = p2_uni_snps[i2], p1_uni_snps[i1]
 
-        # make sure the epistatic interactions set is the correct size
-        assert 0 <= len(p1_epi_pairs) <= self.epi_cnt_max
-        assert 0 <= len(p2_epi_pairs) <= self.epi_cnt_max
         # make sure the univariate snps set is the correct size
         assert 0 <= len(p1_uni_snps) <= self.uni_cnt_max
         assert 0 <= len(p2_uni_snps) <= self.uni_cnt_max
 
         # create one offspring per parent
-        offspring_1 = Pipeline(epi_pairs=set(p1_epi_pairs),
-                               uni_snps=set(p1_uni_snps),
+        offspring_1 = Pipeline(uni_snps=set(p1_uni_snps),
                                selector_node=parent1.get_selector_node(),
+                               ld_node=parent1.get_ld_node(),
                                root_node=parent1.get_root_node(),
                                traits=[])
 
-        offsprint_2 = Pipeline(epi_pairs=set(p2_epi_pairs),
-                               uni_snps=set(p2_uni_snps),
+        offsprint_2 = Pipeline(uni_snps=set(p2_uni_snps),
                                selector_node=parent2.get_selector_node(),
+                               ld_node=parent2.get_ld_node(),
                                root_node=parent2.get_root_node(),
                                traits=[])
 

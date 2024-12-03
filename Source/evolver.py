@@ -405,8 +405,7 @@ class EA:
                                                            offspring_cnt=np.uint16(extra_offspring + self.pop_size),
                                                            parent_ids=parent_ids,
                                                            population=self.population,
-                                                           order=var_order,
-                                                           seed=int(self.seed))
+                                                           order=var_order)
             # make sure we have the correct number of competing solutions
             assert len(offspring) + len(self.population) == 2 * self.pop_size
 
@@ -434,7 +433,7 @@ class EA:
         # plot the pareto front
         self.plot_pareto_front() # calling the plotting function at the end to get the final pareto plot
         # save the epi_hub to a csv file
-        self.hubs.save_hubs("epi_hub.csv", "snp_hub.csv")
+        self.hubs.save_hubs("snp_hub.csv")
 
     # get list of pipeline scores (r2, complexity) by position
     def get_pipeline_scores(self, pipelines: List[Pipeline], weights: Tuple[r2_t, feature_cnt_t]) -> npt.NDArray:
@@ -616,7 +615,7 @@ class EA:
             r2, type, snp_name = ray.get(finished)[0]
             self.hubs.update_snp_hub(snp_name, r2, type)
 
-    #YF
+    # remove bad snps (r2 < 0)
     def remove_bad_snps(self, snps: Set) -> Set:
         """
         Function to remove bad snps with r2<0 for a given set of snps
@@ -642,7 +641,6 @@ class EA:
         for p in self.population:
             p.print_pipeline()
 
-    #YF
     # evaluate the population                                   # r2 , feature count, pop_id
     def evaluation(self, pop: List[Pipeline]) -> None:
         """
@@ -665,7 +663,7 @@ class EA:
                                                      self.y_train_id,
                                                      self.X_val_id,
                                                      self.y_val_id,
-                                                     self.construct_uni_nodes(pipeline.get_uni_snps()), #YF
+                                                     self.construct_uni_nodes(pipeline.get_uni_snps()),
                                                      pipeline.get_selector_node(),
                                                      pipeline.get_root_node(),
                                                      np.int16(i)))
@@ -679,7 +677,6 @@ class EA:
             pop[pop_id].set_traits([r2, feature_count])
         return
 
-    #YF
     # construct uni_nodes for a pipeline's set of individual snps
     def construct_uni_nodes(self, uni_snps: Set) -> uni_node_list_t:
         """
@@ -746,42 +743,38 @@ class EA:
 
         return parent_ids
 
-    #TODO
-    # process offspring
+    # process offspring: evaluate new snps, remove bad snps, and create pipelines with good snps
     def process_offspring(self, pipelines: List[Pipeline]) -> List[Pipeline]:
-
         # get unseen interactions
-        unseen_interactions = self.get_unseen_interactions(pipelines)
+        unseen_snps = self.get_unseen_univariates(pipelines)
 
         # evaluate all unseen interactions
-        self.evaluate_unseen_interactions(unseen_interactions)
+        self.evaluate_unseen_snps(unseen_snps)
 
         # remove bad interactions for each pipeline's set of interactions
-        # todo: need to remove bad univariate snps
-        # jgh: could you also incorporate a remove_bad_snps function here?
         updated_pipelines = []
         for pipeline in pipelines:
-            good_interactions = self.remove_bad_interactions(pipeline.get_epi_pairs())
-            updated_pipelines.append(Pipeline(good_interactions, pipeline.get_selector_node(), pipeline.get_root_node(), []))
-
+            updated_pipelines.append(Pipeline(uni_snps=self.remove_bad_snps(pipeline.get_uni_snps()),
+                                              selector_node=pipeline.get_selector_node(),
+                                              ld_node=pipeline.get_ld_node(),
+                                              root_node=pipeline.get_root_node(),
+                                              traits=[]))
         return updated_pipelines
 
-    # get unseen intreactions from offspring pipelines
-    def get_unseen_interactions(self, pipelines: List[Pipeline]) -> Set[Tuple[snp_name_t,snp_name_t]]:
+    def get_unseen_univariates(self, pipelines: List[Pipeline]) -> Set[snp_name_t]:
         """
-        Function to get unseen interactions from offspring pipelines.
+        Function to get all unseen univariates from the pipelines.
 
         Parameters:
         pipelines: List[Pipeline]
             List of pipelines.
         """
-        unseen_interactions = set()
+        unseen_univariates = set()
         for pipeline in pipelines:
-            for snp1_name, snp2_name in pipeline.get_epi_pairs():
-                if self.hubs.is_interaction_in_hub(snp1_name, snp2_name) == False:
-                    unseen_interactions.add((snp1_name, snp2_name))
-
-        return unseen_interactions
+            for snp_name in pipeline.get_uni_snps():
+                if not self.hubs.is_encoder_in_hub(snp_name):
+                    unseen_univariates.add(snp_name)
+        return unseen_univariates
 
     # plot the current pareto front from the population with complexity and r2 scores
     def plot_pareto_front(self) -> None:
