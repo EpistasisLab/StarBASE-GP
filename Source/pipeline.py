@@ -1,7 +1,7 @@
 # Will contain the definition of Pipeline class which will be used by both the Epistatic branch and the univariate branch.
 
 from typing import List, Set
-from .scikit_node import ScikitNode
+from .scikit_node import ScikitNode, LDSelector
 import numpy as np
 from typeguard import typechecked
 import numpy.typing as npt
@@ -21,7 +21,7 @@ div_score_t = np.float32
 class Pipeline:
     def __init__(self,
                  uni_snps: uni_snps_t,
-                 ld_node: ScikitNode,
+                 ld_node: LDSelector,
                  selector_node: ScikitNode,
                  root_node: ScikitNode,
                  traits: traits_t) -> None:

@@ -16,7 +16,7 @@ from .snp_hub import SnpHub
 import copy as cp
 
 # feature selectors
-from .scikit_node import VarianceThresholdNode, SelectPercentileNode, SelectFweNode, SelectFromModelLasso, SelectFromModelTree, SequentialFeatureSelectorNode
+from .scikit_node import VarianceThresholdNode, SelectPercentileNode, SelectFweNode, SelectFromModelLasso, SelectFromModelTree, SequentialFeatureSelectorNode, LDSelector, FeatureEncodingFrequencySelector
 # regressors
 from .scikit_node import LinearRegressionNode, RandomForestRegressorNode, SGDRegressorNode, DecisionTreeRegressorNode, ElasticNetNode, SVRNode, GradientBoostingRegressorNode
 
@@ -83,7 +83,6 @@ class Reproduction:
         return
 
     # method to generate the initial population
-    # todo: make sure we add the actual ld node later
     def generate_random_pipeline(self, rng_: rng_t, snps: snps_t, seed: int) -> Pipeline:
         # quick checks
         assert len(snps) > 0
@@ -97,7 +96,8 @@ class Reproduction:
                                     SelectFweNode(rng_=rng),
                                     SelectFromModelLasso(rng_=rng, seed=seed),
                                     SelectFromModelTree(rng_=rng, seed=seed),
-                                    SequentialFeatureSelectorNode(rng_=rng, seed=seed)
+                                    SequentialFeatureSelectorNode(rng_=rng, seed=seed),
+                                    FeatureEncodingFrequencySelector(rng_=rng),
                                 ])
         # randomly select root node
         root_node = rng.choice([LinearRegressionNode(rng_=rng),
@@ -109,8 +109,11 @@ class Reproduction:
                                 GradientBoostingRegressorNode(rng_=rng, seed=seed),
                             ])
         # create the pipeline
-        # todo: pass actual ld node
-        return Pipeline(ld_node=VarianceThresholdNode(rng_=rng) ,selector_node=selector_node, root_node=root_node, uni_snps=snps, traits=[])
+        return Pipeline(ld_node=LDSelector(rng_=rng),
+                        selector_node=selector_node,
+                        root_node=root_node,
+                        uni_snps=snps,
+                        traits=[])
 
     def variation_order(self, rng_: rng_t, offpring_cnt: pop_size_t) -> Tuple[List[str], pop_size_t]:
         """

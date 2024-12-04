@@ -20,7 +20,7 @@ from typing import List, Tuple, Set
 from .uni_node import UniNode
 from .uni_node import UniDominantNode, UniRecessiveNode, UniHeterosisNode, UniUnderDominantNode, UniSubadditiveNode, UniSuperadditiveNode, UniPAGERNode
 
-from .scikit_node import ScikitNode
+from .scikit_node import ScikitNode, LDSelector
 from sklearn.pipeline import Pipeline as SklearnPipeline
 from sklearn.pipeline import FeatureUnion
 from sklearn.linear_model import LinearRegression
@@ -100,6 +100,7 @@ def ray_uni_eval(x_train,
 
     return r2_t(best_res), nodelo_t(best_uni), snp_name
 
+# todo: add ld node to the pipeline
 @ray.remote
 def ray_eval_pipeline(x_train,
                       y_train,
@@ -107,15 +108,17 @@ def ray_eval_pipeline(x_train,
                       y_val,
                       uni_nodes: uni_node_list_t,
                       selector_node: ScikitNode,
+                      ld_node: LDSelector,
                       root_node: ScikitNode,
                       pop_id: np.int16) -> Tuple[np.float32, np.uint16, np.int16]:
     # create the pipeline
     steps = []
-    #YF update epi & uni nodes into one sklearn union
+    # uni nodes into one sklearn union
     steps.append(('snp_union', FeatureUnion([(uni_node.name, uni_node) for uni_node in uni_nodes])))
-    # todo: add ld node
     # add the selector node
     steps.append(('selector', selector_node))
+    # add the ld node
+    steps.append(('ld', ld_node))
     # add the root node
     steps.append(('root', root_node))
     # transform internal pipeline representation into sklearn pipeline with PipelineBuilder class
@@ -550,7 +553,6 @@ class EA:
                 continue
 
             # create pipeline and add to the population
-            #todo: jgh9094 bookmark
             self.population.append(self.repoduction.generate_random_pipeline(self.rng, good_snps, int(self.seed)))
 
         # make sure we have the correct number of pipelines
@@ -665,6 +667,7 @@ class EA:
                                                      self.y_val_id,
                                                      self.construct_uni_nodes(pipeline.get_uni_snps()),
                                                      pipeline.get_selector_node(),
+                                                     pipeline.get_ld_node(),
                                                      pipeline.get_root_node(),
                                                      np.int16(i)))
         assert len(ray_jobs) == len(pop)

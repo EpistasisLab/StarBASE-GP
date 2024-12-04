@@ -11,6 +11,9 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, E
 from sklearn.svm import SVR
 from typeguard import typechecked
 from typing import Dict
+import pandas as pd
+from scipy import stats
+from statsmodels.stats.multitest import multipletests
 
 rng_t = np.random.Generator
 name_t = np.str_
@@ -321,6 +324,87 @@ class SequentialFeatureSelectorNode(ScikitNode, TransformerMixin):
 
     def get_feature_count(self):
         return self.selector.get_support().sum()
+
+# custom feature selector based on feature encoding frequency
+class FeatureEncodingFrequencySelector(ScikitNode, TransformerMixin):
+    """Feature selector based on Encoding Frequency. Encoding frequency is the frequency of each unique element(0/1/2/3) present in a feature set.
+     Features are selected on the basis of a threshold assigned for encoding frequency. If frequency of any unique element is less than or equal to threshold,
+     the feature is removed.  """
+    def __init__(self,
+                 rng_: rng_t,
+                 seed: int = None,
+                 params: Dict = {},
+                 name: name_t = name_t('FeatureEncodingFrequencySelector')):
+        super().__init__(name)
+        # if params is an empty dictionary, then we will initialize the params
+
+        rng = np.random.default_rng(rng_)
+
+        if params == {}:
+            self.params = {'threshold': np.float32(rng.uniform(low=0.0, high=0.3))} # increments of 0.05
+        else:
+            # make sure params is correct
+            assert 'threshold' in params
+            assert len(params) == 1
+            assert isinstance(params['threshold'], np.float32)
+            self.params = params
+        self.threshold = self.params['threshold']
+        self.seed = seed
+
+    def fit(self, X, y=None):
+        """
+        Fit the feature selector to the data.
+        Parameters:
+        - X (array-like): The input features (2D array of shape [n_samples, n_features]).
+        - y (ignored): The target variable (not used in this selector).
+        Returns:
+        - self: The fitted selector.
+        """
+        X = np.asarray(X)  # Ensure input is a numpy array
+        n_samples, n_features = X.shape
+        selected_features = []
+        for i in range(n_features):
+            unique_values, counts = np.unique(X[:, i], return_counts=True)
+            frequencies = counts / n_samples
+            if np.all(frequencies >= self.threshold):
+                selected_features.append(i)
+        self.selected_features_ = np.array(selected_features)
+        return self
+
+    def transform(self, X):
+        """
+        Transform the data to include only the selected features.
+        Parameters:
+        - X (array-like): The input features (2D array of shape [n_samples, n_features]).
+        Returns:
+        - X_transformed (array-like): The transformed array with only selected features.
+        """
+        if self.selected_features_ is None:
+            raise RuntimeError("FeatureEncodingFrequencySelector has not been fitted yet.")
+        X = np.asarray(X)  # Ensure input is a numpy array
+        return X[:, self.selected_features_]
+
+    def mutate(self, rng: rng_t):
+        # shift is a rng from normal distribution with a change in 2nd decimal place
+        shift = np.float32(rng.normal(loc=0.0, scale=0.01))
+        # check if the threshold is going to be less than 0.0
+        if self.threshold + shift < np.float32(0.0):
+            self.threshold = np.float32(0.0)
+        # check if the threshold is going to be greater than 0.3
+        elif self.threshold + shift > np.float32(0.3):
+            self.threshold = np.float32(0.3)
+        self.threshold = self.params['threshold']
+
+    def get_feature_count(self):
+        """
+            Get the number of features selected by the selector.
+            Returns:
+            - int: The number of features selected. If the selector has not been fitted yet,
+           raises a RuntimeError.
+        """
+        if self.selected_features_ is None:
+            raise RuntimeError("FeatureEncodingFrequencySelector has not been fitted yet.")
+        return len(self.selected_features_)
 
 ##########################################################################################
 ############################ the regressor classes #######################################
@@ -959,3 +1043,296 @@ class GradientBoostingRegressorNode(ScikitNode, RegressorMixin):
 
         # new regressor configuration
         self.regressor = GradientBoostingRegressor(**self.params)
+
+##########################################################################################
+############################ the ld classes ##############################################
+##########################################################################################
+
+class LDSelector(ScikitNode, TransformerMixin):
+    def __init__(self,
+                    rng_: rng_t,
+                    seed: int = None,
+                    params: Dict = {},
+                    name: name_t = name_t('LDSelector')):
+            super().__init__(name)
+
+            rng = np.random.default_rng(rng_)
+
+            # if params is an empty dictionary, then we will initialize the params
+            if params == {}:
+                self.params = {'threshold': np.float32(rng.uniform(low=0.1, high=1)), 'genomic_distance': 50}
+            else:
+                # make sure params is correct
+                assert 'threshold' in params
+                assert len(params) == 1
+                assert isinstance(params['threshold'], np.float32)
+                self.params = params
+
+            self.threshold = self.params['threshold']
+            self.genomic_distance = self.params['genomic_distance']
+            self.seed = seed
+
+    def fit(self, X_original, X_reencoded, y):
+        """
+        Fit the feature selector to the data.
+
+        Parameters:
+        - X (array-like): The input features (2D array of shape [n_samples, n_features]).
+        - y : The target variable.
+
+        Returns:
+        - self: The fitted selector.
+        """
+        X = np.asarray(X_original)  # Ensure input is a numpy array
+        n_samples, n_features = X.shape
+        selected_snps = [] # List to store the selected SNPs
+        ld_removed_snps = set() # Set to store the SNPs removed due to LD pruning
+        ld_removed_details = {} # Dictionary to store the details of the SNPs removed due to LD pruning
+        ld_threshold = self.threshold # Threshold for LD pruning
+        max_distance = self.genomic_distance # Maximum genomic distance in between SNPs to be considered for LD pruning
+        final_selected_snps = [] # List to store the final selected SNPs after LD pruning and conditional analysis
+
+        # function to remove same groups being checked for LD and also to remove subsets of groups
+        def remove_subsets(groups):
+            """
+            Removes subsets from a list of SNP groups.
+            Args:
+                groups: List of groups, where each group is a list of SNP names (or tuples of chromosome and position).
+            Returns:
+                List of unique groups with subsets removed.
+            """
+            unique_groups = []
+            for group in groups:
+                is_subset = False
+                for other_group in groups:
+                    if set(group).issubset(set(other_group)) and group != other_group:
+                        is_subset = True
+                        break
+                if not is_subset:
+                    unique_groups.append(group)
+            return unique_groups
+
+        # function to calculate the correlation coefficient between two SNPs
+        def calculate_ld(X_original, snp1, snp2):
+            # Extract genotype vectors for the two SNPs
+            x = X_original[snp1]
+            y = X_original[snp2]
+
+            # Calculate correlation coefficient (Pearson's r)
+            correlation = np.corrcoef(x, y)[0, 1]
+
+            # Compute R² value
+            r_squared = correlation ** 2
+
+            return r_squared
+
+        # get the column names of the original data which are in numpy array format
+        column_names = X_original.dtype.names
+
+        # extract chromosome number and position from the column names
+        # Assume SNP names are in the format 'X.yyyyy' where X is chromosome and yyyyy is position
+        def extract_chr_pos(snp_name):
+            chrom, pos = snp_name.split('.')
+            return int(chrom), int(pos)  # Use float for positions to preserve precision
+
+        # Create a DataFrame with SNP names, chromosomes, and positions
+        genotype_df_columns = pd.DataFrame({'snp': column_names})
+
+        # Apply the function to extract chromosome and position
+        genotype_df_columns[['chrom', 'pos']] = genotype_df_columns['snp'].apply(
+            lambda x: pd.Series(extract_chr_pos(x))
+        )
+
+        sorted_snps = genotype_df_columns['snp'].tolist()
+        genotype_df = genotype_df[sorted_snps]
+
+        # all the chromosomes in the data
+        chromosomes = genotype_df_columns['chrom'].unique()
+
+        # calculate marginal R² values for each SNP
+        marginal_r2 = {}
+        # Fit a univariate linear regression model for each SNP
+        for snp in column_names:
+            # Extract the genotype vector for the SNP
+            x = X_original[snp]
+
+            # Fit a linear regression model
+            model = LinearRegression()
+            model.fit(x.reshape(-1, 1), y)
+
+            # Calculate the R² value
+            marginal_r2[snp] = model.score(x.reshape(-1, 1), y)
+
+        for chrom in chromosomes:
+            # Get SNPs and their positions for the current chromosome
+            chr_snps_df = genotype_df_columns[genotype_df_columns['chrom'] == chrom]
+            chr_snps = chr_snps_df['snp'].tolist()
+            num_snps = len(chr_snps)
+
+            # Group SNPs by maximum genomic distance
+            groups = []
+            current_group = [(chr_snps_df.iloc[0]['snp'], chr_snps_df.iloc[0]['pos'])]  # Store SNP and position as tuples
+
+            for i in range(1, len(chr_snps)):
+                current_snp = (chr_snps_df.iloc[i]['snp'], chr_snps_df.iloc[i]['pos'])
+                previous_snp = (chr_snps_df.iloc[i - 1]['snp'], chr_snps_df.iloc[i - 1]['pos'])
+
+                if int(abs(current_snp[1] - previous_snp[1])) <= max_distance:
+                    current_group.append(current_snp)
+                else:
+                    groups.append(current_group)
+                    current_group = [current_snp]
+
+            groups.append(current_group)
+
+            # Remove duplicate groups and subsets
+            groups = remove_subsets(groups)
+
+            # Convert groups back to original SNP names for further processing
+            groups = [[snp[0] for snp in group] for group in groups]
+
+            # Print group statistics
+            print("A total of", len(groups), "unique groups were created for chromosome", chrom)
+            print("Group sizes:", [len(group) for group in groups])
+
+            # Apply LD pruning within each group (only if group size > 1)
+            for group in groups:
+                print("Processing group:", group)
+                group_selected_snps = []  # List to store selected SNPs within the group
+                if len(group) > 1:
+                    # Convert group into a DataFrame
+                    group_df = genotype_df[group]
+                    snp_list = group_df.columns.tolist()
+
+                    # LD pruning logic: compare every pair of SNPs
+                    for i, snp1 in enumerate(snp_list):
+                        if snp1 in ld_removed_snps:
+                            continue  # Skip SNPs already removed
+
+                        for j in range(i + 1, len(snp_list)):
+                            snp2 = snp_list[j]
+
+                            # Calculate LD between snp1 and snp2
+                            ld_value = calculate_ld(genotype_df, snp1, snp2)
+                            if ld_value > ld_threshold:
+                                # Mark snp2 as removed due to high LD with snp1
+                                # Compare marginal R² values of the two SNPs
+                                if marginal_r2[snp1] > marginal_r2[snp2]:
+                                    ld_removed_snps.add(snp2)
+                                    ld_removed_details[snp2] = f"Removed due to high LD (R²={ld_value:.3f}) with {snp1}"
+                                else:
+                                    ld_removed_snps.add(snp1)
+                                    ld_removed_details[snp1] = f"Removed due to high LD (R²={ld_value:.3f}) with {snp2}"
+
+                    # Add non-removed SNPs from this group to group_selected_snps
+                    group_selected_snps.extend([snp for snp in snp_list if snp not in ld_removed_snps])
+
+                    # Identify peak SNP with the highest marginal R² within this group
+                    group_selected_df = pd.DataFrame({
+                        'snp': group_selected_snps,
+                        'marginal_r2': [marginal_r2[snp] for snp in group_selected_snps]
+                    })
+                    peak_snp = group_selected_df.loc[group_selected_df['marginal_r2'].idxmax(), 'snp']
+                    print(f"Peak SNP for the group: {peak_snp}, Marginal R²: {marginal_r2[peak_snp]:.4f}")
+
+                    # Perform conditional analysis using the peak SNP as covariate
+                    X_peak = genotype_df[[peak_snp]]
+                    y = y.reshape(-1, 1)
+                    p_values = []
+                    snp_list = []
+
+                    # For each SNP, perform conditional analysis
+                    for snp in group_selected_snps:
+                        if snp == peak_snp:
+                            continue  # Skip the peak SNP
+                        # Full model with peak SNP and the current SNP
+                        X_full = pd.concat([X_peak, genotype_df[[snp]]], axis=1)
+                        model_full = LinearRegression().fit(X_full, y)
+                        ssr_full = np.sum((y - model_full.predict(X_full)) ** 2)
+                        df_full = len(y) - X_full.shape[1]
+                        # Reduced model with peak SNP only
+                        model_reduced = LinearRegression().fit(X_peak, y)
+                        ssr_reduced = np.sum((y - model_reduced.predict(X_peak)) ** 2)
+                        df_reduced = len(y) - X_peak.shape[1]
+                        # F-test to see if the current SNP adds significant information
+                        num = ssr_reduced - ssr_full
+                        denom = ssr_full / df_full
+                        F_stat = num / denom
+                        p_value = 1 - stats.f.cdf(F_stat, 1, df_full)
+                        # Store the p-value and SNP for FDR correction
+                        p_values.append(p_value)
+                        snp_list.append(snp)
+
+                    # Apply FDR correction to the p-values
+                    alpha = 0.05  # Desired overall significance level
+                    rejected, p_values_corrected, _, _ = multipletests(p_values, alpha=alpha, method='fdr_bh')
+
+                    # Remove SNPs that did not pass the conditional analysis
+                    conditional_removed_snps = set()
+                    for snp, reject in zip(snp_list, rejected):
+                        if not reject:
+                            # SNP does not provide significant additional information
+                            conditional_removed_snps.add(snp)
+
+                    # Add SNPs that passed the conditional analysis
+                    final_group_selected_snps = [snp for snp in group_selected_snps if snp not in conditional_removed_snps]
+                    final_selected_snps.extend(final_group_selected_snps)
+
+                    # Print selected SNPs for this group after conditional analysis
+                    print(f"Selected SNPs for this group after conditional analysis: {final_group_selected_snps}")
+                    print(f"Total SNPs selected for this group: {len(final_group_selected_snps)}")
+                else:
+                    # If group size is 1, no conditional analysis is needed; directly add the SNP
+                    single_snp = group[0]
+                    print(f"Group contains only one SNP: {single_snp}. Skipping conditional analysis.")
+                    final_selected_snps.append(single_snp)
+
+
+        # Print the final list of selected SNPs
+        print("Final list of selected SNPs:")
+        print(final_selected_snps)
+
+        self.selected_features_ = np.array(final_selected_snps)
+        return self
+
+    def transform(self, X):
+        """
+        Transform the data to include only the selected features.
+
+        Parameters:
+        - X (array-like): The input features (2D array of shape [n_samples, n_features]).
+
+        Returns:
+        - X_transformed (array-like): The transformed array with only selected features.
+        """
+        if self.selected_features_ is None:
+            raise RuntimeError("LDSelector has not been fitted yet.")
+
+        X = np.asarray(X)
+        return X[:, self.selected_features_]
+
+    def mutate(self, rng: rng_t):
+        # shift is a rng from normal distribution with a change in 1st decimal place
+        shift = np.float32(rng.normal(loc=0.1, scale=1))
+
+        # check if the threshold is going to be less than 0.1
+        if self.threshold + shift < np.float32(0.1):
+            self.threshold = np.float32(0.1)
+        # check if the threshold is going to be greater than 1
+        elif self.threshold + shift > np.float32(1):
+            self.threshold = np.float32(1)
+
+        self.threshold = self.params['threshold']
+
+    def get_feature_count(self):
+        """
+            Get the number of features selected by the selector.
+
+            Returns:
+            - int: The number of features selected. If the selector has not been fitted yet,
+           raises a RuntimeError.
+    """
+        if self.selected_features_ is None:
+            raise RuntimeError("LDSelector has not been fitted yet.")
+
+        return len(self.selected_features_)
