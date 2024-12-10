@@ -10,7 +10,7 @@ from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, ExtraTreesRegressor
 from sklearn.svm import SVR
 from typeguard import typechecked
-from typing import Dict
+from typing import Dict, List
 import pandas as pd
 from scipy import stats
 from statsmodels.stats.multitest import multipletests
@@ -38,6 +38,24 @@ class ScikitNode(BaseEstimator, ABC):
     @abstractmethod
     def mutate(self, rng_):
         pass
+
+    def get_feature_names(self, feature_names):
+        # Ensure feature_names is a NumPy array
+        feature_names = np.array(feature_names)
+
+        # Ensure the length of feature_names matches the number of features in the data
+        support_mask = self.selector.get_support()
+        if len(feature_names) != len(support_mask):
+            raise ValueError("Length of feature_names does not match the number of features in the data.")
+
+        # Print debug information
+        # print("Length of feature names: ", len(feature_names))
+        # print("Mask: ", support_mask)
+        # print("Mask type: ", type(support_mask))
+        # print("Length of mask: ", len(support_mask))
+
+        # Use the Boolean mask to filter feature names
+        return feature_names[support_mask]
 
 ##########################################################################################
 ########################## the feature selector classes ##################################
@@ -91,7 +109,22 @@ class VarianceThresholdNode(ScikitNode, TransformerMixin):
 
     def get_feature_count(self):
         return self.selector.get_support().sum()
-
+    
+    # def get_feature_names(self, feature_names):
+    #     # # Ensure feature_names is a NumPy array
+    #     # feature_names = np.array(feature_names)
+    #     # # Ensure the length matches the number of features in the original input
+    #     # if len(feature_names) != len(self.selector.get_support()):
+    #     #     raise ValueError("Length of feature_names does not match the number of features in the data.")
+        
+    #     # print the length of the feature names
+    #     print("Length of feature names: ", len(feature_names))
+    #     # print the lenth of filtered feature names
+    #     print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
+        
+    #     # Use the Boolean mask to filter feature names
+    #     return feature_names[self.selector.get_support()]
+    
 # select percentile
 class SelectPercentileNode(ScikitNode, TransformerMixin):
     def __init__(self,
@@ -119,6 +152,8 @@ class SelectPercentileNode(ScikitNode, TransformerMixin):
         self.selector.fit(X, y)
 
     def transform(self, X):
+        # self.selector.transform(X)
+        # self.features = self.selector.get_support()
         return self.selector.transform(X)
 
     def mutate(self, rng_: rng_t):
@@ -141,6 +176,21 @@ class SelectPercentileNode(ScikitNode, TransformerMixin):
 
     def get_feature_count(self):
         return self.selector.get_support().sum()
+    
+    # def get_feature_names(self, feature_names):
+    #     # # Ensure feature_names is a NumPy array
+    #     # feature_names = np.array(feature_names)
+    #     # # Ensure the length matches the number of features in the original input
+    #     # if len(feature_names) != len(self.selector.get_support()):
+    #     #     raise ValueError("Length of feature_names does not match the number of features in the data.")
+        
+    #     # print the length of the feature names
+    #     print("Length of feature names: ", len(feature_names))
+    #     # print the lenth of filtered feature names
+    #     print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
+        
+    #     # Use the Boolean mask to filter feature names
+    #     return feature_names[self.selector.get_support()]
 
 # select fwe
 class SelectFweNode(ScikitNode, TransformerMixin):
@@ -192,12 +242,27 @@ class SelectFweNode(ScikitNode, TransformerMixin):
 
     def get_feature_count(self):
         return self.selector.get_support().sum()
+    
+    # def get_feature_names(self, feature_names):
+    #     # Ensure feature_names is a NumPy array
+    #     feature_names = np.array(feature_names)
+    #     # Ensure the length matches the number of features in the original input
+    #     if len(feature_names) != len(self.selector.get_support()):
+    #         raise ValueError("Length of feature_names does not match the number of features in the data.")
+        
+    #     # print the length of the feature names
+    #     print("Length of feature names: ", len(feature_names))
+    #     # print the lenth of filtered feature names
+    #     print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
+        
+    #     # Use the Boolean mask to filter feature names
+    #     return feature_names[self.selector.get_support()]
 
 # select from model using L1-based feature selection (model is lasso regression)
 class SelectFromModelLasso(ScikitNode, TransformerMixin):
     def __init__(self,
                  rng_: rng_t,
-                 seed: int = None,
+                 seed: int = -1,
                  params: Dict = {},
                  name: name_t = name_t('SelectFromLasso')):
         super().__init__(name)
@@ -233,12 +298,27 @@ class SelectFromModelLasso(ScikitNode, TransformerMixin):
 
     def get_feature_count(self,):
         return self.selector.get_support().sum()
+    
+    # def get_feature_names(self, feature_names):
+    #     # Ensure feature_names is a NumPy array
+    #     feature_names = np.array(feature_names)
+    #     # Ensure the length matches the number of features in the original input
+    #     if len(feature_names) != len(self.selector.get_support()):
+    #         raise ValueError("Length of feature_names does not match the number of features in the data.")
+        
+    #     # print the length of the feature names
+    #     print("Length of feature names: ", len(feature_names))
+    #     # print the lenth of filtered feature names
+    #     print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
+        
+    #     # Use the Boolean mask to filter feature names
+    #     return feature_names[self.selector.get_support()]
 
 # select from model using tree-based feature selection (model is ExtraTreesRegressor)
 class SelectFromModelTree(ScikitNode, TransformerMixin):
     def __init__(self,
                  rng_: rng_t,
-                 seed: int = None,
+                 seed: int = -1,
                  params: Dict = {},
                  name: name_t = name_t('SelectFromExtraTrees')):
         super().__init__(name)
@@ -273,12 +353,27 @@ class SelectFromModelTree(ScikitNode, TransformerMixin):
 
     def get_feature_count(self):
         return self.selector.get_support().sum()
+    
+    # def get_feature_names(self, feature_names):
+    #     # Ensure feature_names is a NumPy array
+    #     feature_names = np.array(feature_names)
+    #     # Ensure the length matches the number of features in the original input
+    #     if len(feature_names) != len(self.selector.get_support()):
+    #         raise ValueError("Length of feature_names does not match the number of features in the data.")
+        
+    #     # print the length of the feature names
+    #     print("Length of feature names: ", len(feature_names))
+    #     # print the lenth of filtered feature names
+    #     print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
+        
+    #     # Use the Boolean mask to filter feature names
+    #     return feature_names[self.selector.get_support()]
 
 # sequential feature selector, model = RandomForestRegressor
 class SequentialFeatureSelectorNode(ScikitNode, TransformerMixin):
     def __init__(self,
                  rng_: rng_t,
-                 seed: int = None,
+                 seed: int = -1,
                  params: Dict = {},
                  name: name_t = name_t('SequentialFeatureSelectorRF')):
         super().__init__(name)
@@ -324,7 +419,22 @@ class SequentialFeatureSelectorNode(ScikitNode, TransformerMixin):
 
     def get_feature_count(self):
         return self.selector.get_support().sum()
-
+    
+    # def get_feature_names(self, feature_names):
+    #     # Ensure feature_names is a NumPy array
+    #     feature_names = np.array(feature_names)
+    #     # Ensure the length matches the number of features in the original input
+    #     if len(feature_names) != len(self.selector.get_support()):
+    #         raise ValueError("Length of feature_names does not match the number of features in the data.")
+        
+    #     # print the length of the feature names
+    #     print("Length of feature names: ", len(feature_names))
+    #     # print the lenth of filtered feature names
+    #     print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
+        
+    #     # Use the Boolean mask to filter feature names
+    #     return feature_names[self.selector.get_support()]
+    
 # custom feature selector based on feature encoding frequency
 class FeatureEncodingFrequencySelector(ScikitNode, TransformerMixin):
     """Feature selector based on Encoding Frequency. Encoding frequency is the frequency of each unique element(0/1/2/3) present in a feature set.
@@ -332,7 +442,7 @@ class FeatureEncodingFrequencySelector(ScikitNode, TransformerMixin):
      the feature is removed.  """
     def __init__(self,
                  rng_: rng_t,
-                 seed: int = None,
+                 seed: int = -1,
                  params: Dict = {},
                  name: name_t = name_t('FeatureEncodingFrequencySelector')):
         super().__init__(name)
@@ -350,6 +460,8 @@ class FeatureEncodingFrequencySelector(ScikitNode, TransformerMixin):
             self.params = params
         self.threshold = self.params['threshold']
         self.seed = seed
+        self.selector = 'FeatureEncodingFrequencySelector'
+        self.boolean_mask = None
 
     def fit(self, X, y=None):
         """
@@ -369,6 +481,11 @@ class FeatureEncodingFrequencySelector(ScikitNode, TransformerMixin):
             if np.all(frequencies >= self.threshold):
                 selected_features.append(i)
         self.selected_features_ = np.array(selected_features)
+        self.selected_features_ = np.array(self.selected_features_, dtype=int)
+        # make a boolean mask of the selected features
+        self.boolean_mask = np.zeros(X.shape[1], dtype=bool)
+        self.boolean_mask[self.selected_features_] = True
+        # print("Boolean mask: ", self.boolean_mask)
         return self
 
     def transform(self, X):
@@ -382,7 +499,11 @@ class FeatureEncodingFrequencySelector(ScikitNode, TransformerMixin):
         if self.selected_features_ is None:
             raise RuntimeError("FeatureEncodingFrequencySelector has not been fitted yet.")
         X = np.asarray(X)  # Ensure input is a numpy array
-        return X[:, self.selected_features_]
+
+        if X.shape[1] != len(self.boolean_mask):
+            raise ValueError("Number of features in X does not match the number of features in the selector.")
+        
+        return X[:, self.boolean_mask]
 
     def mutate(self, rng: rng_t):
         # shift is a rng from normal distribution with a change in 2nd decimal place
@@ -405,6 +526,37 @@ class FeatureEncodingFrequencySelector(ScikitNode, TransformerMixin):
         if self.selected_features_ is None:
             raise RuntimeError("FeatureEncodingFrequencySelector has not been fitted yet.")
         return len(self.selected_features_)
+    
+    def get_feature_names(self, feature_names):
+        """
+            Get the names of the features selected by the selector.
+            Parameters:
+            - feature_names (array-like): The names of the features.
+            Returns:
+            - array-like: The names of the selected features.
+        """
+        if self.selected_features_ is None:
+            raise RuntimeError("FeatureEncodingFrequencySelector has not been fitted yet.")
+        # # Ensure feature_names is a NumPy array
+        # feature_names = np.array(feature_names)
+        # # Ensure the length matches the number of features in the original input
+        # if len(feature_names) != len(self.boolean_mask):
+        #     raise ValueError("Length of feature_names does not match the number of features in the data.")
+        
+        # # print the length of the feature names
+        # print("Length of feature names: ", len(feature_names))
+        # print('Type of feature names: ', type(feature_names))
+        # print('Type of boolean mask: ', type(self.boolean_mask))
+        # print the lenth of filtered feature names
+        #print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
+        
+        # Use the Boolean mask to filter feature names
+        final_features = []
+        for i in range(len(self.boolean_mask)):
+            if self.boolean_mask[i]:
+                final_features.append(feature_names[i])
+
+        return final_features
 
 ##########################################################################################
 ############################ the regressor classes #######################################
@@ -452,7 +604,7 @@ class LinearRegressionNode(ScikitNode, RegressorMixin):
 class ElasticNetNode(ScikitNode, RegressorMixin):
     def __init__(self,
                  rng_: rng_t,
-                 seed: int = None,
+                 seed: int = -1,
                  params: Dict = {},
                  name: name_t = name_t('LinearRegression')):
         super().__init__(name)
@@ -526,7 +678,7 @@ class ElasticNetNode(ScikitNode, RegressorMixin):
 class SGDRegressorNode(ScikitNode, RegressorMixin):
     def __init__(self,
                  rng_: rng_t,
-                 seed: int = None,
+                 seed: int = -1,
                  params: Dict = {},
                  name: name_t = name_t('SGDRegressor')):
         super().__init__(name)
@@ -730,7 +882,7 @@ class SVRNode(ScikitNode, RegressorMixin):
 class DecisionTreeRegressorNode(ScikitNode, RegressorMixin):
     def __init__(self,
                 rng_: rng_t,
-                seed: int = None,
+                seed: int = -1,
                 params: Dict = {},
                 name: name_t = name_t('DecisionTreeRegressor')):
         super().__init__(name)
@@ -822,7 +974,7 @@ class DecisionTreeRegressorNode(ScikitNode, RegressorMixin):
 class RandomForestRegressorNode(ScikitNode, RegressorMixin):
     def __init__(self,
                 rng_: rng_t,
-                seed: int = None,
+                seed: int = -1,
                 params: Dict = {},
                 name: name_t = name_t('RandomForestRegressor')):
         super().__init__(name)
@@ -927,7 +1079,7 @@ class RandomForestRegressorNode(ScikitNode, RegressorMixin):
 class GradientBoostingRegressorNode(ScikitNode, RegressorMixin):
     def __init__(self,
                 rng_: rng_t,
-                seed: int = None,
+                seed: int = -1,
                 params: Dict = {},
                 name: name_t = name_t('RandomForestRegressor')):
         super().__init__(name)
@@ -1047,20 +1199,21 @@ class GradientBoostingRegressorNode(ScikitNode, RegressorMixin):
 ##########################################################################################
 ############################ the ld classes ##############################################
 ##########################################################################################
-
+@typechecked
 class LDSelector(ScikitNode, TransformerMixin):
     def __init__(self,
                     rng_: rng_t,
-                    seed: int = None,
+                    seed: int = -1,
                     params: Dict = {},
-                    name: name_t = name_t('LDSelector')):
+                    name: name_t = name_t('LDSelector')
+                    ):
             super().__init__(name)
 
             rng = np.random.default_rng(rng_)
 
             # if params is an empty dictionary, then we will initialize the params
             if params == {}:
-                self.params = {'threshold': np.float32(rng.uniform(low=0.1, high=1)), 'genomic_distance': 50}
+                self.params = {'threshold': np.float32(rng.uniform(low=0.1, high=1)), 'genomic_distance': 500000}
             else:
                 # make sure params is correct
                 assert 'threshold' in params
@@ -1071,8 +1224,14 @@ class LDSelector(ScikitNode, TransformerMixin):
             self.threshold = self.params['threshold']
             self.genomic_distance = self.params['genomic_distance']
             self.seed = seed
+            self.params = params
+            #self.selector = LDSelector(x_original=x_original, header_snps_dict=header_snps_dict, filtered_feature_names=filtered_feature_names, rng_=rng, **self.params)
+            self.selector = 'LDSelector'
+            self.selected_features_ = None
+            self.bool_mask = None
+    
 
-    def fit(self, X_original, X_reencoded, y):
+    def fit(self, X_original, X_encoded, y, snp_r2_dict):
         """
         Fit the feature selector to the data.
 
@@ -1083,8 +1242,10 @@ class LDSelector(ScikitNode, TransformerMixin):
         Returns:
         - self: The fitted selector.
         """
-        X = np.asarray(X_original)  # Ensure input is a numpy array
-        n_samples, n_features = X.shape
+        # print("LDSelector fit method called", flush=True)
+        # print("Printing X original: ", X_original, flush=True)
+        # print("Printing X encoded: ", X_encoded, flush=True)
+        #X = np.asarray(self.x_original)  # Ensure input is a numpy array
         selected_snps = [] # List to store the selected SNPs
         ld_removed_snps = set() # Set to store the SNPs removed due to LD pruning
         ld_removed_details = {} # Dictionary to store the details of the SNPs removed due to LD pruning
@@ -1113,38 +1274,64 @@ class LDSelector(ScikitNode, TransformerMixin):
             return unique_groups
 
         # function to calculate the correlation coefficient between two SNPs
-        def calculate_ld(X_original, snp1, snp2):
+        def calculate_ld(X, snp1: np.str_, snp2: np.str_): # LD coefficient shoud be calculated using original data not reencoded
             # Extract genotype vectors for the two SNPs
-            x = X_original[snp1]
-            y = X_original[snp2]
+            # snp1 = X[snp1]
+            # snp2 = X[snp2]
 
             # Calculate correlation coefficient (Pearson's r)
-            correlation = np.corrcoef(x, y)[0, 1]
+            # correlation = np.corrcoef(snp1, snp2)[0, 1]
+            correlation = np.corrcoef(X[snp1], X[snp2])[0, 1]
 
             # Compute R² value
             r_squared = correlation ** 2
+            # # print the r_squared value
+            # print(f"R² value between {snp1} and {snp2} is {r_squared}", flush=True)
 
             return r_squared
-
-        # get the column names of the original data which are in numpy array format
-        column_names = X_original.dtype.names
-
+        
         # extract chromosome number and position from the column names
         # Assume SNP names are in the format 'X.yyyyy' where X is chromosome and yyyyy is position
         def extract_chr_pos(snp_name):
             chrom, pos = snp_name.split('.')
             return int(chrom), int(pos)  # Use float for positions to preserve precision
 
+        # get the column names of the original data which are in numpy array format
+        column_names = X_original.columns
+   
         # Create a DataFrame with SNP names, chromosomes, and positions
         genotype_df_columns = pd.DataFrame({'snp': column_names})
+        #print the genotype_df_columns
+        # print("Printing the genotype_df_columns: ", genotype_df_columns, flush=True)
+        #genotype_df_columns = pd.DataFrame({'snp': column_names}, index=range(len(column_names)))
 
         # Apply the function to extract chromosome and position
         genotype_df_columns[['chrom', 'pos']] = genotype_df_columns['snp'].apply(
             lambda x: pd.Series(extract_chr_pos(x))
         )
+        #print("Printing the genotype_df_columns after extracting chromosome and position: ", genotype_df_columns, flush=True)
+
+        # sort the SNPs by chromosome and position
+        genotype_df_columns['chrom'] = pd.to_numeric(genotype_df_columns['chrom'], errors='coerce')
+        genotype_df_columns['pos'] = pd.to_numeric(genotype_df_columns['pos'], errors='coerce')
+        genotype_df_columns = genotype_df_columns.sort_values(['chrom', 'pos'])
+        #print the genotype_df_columns after sorting
+        #print("Printing the genotype_df_columns after sorting: ", genotype_df_columns, flush=True)
 
         sorted_snps = genotype_df_columns['snp'].tolist()
-        genotype_df = genotype_df[sorted_snps]
+        #print("Printing the sorted snps: ", sorted_snps, flush=True)
+        ################################################################################
+        # extract the sorted_snps from the self.x_original
+        # filter x_original to have the sorted_snps columns only
+        genotype_df_original = X_original[sorted_snps]
+        #print("Type of genotype_df_original: ", type(genotype_df_original), flush=True)
+        # print the genotype_df_original
+        #print("Printing the genotype unencoded data: ", genotype_df_original, flush=True)
+        ################################################################################
+        # encoded data
+        genotype_df_encoded = X_encoded[sorted_snps]
+        # print the genotype_df_encoded
+        #print("Printing the genotype encoded data: ", genotype_df_encoded, flush=True)
 
         # all the chromosomes in the data
         chromosomes = genotype_df_columns['chrom'].unique()
@@ -1154,14 +1341,13 @@ class LDSelector(ScikitNode, TransformerMixin):
         # Fit a univariate linear regression model for each SNP
         for snp in column_names:
             # Extract the genotype vector for the SNP
-            x = X_original[snp]
-
+            x = X_encoded[[snp]]
             # Fit a linear regression model
             model = LinearRegression()
-            model.fit(x.reshape(-1, 1), y)
+            model.fit(x, y)
 
             # Calculate the R² value
-            marginal_r2[snp] = model.score(x.reshape(-1, 1), y)
+            marginal_r2[snp] = model.score(x, y)
 
         for chrom in chromosomes:
             # Get SNPs and their positions for the current chromosome
@@ -1191,17 +1377,17 @@ class LDSelector(ScikitNode, TransformerMixin):
             # Convert groups back to original SNP names for further processing
             groups = [[snp[0] for snp in group] for group in groups]
 
-            # Print group statistics
-            print("A total of", len(groups), "unique groups were created for chromosome", chrom)
-            print("Group sizes:", [len(group) for group in groups])
+            # # Print group statistics
+            # print("A total of", len(groups), "unique groups were created for chromosome", chrom)
+            # print("Group sizes:", [len(group) for group in groups])
 
             # Apply LD pruning within each group (only if group size > 1)
             for group in groups:
-                print("Processing group:", group)
-                group_selected_snps = []  # List to store selected SNPs within the group
+                #print("Processing group:", group)
+                group_selected_snps = []  # List to store selected SNPs within the group, which will be later checked for conditional analysis
                 if len(group) > 1:
                     # Convert group into a DataFrame
-                    group_df = genotype_df[group]
+                    group_df = genotype_df_original[group]
                     snp_list = group_df.columns.tolist()
 
                     # LD pruning logic: compare every pair of SNPs
@@ -1213,10 +1399,11 @@ class LDSelector(ScikitNode, TransformerMixin):
                             snp2 = snp_list[j]
 
                             # Calculate LD between snp1 and snp2
-                            ld_value = calculate_ld(genotype_df, snp1, snp2)
+                            ld_value = calculate_ld(genotype_df_original, snp1, snp2)
                             if ld_value > ld_threshold:
                                 # Mark snp2 as removed due to high LD with snp1
                                 # Compare marginal R² values of the two SNPs
+
                                 if marginal_r2[snp1] > marginal_r2[snp2]:
                                     ld_removed_snps.add(snp2)
                                     ld_removed_details[snp2] = f"Removed due to high LD (R²={ld_value:.3f}) with {snp1}"
@@ -1227,70 +1414,105 @@ class LDSelector(ScikitNode, TransformerMixin):
                     # Add non-removed SNPs from this group to group_selected_snps
                     group_selected_snps.extend([snp for snp in snp_list if snp not in ld_removed_snps])
 
-                    # Identify peak SNP with the highest marginal R² within this group
-                    group_selected_df = pd.DataFrame({
-                        'snp': group_selected_snps,
-                        'marginal_r2': [marginal_r2[snp] for snp in group_selected_snps]
-                    })
-                    peak_snp = group_selected_df.loc[group_selected_df['marginal_r2'].idxmax(), 'snp']
-                    print(f"Peak SNP for the group: {peak_snp}, Marginal R²: {marginal_r2[peak_snp]:.4f}")
+                    # perform conditional anlysis if group_selected_snps is greater than 1
+                    if len(group_selected_snps) > 1:
+                        # Identify peak SNP with the highest marginal R² within this group
+                        group_selected_df = pd.DataFrame({
+                            'snp': group_df.columns,
+                            'marginal_r2': [marginal_r2[snp] for snp in group_df.columns]
+                        })
+                        peak_snp = group_selected_df.loc[group_selected_df['marginal_r2'].idxmax(), 'snp']
+                        #print(f"Peak SNP for the group: {peak_snp}, Marginal R²: {marginal_r2[peak_snp]:.4f}", flush=True)
 
-                    # Perform conditional analysis using the peak SNP as covariate
-                    X_peak = genotype_df[[peak_snp]]
-                    y = y.reshape(-1, 1)
-                    p_values = []
-                    snp_list = []
+                        # Perform conditional analysis using the peak SNP as covariate
+                        X_peak = genotype_df_encoded[[peak_snp]]
+                        y = y.reshape(-1, 1)
+                        p_values = []
+                        snp_list = []
 
-                    # For each SNP, perform conditional analysis
-                    for snp in group_selected_snps:
-                        if snp == peak_snp:
-                            continue  # Skip the peak SNP
-                        # Full model with peak SNP and the current SNP
-                        X_full = pd.concat([X_peak, genotype_df[[snp]]], axis=1)
-                        model_full = LinearRegression().fit(X_full, y)
-                        ssr_full = np.sum((y - model_full.predict(X_full)) ** 2)
-                        df_full = len(y) - X_full.shape[1]
-                        # Reduced model with peak SNP only
-                        model_reduced = LinearRegression().fit(X_peak, y)
-                        ssr_reduced = np.sum((y - model_reduced.predict(X_peak)) ** 2)
-                        df_reduced = len(y) - X_peak.shape[1]
-                        # F-test to see if the current SNP adds significant information
-                        num = ssr_reduced - ssr_full
-                        denom = ssr_full / df_full
-                        F_stat = num / denom
-                        p_value = 1 - stats.f.cdf(F_stat, 1, df_full)
-                        # Store the p-value and SNP for FDR correction
-                        p_values.append(p_value)
-                        snp_list.append(snp)
+                        # For each SNP, perform conditional analysis
+                        for snp in group_selected_snps:
+                            # print the snp
+                            #print(f"Performing conditional analysis for SNP {snp}", flush=True)
+                            if snp == peak_snp:
+                                # print('Peak SNP should not be in the list of removed SNPs')
+                                # print(snp, '---', peak_snp, flush=True)
+                                # exit(0)
+                                continue
+                            # Full model with peak SNP and the current SNP
+                            X_full = pd.concat([X_peak, genotype_df_encoded[[snp]]], axis=1)
+                            model_full = LinearRegression().fit(X_full, y)
+                            ssr_full = np.sum((y - model_full.predict(X_full)) ** 2)
+                            df_full = len(y) - X_full.shape[1]
+                            # Check for valid SSR and DF
+                            # if np.isclose(ssr_full, 0) or df_full <= 0:
+                            #     print(f"Skipping SNP {snp} due to invalid SSR or degrees of freedom.")
+                            #     continue
+                            # Reduced model with peak SNP only
+                            model_reduced = LinearRegression().fit(X_peak, y)
+                            ssr_reduced = np.sum((y - model_reduced.predict(X_peak)) ** 2)
+                            # Check SSR values
+                            # if ssr_reduced < ssr_full:
+                            #     print(f"Skipping SNP {snp} due to invalid SSR values (reduced < full).")
+                            #     continue
+                            #df_reduced = len(y) - X_peak.shape[1]
+                            # F-test to see if the current SNP adds significant information
+                            num = ssr_reduced - ssr_full
+                            denom = ssr_full / df_full
+                            F_stat = num / denom
+                            # if np.isnan(F_stat) or np.isinf(F_stat):
+                            #     print(f"Skipping SNP {snp} due to invalid F-statistic.")
+                            #     continue
+                            # print("F statistics: ", F_stat)
+                            # print("DF full: ", df_full)
+                            # print('stats.f.cdf(F_stat, 1, df_full):',stats.f.cdf(F_stat, 1, df_full))
+                            p_value = 1 - stats.f.cdf(F_stat, 1, df_full)
+                            #print(f"Conditional analysis for SNP {snp}: F-statistic = {F_stat:.4f}, p-value = {p_value:.4f}", flush=True)
+                            # Store the p-value and SNP for FDR correction
+                            p_values.append(p_value)
+                            snp_list.append(snp)
 
-                    # Apply FDR correction to the p-values
-                    alpha = 0.05  # Desired overall significance level
-                    rejected, p_values_corrected, _, _ = multipletests(p_values, alpha=alpha, method='fdr_bh')
+                        # Apply FDR correction to the p-values
+                        alpha = 0.05  # Desired overall significance level
+                        # print"Length of p_values to be FDR corrected: ", len(p_values), flush=True)
+                        if not p_values:
+                            # print"No p-values to correct. Skipping FDR correction.", flush=True)
+                            continue
+                        rejected, p_values_corrected, _, _ = multipletests(p_values, alpha=alpha, method='fdr_bh')
 
-                    # Remove SNPs that did not pass the conditional analysis
-                    conditional_removed_snps = set()
-                    for snp, reject in zip(snp_list, rejected):
-                        if not reject:
-                            # SNP does not provide significant additional information
-                            conditional_removed_snps.add(snp)
+                        # Remove SNPs that did not pass the conditional analysis
+                        conditional_removed_snps = set()
+                        for snp, reject in zip(snp_list, rejected):
+                            if not reject:
+                                # SNP does not provide significant additional information
+                                conditional_removed_snps.add(snp)
 
-                    # Add SNPs that passed the conditional analysis
-                    final_group_selected_snps = [snp for snp in group_selected_snps if snp not in conditional_removed_snps]
-                    final_selected_snps.extend(final_group_selected_snps)
+                        # Add SNPs that passed the conditional analysis
+                        final_group_selected_snps = [snp for snp in group_selected_snps if snp not in conditional_removed_snps]
+                        final_selected_snps.extend(final_group_selected_snps)
 
-                    # Print selected SNPs for this group after conditional analysis
-                    print(f"Selected SNPs for this group after conditional analysis: {final_group_selected_snps}")
-                    print(f"Total SNPs selected for this group: {len(final_group_selected_snps)}")
+                        # # Print selected SNPs for this group after conditional analysis
+                        # print(f"Selected SNPs for this group after conditional analysis: {final_group_selected_snps}")
+                        # print(f"Total SNPs selected for this group: {len(final_group_selected_snps)}")
+
+                    else:
+                        # If group size is 1, no conditional analysis is needed; directly add the SNP
+                        final_selected_snps.append(group_selected_snps[0])
                 else:
                     # If group size is 1, no conditional analysis is needed; directly add the SNP
                     single_snp = group[0]
-                    print(f"Group contains only one SNP: {single_snp}. Skipping conditional analysis.")
+                    #print(f"Group contains only one SNP: {single_snp}. Skipping conditional analysis.")
                     final_selected_snps.append(single_snp)
 
-
         # Print the final list of selected SNPs
-        print("Final list of selected SNPs:")
-        print(final_selected_snps)
+        # print"Final list of selected SNPs:")
+        # printfinal_selected_snps, flush=True)
+        # print"Length of final selected SNPs: ", len(final_selected_snps), flush=True)
+        assert len(final_selected_snps) > 0, "No SNPs were selected by the LDSelector"
+
+        # Create a boolean mask for the selected SNPs
+        boolean_mask = np.isin(column_names, final_selected_snps)
+        self.bool_mask = boolean_mask
 
         self.selected_features_ = np.array(final_selected_snps)
         return self
@@ -1307,9 +1529,8 @@ class LDSelector(ScikitNode, TransformerMixin):
         """
         if self.selected_features_ is None:
             raise RuntimeError("LDSelector has not been fitted yet.")
+        return X[:, self.bool_mask]
 
-        X = np.asarray(X)
-        return X[:, self.selected_features_]
 
     def mutate(self, rng: rng_t):
         # shift is a rng from normal distribution with a change in 1st decimal place
@@ -1321,8 +1542,13 @@ class LDSelector(ScikitNode, TransformerMixin):
         # check if the threshold is going to be greater than 1
         elif self.threshold + shift > np.float32(1):
             self.threshold = np.float32(1)
+        # if neither of the above, then we can just add the shift
+        else:
+            self.threshold = self.threshold + shift
 
-        self.threshold = self.params['threshold']
+        self.params['threshold'] = self.threshold
+        # initialize the selector with the new threshold
+        LDSelector(x_original=self.x_original, header_snps_dict=self.header_snps_dict, filtered_feature_names=self.filtered_feature_names, rng_= rng)
 
     def get_feature_count(self):
         """
@@ -1334,5 +1560,6 @@ class LDSelector(ScikitNode, TransformerMixin):
     """
         if self.selected_features_ is None:
             raise RuntimeError("LDSelector has not been fitted yet.")
-
+        # print"No of selected features: ", len(self.selected_features_), flush=True)
+        # return length of selected features as no of true values in boolean mask
         return len(self.selected_features_)

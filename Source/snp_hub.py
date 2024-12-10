@@ -5,10 +5,11 @@
 #####################################################################################################
 
 import numpy as np
-from typing import List, Tuple
+from typing import List, Tuple, Set
 
 from typeguard import typechecked
 import numpy.typing as npt
+from typing import List, Dict
 
 ### Static variables
 mutation_tries = 20
@@ -877,3 +878,11 @@ class SnpHub:
         # combine the wiggle range and return new snps
         wiggle_range = left_wiggle_range + right_wiggle_range
         return np.array([f"{snp_chrom}.{pos}" for pos in wiggle_range], dtype=snp_t)
+    
+
+    # function to take in a list of snps and generate a dictionary of snps and their corresponding r2 values
+    def generate_r2_dict(self, snps: Set[snp_t]) -> List:
+        # make sure
+        assert len(snps)
+
+        return [(snp, self.get_uni_res(snp)) for snp in snps]

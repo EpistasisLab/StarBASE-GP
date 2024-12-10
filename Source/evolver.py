@@ -8,7 +8,7 @@
 
 import numpy as np
 from typeguard import typechecked
-from typing import List
+from typing import List, Dict
 import pandas as pd
 import os
 import ray
@@ -110,31 +110,63 @@ def ray_eval_pipeline(x_train,
                       selector_node: ScikitNode,
                       ld_node: LDSelector,
                       root_node: ScikitNode,
-                      pop_id: np.int16) -> Tuple[np.float32, np.uint16, np.int16]:
+                      pop_id: np.int16,
+                      snp_r2_set: Set) -> Tuple[np.float32, np.uint16, np.int16]:
+    # make dictionary to hold the snp r2 scores
+    snp_r2_dict = {p[0]: p[1] for p in snp_r2_set}
+
     # create the pipeline
     steps = []
     # uni nodes into one sklearn union
     steps.append(('snp_union', FeatureUnion([(uni_node.name, uni_node) for uni_node in uni_nodes])))
+    # make a list of uni node names
+    uni_node_names = [uni_node.get_snp_name() for uni_node in uni_nodes] 
+    # print("Uni node names: ", uni_node_names, flush=True)   
     # add the selector node
     steps.append(('selector', selector_node))
-    # add the ld node
-    steps.append(('ld', ld_node))
-    # add the root node
-    steps.append(('root', root_node))
-    # transform internal pipeline representation into sklearn pipeline with PipelineBuilder class
-    pipeline = SklearnPipeline(steps=steps)
 
+    # fit the pipeline to get the selected features
+    pipeline = SklearnPipeline(steps=steps)
+    pipeline_fitted = pipeline.fit(x_train, y_train)
+    selected_features = pipeline_fitted.named_steps['selector'].get_feature_names(uni_node_names)
+    # print("Selected features: ", selected_features, flush=True)
+    x_train_transformed = pipeline_fitted.transform(x_train)
+    x_train_transformed_df = pd.DataFrame(x_train_transformed, columns=selected_features)
+
+    # x_train original dataframe
+    x_train_original_df = pd.DataFrame(x_train, columns=selected_features)
+
+    # # reinitialize the LD node with the selected features, and the other features already in the LD node
+    ld_node.fit(x_train_original_df, x_train_transformed_df, y_train, snp_r2_dict)
+
+    # data after LD node
+    features_final = ld_node.selected_features_
+    # print("Features after LD node: ", features_final, flush=True)
+    x_final = pd.DataFrame(x_train_transformed_df[features_final], columns=features_final)
+    print("Shape of x_final: ", x_final.shape, flush=True)
+
+    # # make new feature union with the ld selected features 
+    # steps = []
+    # steps.append(('snp_union', FeatureUnion([(uni_node.name, uni_node) for uni_node in uni_nodes if uni_node.name in ld_selected_features])))
+    # # add the root node
+    # steps.append(('root', root_node))
+    # # transform internal pipeline representation into sklearn pipeline with PipelineBuilder class
+    # pipeline = SklearnPipeline(steps=steps)
+
+    # print("Printing from ray_eval_pipeline: ", flush=True)
+    # print("X_train values: ", x_train, flush=True)
     # attempt to fit the pipeline
     try:
         # Fit the pipeline with warnings captured as exceptions
         with warnings.catch_warnings():
             warnings.filterwarnings('error', category=ConvergenceWarning)
-            pipeline_fitted = pipeline.fit(x_train, y_train)
+            pipeline_fitted = root_node.fit(x_final, y_train)
     except ConvergenceWarning as cw:
         logging.error(f"ConvergenceWarning while fitting model: {cw}")
         logging.error(f"selector_node: {selector_node.name}")
         logging.error(f"selector_node.params: {selector_node.params}")
         logging.error(f"feature_uni_nodes: {len(uni_nodes)}")
+        logging.error(f"LD node: {ld_node.name}")
         return r2_t(-1.0), feature_cnt_t(0), pop_id
     except NotFittedError as nfe:
         logging.error(f"NotFittedError occurred: {nfe}")
@@ -146,11 +178,17 @@ def ray_eval_pipeline(x_train,
         logging.error(f"selector_node.params: {selector_node.params}")
         logging.error(f"feature_uni_nodes: {len(uni_nodes)}")
         logging.error(f"Shapes -> X_train: {x_train.shape}, Y_train: {y_train.shape}")
+        logging.error(f"LD node: {ld_node.name}")
         return r2_t(-1.0), feature_cnt_t(0), pop_id
 
     try:
+        print('type of root: ', type(root_node), flush=True)
+        print('root node name: ', root_node.name, flush=True)
+        print('root node: ', root_node, flush=True)
         r2_score = pipeline_fitted.score(x_val, y_val)
-        feature_count = pipeline_fitted.named_steps['selector'].get_feature_count()
+        #feature_count = pipeline_fitted.named_steps['selector'].get_feature_count()
+        #feature_count = pipeline_fitted.named_steps['ld'].get_feature_count()
+        feature_count = len(features_final) # get the number of features after the LD node
     except Exception as e:
         logging.error(f"Error while scoring or getting feature count: {e}")
         return r2_t(-1.0), feature_cnt_t(0), pop_id
@@ -163,7 +201,7 @@ class EA:
     def __init__(self,
                  seed: np.uint16,
                  pop_size: np.uint16,
-                 uni_cnt_max: np.uint16, #YF
+                 uni_cnt_max: np.uint16,
                  uni_cnt_min: np.uint16,
                  cores: int,
                  mut_prob: prob_t = prob_t(.5),
@@ -272,6 +310,10 @@ class EA:
             # load the data
             exit('Error: The path provided is not valid. Please provide a valid path to the data file.', -1)
 
+        data = pd.read_csv(path)
+        print('Data loaded successfully.', flush=True)
+        print("Data shape:", data.shape, flush=True)
+
         # get pandas dataframe snp names without loading all data
         self.snp_labels = pd.read_csv(path, nrows=0).columns.tolist()
 
@@ -317,6 +359,7 @@ class EA:
         self.y_val_id = ray.put(self.y_val)
 
         print('X_train_new.shape:', self.X_train.shape, flush=True)
+        print("X_train values: ", self.X_train, flush=True)
         print('y_train_new.shape:', self.y_train.shape, flush=True)
         print(flush=True)
         print('X_val_new.shape:', self.X_val.shape, flush=True)
@@ -391,6 +434,7 @@ class EA:
         # run the algorithm for the specified number of generations
         for g in range(gens):
             # make sure we have the correct number of pipelines
+            print('Population size:', len(self.population), flush=True)
             assert(0 < len(self.population) <= self.pop_size)
 
             print('Generation:', g, flush=True)
@@ -552,8 +596,11 @@ class EA:
                 # skip this iteration if there are no good snps
                 continue
 
+            # # for debugging purposes
+            # print("Seed for pipeline: ", self.seed, flush=True)
+
             # create pipeline and add to the population
-            self.population.append(self.repoduction.generate_random_pipeline(self.rng, good_snps, int(self.seed)))
+            self.population.append(self.repoduction.generate_random_pipeline(self.rng, good_snps, int(self.seed), self.X_train, self.y_train, self.hubs))
 
         # make sure we have the correct number of pipelines
         assert len(self.population) ==  2 * self.pop_size
@@ -564,6 +611,9 @@ class EA:
         # subset the population to only include pipelines with positive r2 scores
         pop = []
         for pipeline in self.population:
+            print("Pipeline r2 score: ", pipeline.get_trait_r2())
+            print("Pipeline feature count: ", pipeline.get_trait_feature_cnt())
+            print("SNPs selected by the LD node: ", pipeline.get_ld_node().selected_features_)
             if pipeline.get_trait_r2() > 0.0:
                 pop.append(pipeline)
         self.population = pop
@@ -661,6 +711,10 @@ class EA:
         # go through each pipeline in the population and evaluate
         for i, pipeline in enumerate(pop):
             # add ray job
+            # uni_snps, snps_pos = [],[]
+            # self.construct_uni_nodes(pipeline.get_uni_snps())
+
+
             ray_jobs.append(ray_eval_pipeline.remote(self.X_train_id,
                                                      self.y_train_id,
                                                      self.X_val_id,
@@ -669,7 +723,8 @@ class EA:
                                                      pipeline.get_selector_node(),
                                                      pipeline.get_ld_node(),
                                                      pipeline.get_root_node(),
-                                                     np.int16(i)))
+                                                     np.int16(i),
+                                                     snp_r2_set=self.hubs.generate_r2_dict(pipeline.get_uni_snps())))
         assert len(ray_jobs) == len(pop)
 
         # process results as they come in
@@ -681,7 +736,7 @@ class EA:
         return
 
     # construct uni_nodes for a pipeline's set of individual snps
-    def construct_uni_nodes(self, uni_snps: Set) -> uni_node_list_t:
+    def construct_uni_nodes(self, uni_snps: Set) -> List[UniNode]:
         """
         Function to construct uni nodes for a pipeline's set of univariates.
 

@@ -17,6 +17,7 @@ r2_t = np.float32
 feature_cnt_t = np.int16
 div_score_t = np.float32
 
+
 @typechecked
 class Pipeline:
     def __init__(self,
@@ -85,6 +86,10 @@ class Pipeline:
     # method to get the number of features/SNPs in the pipeline
     def get_feature_count(self):
         return self.selector_node.get_feature_count()
+    
+    # # method to get the name of the features/SNPs in the pipeline
+    # def get_feature_names(self):
+    #     return self.selector_node.get_feature_names(feature_names_t)
 
     # method to get the LD node
     def get_ld_node(self):
