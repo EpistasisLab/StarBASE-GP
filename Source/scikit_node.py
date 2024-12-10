@@ -109,22 +109,22 @@ class VarianceThresholdNode(ScikitNode, TransformerMixin):
 
     def get_feature_count(self):
         return self.selector.get_support().sum()
-    
+
     # def get_feature_names(self, feature_names):
     #     # # Ensure feature_names is a NumPy array
     #     # feature_names = np.array(feature_names)
     #     # # Ensure the length matches the number of features in the original input
     #     # if len(feature_names) != len(self.selector.get_support()):
     #     #     raise ValueError("Length of feature_names does not match the number of features in the data.")
-        
+
     #     # print the length of the feature names
     #     print("Length of feature names: ", len(feature_names))
     #     # print the lenth of filtered feature names
     #     print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
-        
+
     #     # Use the Boolean mask to filter feature names
     #     return feature_names[self.selector.get_support()]
-    
+
 # select percentile
 class SelectPercentileNode(ScikitNode, TransformerMixin):
     def __init__(self,
@@ -176,19 +176,19 @@ class SelectPercentileNode(ScikitNode, TransformerMixin):
 
     def get_feature_count(self):
         return self.selector.get_support().sum()
-    
+
     # def get_feature_names(self, feature_names):
     #     # # Ensure feature_names is a NumPy array
     #     # feature_names = np.array(feature_names)
     #     # # Ensure the length matches the number of features in the original input
     #     # if len(feature_names) != len(self.selector.get_support()):
     #     #     raise ValueError("Length of feature_names does not match the number of features in the data.")
-        
+
     #     # print the length of the feature names
     #     print("Length of feature names: ", len(feature_names))
     #     # print the lenth of filtered feature names
     #     print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
-        
+
     #     # Use the Boolean mask to filter feature names
     #     return feature_names[self.selector.get_support()]
 
@@ -242,19 +242,19 @@ class SelectFweNode(ScikitNode, TransformerMixin):
 
     def get_feature_count(self):
         return self.selector.get_support().sum()
-    
+
     # def get_feature_names(self, feature_names):
     #     # Ensure feature_names is a NumPy array
     #     feature_names = np.array(feature_names)
     #     # Ensure the length matches the number of features in the original input
     #     if len(feature_names) != len(self.selector.get_support()):
     #         raise ValueError("Length of feature_names does not match the number of features in the data.")
-        
+
     #     # print the length of the feature names
     #     print("Length of feature names: ", len(feature_names))
     #     # print the lenth of filtered feature names
     #     print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
-        
+
     #     # Use the Boolean mask to filter feature names
     #     return feature_names[self.selector.get_support()]
 
@@ -298,19 +298,19 @@ class SelectFromModelLasso(ScikitNode, TransformerMixin):
 
     def get_feature_count(self,):
         return self.selector.get_support().sum()
-    
+
     # def get_feature_names(self, feature_names):
     #     # Ensure feature_names is a NumPy array
     #     feature_names = np.array(feature_names)
     #     # Ensure the length matches the number of features in the original input
     #     if len(feature_names) != len(self.selector.get_support()):
     #         raise ValueError("Length of feature_names does not match the number of features in the data.")
-        
+
     #     # print the length of the feature names
     #     print("Length of feature names: ", len(feature_names))
     #     # print the lenth of filtered feature names
     #     print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
-        
+
     #     # Use the Boolean mask to filter feature names
     #     return feature_names[self.selector.get_support()]
 
@@ -353,19 +353,19 @@ class SelectFromModelTree(ScikitNode, TransformerMixin):
 
     def get_feature_count(self):
         return self.selector.get_support().sum()
-    
+
     # def get_feature_names(self, feature_names):
     #     # Ensure feature_names is a NumPy array
     #     feature_names = np.array(feature_names)
     #     # Ensure the length matches the number of features in the original input
     #     if len(feature_names) != len(self.selector.get_support()):
     #         raise ValueError("Length of feature_names does not match the number of features in the data.")
-        
+
     #     # print the length of the feature names
     #     print("Length of feature names: ", len(feature_names))
     #     # print the lenth of filtered feature names
     #     print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
-        
+
     #     # Use the Boolean mask to filter feature names
     #     return feature_names[self.selector.get_support()]
 
@@ -419,22 +419,22 @@ class SequentialFeatureSelectorNode(ScikitNode, TransformerMixin):
 
     def get_feature_count(self):
         return self.selector.get_support().sum()
-    
+
     # def get_feature_names(self, feature_names):
     #     # Ensure feature_names is a NumPy array
     #     feature_names = np.array(feature_names)
     #     # Ensure the length matches the number of features in the original input
     #     if len(feature_names) != len(self.selector.get_support()):
     #         raise ValueError("Length of feature_names does not match the number of features in the data.")
-        
+
     #     # print the length of the feature names
     #     print("Length of feature names: ", len(feature_names))
     #     # print the lenth of filtered feature names
     #     print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
-        
+
     #     # Use the Boolean mask to filter feature names
     #     return feature_names[self.selector.get_support()]
-    
+
 # custom feature selector based on feature encoding frequency
 class FeatureEncodingFrequencySelector(ScikitNode, TransformerMixin):
     """Feature selector based on Encoding Frequency. Encoding frequency is the frequency of each unique element(0/1/2/3) present in a feature set.
@@ -502,7 +502,7 @@ class FeatureEncodingFrequencySelector(ScikitNode, TransformerMixin):
 
         if X.shape[1] != len(self.boolean_mask):
             raise ValueError("Number of features in X does not match the number of features in the selector.")
-        
+
         return X[:, self.boolean_mask]
 
     def mutate(self, rng: rng_t):
@@ -526,7 +526,7 @@ class FeatureEncodingFrequencySelector(ScikitNode, TransformerMixin):
         if self.selected_features_ is None:
             raise RuntimeError("FeatureEncodingFrequencySelector has not been fitted yet.")
         return len(self.selected_features_)
-    
+
     def get_feature_names(self, feature_names):
         """
             Get the names of the features selected by the selector.
@@ -542,14 +542,14 @@ class FeatureEncodingFrequencySelector(ScikitNode, TransformerMixin):
         # # Ensure the length matches the number of features in the original input
         # if len(feature_names) != len(self.boolean_mask):
         #     raise ValueError("Length of feature_names does not match the number of features in the data.")
-        
+
         # # print the length of the feature names
         # print("Length of feature names: ", len(feature_names))
         # print('Type of feature names: ', type(feature_names))
         # print('Type of boolean mask: ', type(self.boolean_mask))
         # print the lenth of filtered feature names
         #print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
-        
+
         # Use the Boolean mask to filter feature names
         final_features = []
         for i in range(len(self.boolean_mask)):
@@ -583,6 +583,7 @@ class LinearRegressionNode(ScikitNode, RegressorMixin):
 
     def fit(self, X, y):
         self.regressor.fit(X, y)
+        return self.regressor
 
     def predict(self, X):
         return self.regressor.predict(X)
@@ -630,7 +631,7 @@ class ElasticNetNode(ScikitNode, RegressorMixin):
         self.regressor = ElasticNet(**self.params)
 
     def fit(self, X, y):
-        self.regressor.fit(X, y)
+        return self.regressor.fit(X, y)
 
     def predict(self, X):
         return self.regressor.predict(X)
@@ -711,7 +712,7 @@ class SGDRegressorNode(ScikitNode, RegressorMixin):
         self.regressor = SGDRegressor(**self.params)
 
     def fit(self, X, y):
-        self.regressor.fit(X, y)
+        return self.regressor.fit(X, y)
 
     def predict(self, X):
         return self.regressor.predict(X)
@@ -817,7 +818,7 @@ class SVRNode(ScikitNode, RegressorMixin):
         self.regressor = SVR(**self.params)
 
     def fit(self, X, y):
-        self.regressor.fit(X, y)
+        return self.regressor.fit(X, y)
 
     def predict(self, X):
         return self.regressor.predict(X)
@@ -911,7 +912,7 @@ class DecisionTreeRegressorNode(ScikitNode, RegressorMixin):
         self.regressor = DecisionTreeRegressor(**self.params)
 
     def fit(self, X, y):
-        self.regressor.fit(X, y)
+        return self.regressor.fit(X, y)
 
     def predict(self, X):
         return self.regressor.predict(X)
@@ -1004,7 +1005,7 @@ class RandomForestRegressorNode(ScikitNode, RegressorMixin):
         self.regressor = RandomForestRegressor(**self.params)
 
     def fit(self, X, y):
-        self.regressor.fit(X, y)
+        return self.regressor.fit(X, y)
 
     def predict(self, X):
         return self.regressor.predict(X)
@@ -1111,7 +1112,7 @@ class GradientBoostingRegressorNode(ScikitNode, RegressorMixin):
         self.regressor = GradientBoostingRegressor(**self.params)
 
     def fit(self, X, y):
-        self.regressor.fit(X, y)
+        return self.regressor.fit(X, y)
 
     def predict(self, X):
         return self.regressor.predict(X)
@@ -1217,8 +1218,9 @@ class LDSelector(ScikitNode, TransformerMixin):
             else:
                 # make sure params is correct
                 assert 'threshold' in params
-                assert len(params) == 1
+                assert len(params) == 2
                 assert isinstance(params['threshold'], np.float32)
+                assert isinstance(params['genomic_distance'], int)
                 self.params = params
 
             self.threshold = self.params['threshold']
@@ -1229,7 +1231,7 @@ class LDSelector(ScikitNode, TransformerMixin):
             self.selector = 'LDSelector'
             self.selected_features_ = None
             self.bool_mask = None
-    
+
 
     def fit(self, X_original, X_encoded, y, snp_r2_dict):
         """
@@ -1289,7 +1291,7 @@ class LDSelector(ScikitNode, TransformerMixin):
             # print(f"R² value between {snp1} and {snp2} is {r_squared}", flush=True)
 
             return r_squared
-        
+
         # extract chromosome number and position from the column names
         # Assume SNP names are in the format 'X.yyyyy' where X is chromosome and yyyyy is position
         def extract_chr_pos(snp_name):
@@ -1298,7 +1300,7 @@ class LDSelector(ScikitNode, TransformerMixin):
 
         # get the column names of the original data which are in numpy array format
         column_names = X_original.columns
-   
+
         # Create a DataFrame with SNP names, chromosomes, and positions
         genotype_df_columns = pd.DataFrame({'snp': column_names})
         #print the genotype_df_columns
@@ -1546,9 +1548,10 @@ class LDSelector(ScikitNode, TransformerMixin):
         else:
             self.threshold = self.threshold + shift
 
-        self.params['threshold'] = self.threshold
         # initialize the selector with the new threshold
-        LDSelector(x_original=self.x_original, header_snps_dict=self.header_snps_dict, filtered_feature_names=self.filtered_feature_names, rng_= rng)
+        self.params['threshold'] = self.threshold
+        self.params['genomic_distance'] = self.genomic_distance
+        LDSelector(rng_= rng, params= self.params)
 
     def get_feature_count(self):
         """

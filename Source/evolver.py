@@ -120,8 +120,8 @@ def ray_eval_pipeline(x_train,
     # uni nodes into one sklearn union
     steps.append(('snp_union', FeatureUnion([(uni_node.name, uni_node) for uni_node in uni_nodes])))
     # make a list of uni node names
-    uni_node_names = [uni_node.get_snp_name() for uni_node in uni_nodes] 
-    # print("Uni node names: ", uni_node_names, flush=True)   
+    uni_node_names = [uni_node.get_snp_name() for uni_node in uni_nodes]
+    # print("Uni node names: ", uni_node_names, flush=True)
     # add the selector node
     steps.append(('selector', selector_node))
 
@@ -145,22 +145,24 @@ def ray_eval_pipeline(x_train,
     x_final = pd.DataFrame(x_train_transformed_df[features_final], columns=features_final)
     print("Shape of x_final: ", x_final.shape, flush=True)
 
-    # # make new feature union with the ld selected features 
-    # steps = []
-    # steps.append(('snp_union', FeatureUnion([(uni_node.name, uni_node) for uni_node in uni_nodes if uni_node.name in ld_selected_features])))
-    # # add the root node
-    # steps.append(('root', root_node))
-    # # transform internal pipeline representation into sklearn pipeline with PipelineBuilder class
-    # pipeline = SklearnPipeline(steps=steps)
-
-    # print("Printing from ray_eval_pipeline: ", flush=True)
-    # print("X_train values: ", x_train, flush=True)
-    # attempt to fit the pipeline
     try:
         # Fit the pipeline with warnings captured as exceptions
         with warnings.catch_warnings():
             warnings.filterwarnings('error', category=ConvergenceWarning)
-            pipeline_fitted = root_node.fit(x_final, y_train)
+
+            # create the pipeline
+            steps = []
+            # uni nodes into one sklearn union
+            steps.append(('snp_union', FeatureUnion([(uni_node.name, uni_node) for uni_node in uni_nodes if uni_node.get_snp_name() in features_final])))
+            # pass to regressor
+            steps.append(('regressor', root_node.regressor))
+
+            # create the pipeline without refitting the regressor
+            pipeline = SklearnPipeline(steps=steps)
+
+            pipeline.fit(x_train, y_train)
+
+
     except ConvergenceWarning as cw:
         logging.error(f"ConvergenceWarning while fitting model: {cw}")
         logging.error(f"selector_node: {selector_node.name}")
@@ -182,12 +184,12 @@ def ray_eval_pipeline(x_train,
         return r2_t(-1.0), feature_cnt_t(0), pop_id
 
     try:
-        print('type of root: ', type(root_node), flush=True)
-        print('root node name: ', root_node.name, flush=True)
-        print('root node: ', root_node, flush=True)
-        r2_score = pipeline_fitted.score(x_val, y_val)
-        #feature_count = pipeline_fitted.named_steps['selector'].get_feature_count()
-        #feature_count = pipeline_fitted.named_steps['ld'].get_feature_count()
+        print('type of pipeline: ', type(pipeline), flush=True)
+        # print('type of root: ', type(root_node), flush=True)
+        # print('root node name: ', root_node.name, flush=True)
+        print('pipeline: ', pipeline, flush=True)
+
+        r2_score = pipeline.score(x_val, y_val)
         feature_count = len(features_final) # get the number of features after the LD node
     except Exception as e:
         logging.error(f"Error while scoring or getting feature count: {e}")
