@@ -1,3 +1,5 @@
 runner.py
 Source/__pycache__/
 top10k_pruned_BMIres.csv
+pareto_front.png
+snp_hub.csv
