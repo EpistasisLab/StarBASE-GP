@@ -398,11 +398,22 @@ class EA:
         sample_weight: array-like {n_samples} (optional)
             List of weights indicating relative importance
         """
-        # check for missing values
+        # # check for missing values
+        # if isinstance(features, pd.DataFrame):
+        #         for col in features.columns:
+        #             #if features[col].isnull().values.any():
+        #                features[col].fillna(features[col].mode()[0], inplace=True)
+
+        # Check if features is a DataFrame and handle missing values
         if isinstance(features, pd.DataFrame):
-                for col in features.columns:
-                    #if features[col].isnull().values.any():
-                       features[col].fillna(features[col].mode()[0], inplace=True)
+            for col in features.columns:
+                if features[col].isnull().any():
+                    # Calculate mode and handle edge cases
+                    mode_values = features[col].mode()
+                    if not mode_values.empty:
+                        features[col] = features[col].fillna(mode_values[0])
+                    else:
+                        raise ValueError(f"Cannot calculate mode for column '{col}' due to missing or ambiguous data.")
 
         # check for target
         try:
