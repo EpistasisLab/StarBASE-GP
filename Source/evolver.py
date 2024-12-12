@@ -132,7 +132,9 @@ def ray_eval_pipeline(x_train,
     # print("Selected features: ", selected_features, flush=True)
     x_train_transformed = pipeline_fitted.transform(x_train)
     x_train_transformed_df = pd.DataFrame(x_train_transformed, columns=selected_features)
-
+    if x_train_transformed_df.empty:
+        return r2_t(-1.0), feature_cnt_t(0), pop_id
+   
     # x_train original dataframe
     x_train_original_df = pd.DataFrame(x_train, columns=selected_features)
 
@@ -162,6 +164,17 @@ def ray_eval_pipeline(x_train,
 
             pipeline.fit(x_train, y_train)
 
+            # print the number of features seen during the fitting
+            # Access the fitted regressor from the pipeline
+            fitted_regressor = pipeline.named_steps['regressor']
+
+            # Check if the fitted regressor has the attribute n_features_in_
+            if hasattr(fitted_regressor, 'n_features_in_'):
+                features_seen_by_regressor = fitted_regressor.n_features_in_
+                print("Number of features seen by regressor: ", features_seen_by_regressor, flush=True)
+            else:
+                print("The regressor does not have the attribute 'n_features_in_'", flush=True)
+
 
     except ConvergenceWarning as cw:
         logging.error(f"ConvergenceWarning while fitting model: {cw}")
@@ -184,10 +197,10 @@ def ray_eval_pipeline(x_train,
         return r2_t(-1.0), feature_cnt_t(0), pop_id
 
     try:
-        print('type of pipeline: ', type(pipeline), flush=True)
-        # print('type of root: ', type(root_node), flush=True)
-        # print('root node name: ', root_node.name, flush=True)
-        print('pipeline: ', pipeline, flush=True)
+        # print('type of pipeline: ', type(pipeline), flush=True)
+        # # print('type of root: ', type(root_node), flush=True)
+        # # print('root node name: ', root_node.name, flush=True)
+        # print('pipeline: ', pipeline, flush=True)
 
         r2_score = pipeline.score(x_val, y_val)
         feature_count = len(features_final) # get the number of features after the LD node
@@ -615,7 +628,7 @@ class EA:
         for pipeline in self.population:
             print("Pipeline r2 score: ", pipeline.get_trait_r2())
             print("Pipeline feature count: ", pipeline.get_trait_feature_cnt())
-            print("SNPs selected by the LD node: ", pipeline.get_ld_node().selected_features_)
+            # print("SNPs selected by the LD node: ", len(pipeline.get_ld_node().selected_features_))
             if pipeline.get_trait_r2() > 0.0:
                 pop.append(pipeline)
         self.population = pop
@@ -897,6 +910,7 @@ class EA:
 
         print('Size of Pareto Front:', len(pareto_front), flush=True)
 
+        
         # create a poster object
         poster = Poster(self.X_train_id, self.y_train_id, self.X_val_id, self.y_val_id, hub=self.hubs)
 
@@ -906,17 +920,17 @@ class EA:
         # print the pipelines in the population
         ray_jobs = []
         for i, pipeline in enumerate(pareto_front): # think this as pareto front pipelines
-            epi_nodes = self.construct_epi_nodes(pipeline.get_epi_pairs())
+            uni_nodes = self.construct_uni_nodes(pipeline.get_uni_snps())
 
             # Get R2 and Feature Count for this specific pipeline
             pipeline_r2 = pipeline.get_trait_r2()
             pipeline_feature_count = pipeline.get_trait_feature_cnt()
-            results_refs = poster.run_poster(pipeline,  epi_nodes, self.X_train_id, self.y_train_id, id = i)
+            results_refs = poster.run_poster(pipeline,  uni_nodes, self.X_train_id, self.y_train_id, self.X_val_id, self.y_val_id, id = i)
             ray_jobs.append((results_refs, pipeline_r2, pipeline_feature_count))  # Save the refs along with R2 and Feature Count
 
         assert len(ray_jobs) == len(pareto_front)
 
-        epi_feature_datasets = []
+        uni_feature_datasets = []
 
         # getting the results from ray
         while len(ray_jobs) > 0:
@@ -927,23 +941,23 @@ class EA:
             for i, (ref, r2_value, feature_count) in enumerate(ray_jobs):
                 if ref == finished_refs[0]:  # Match the finished job reference
                     # Get the results of the finished job
-                    epi_feature_dataset, shap_values_df, selector_name, root_name,  pipeline_id = ray.get(ref)
+                    uni_feature_dataset, shap_values_df, selector_name, root_name,  pipeline_id = ray.get(ref)
 
                     # Add pipeline details to the SHAP DataFrame
                     shap_values_df['Pipeline_No'] = pipeline_id + 1
-                    shap_values_df['R2'] = r2_value
-                    shap_values_df['Feature_Count'] = feature_count
-                    shap_values_df['Selector'] = selector_name
-                    shap_values_df['Root'] = root_name
+                    shap_values_df['Pipeline_R2'] = r2_value
+                    shap_values_df['Pipeline_Feature_Count'] = feature_count
+                    shap_values_df['Pipeline_Selector'] = selector_name
+                    shap_values_df['Pipeline_Root'] = root_name
 
                     # Store the shap_values_df in the list for later processing or concatenation
                     all_shap_values_df = pd.concat([all_shap_values_df, shap_values_df], ignore_index=True)
 
                     # print the shape of the epi feature dataset with the pipeline number
-                    print(f"Pipeline {pipeline_id + 1} Epi Feature Dataset Shape:", epi_feature_dataset.shape, flush=True)
+                    print(f"Pipeline {pipeline_id + 1} Uni Feature Dataset Shape:", uni_feature_dataset.shape, flush=True)
 
-                    # Add the epi_feature_dataset DataFrame to the list
-                    epi_feature_datasets.append(epi_feature_dataset)
+                    # Add the uni_feature_dataset DataFrame to the list
+                    uni_feature_datasets.append(uni_feature_dataset)
 
                     # Remove the processed job from ray_jobs
                     ray_jobs.pop(i)
@@ -958,7 +972,7 @@ class EA:
 
         # create the average SHAP values for each SNP
         # add a column added OVERALL_FEATURE_IMP, which will be the multiplication value of shap_value and R2
-        all_shap_values_df['OVERALL_FEATURE_IMP'] = all_shap_values_df['shap_value'] * all_shap_values_df['R2']
+        all_shap_values_df['OVERALL_FEATURE_IMP'] = all_shap_values_df['shap_value'] * all_shap_values_df['Pipeline_R2']
 
         # for the each unique feature in feature column add up all the OVERALL_FEATURE_IMP values
         all_shap_values_df = all_shap_values_df.groupby('feature').agg({'OVERALL_FEATURE_IMP': 'sum'}).reset_index()

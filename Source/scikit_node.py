@@ -1214,7 +1214,7 @@ class LDSelector(ScikitNode, TransformerMixin):
 
             # if params is an empty dictionary, then we will initialize the params
             if params == {}:
-                self.params = {'threshold': np.float32(rng.uniform(low=0.1, high=1)), 'genomic_distance': 500000}
+                self.params = {'threshold': np.float32(rng.uniform(low=0.1, high=1)), 'genomic_distance': int(500000)}
             else:
                 # make sure params is correct
                 assert 'threshold' in params
@@ -1254,6 +1254,15 @@ class LDSelector(ScikitNode, TransformerMixin):
         ld_threshold = self.threshold # Threshold for LD pruning
         max_distance = self.genomic_distance # Maximum genomic distance in between SNPs to be considered for LD pruning
         final_selected_snps = [] # List to store the final selected SNPs after LD pruning and conditional analysis
+
+        # # if X_original and X_encoded are empty dataframes, then assert
+        # assert not X_original.empty, "X_original is empty"
+        # assert not X_encoded.empty, "X_encoded is empty"
+
+        if X_original.empty:
+            # set self.selected_features_ to None and return self
+            self.selected_features_ = None
+            return self
 
         # function to remove same groups being checked for LD and also to remove subsets of groups
         def remove_subsets(groups):
@@ -1295,27 +1304,44 @@ class LDSelector(ScikitNode, TransformerMixin):
         # extract chromosome number and position from the column names
         # Assume SNP names are in the format 'X.yyyyy' where X is chromosome and yyyyy is position
         def extract_chr_pos(snp_name):
+            #print("The SNP name is: ", snp_name, flush=True)
+            assert '.' in snp_name, "SNP names must be in the format 'X.yyyyy' where X is chromosome and yyyyy is position"
             chrom, pos = snp_name.split('.')
+            assert type(chrom) == str and type(pos) == str, "Chromosome number must be a string of digits"
             return int(chrom), int(pos)  # Use float for positions to preserve precision
+        
 
         # get the column names of the original data which are in numpy array format
         column_names = X_original.columns
+        chr,pos = [],[]
+
+        for snp in column_names:
+            chr.append(int(snp.split('.')[0]))
+            pos.append(int(snp.split('.')[1]))
+
+        # print("Printing the chromosome numbers: ", chr, flush=True)
+        # print("Printing the positions: ", pos, flush=True)
 
         # Create a DataFrame with SNP names, chromosomes, and positions
-        genotype_df_columns = pd.DataFrame({'snp': column_names})
+        genotype_df_columns = pd.DataFrame({'chrom': chr, 'pos': pos, 'snp': column_names})
         #print the genotype_df_columns
+        #print("Printing the genotype_df_columns: ", genotype_df_columns, flush=True)
+        # genotype_df_columns = pd.DataFrame({'snp': column_names}, index=range(len(column_names)))
+
         # print("Printing the genotype_df_columns: ", genotype_df_columns, flush=True)
-        #genotype_df_columns = pd.DataFrame({'snp': column_names}, index=range(len(column_names)))
+
+        # print genotype_df_columns column 'snp'
+        # print("Printing the genotype_df_columns column 'snp': ", genotype_df_columns['snp'], flush=True)
 
         # Apply the function to extract chromosome and position
-        genotype_df_columns[['chrom', 'pos']] = genotype_df_columns['snp'].apply(
-            lambda x: pd.Series(extract_chr_pos(x))
-        )
+        # genotype_df_columns[['chrom', 'pos']] = genotype_df_columns['snp'].apply(
+        #     lambda x: pd.Series(extract_chr_pos(x))
+        # )
         #print("Printing the genotype_df_columns after extracting chromosome and position: ", genotype_df_columns, flush=True)
 
         # sort the SNPs by chromosome and position
-        genotype_df_columns['chrom'] = pd.to_numeric(genotype_df_columns['chrom'], errors='coerce')
-        genotype_df_columns['pos'] = pd.to_numeric(genotype_df_columns['pos'], errors='coerce')
+        # genotype_df_columns['chrom'] = pd.to_numeric(genotype_df_columns['chrom'], errors='coerce')
+        # genotype_df_columns['pos'] = pd.to_numeric(genotype_df_columns['pos'], errors='coerce')
         genotype_df_columns = genotype_df_columns.sort_values(['chrom', 'pos'])
         #print the genotype_df_columns after sorting
         #print("Printing the genotype_df_columns after sorting: ", genotype_df_columns, flush=True)
@@ -1548,9 +1574,21 @@ class LDSelector(ScikitNode, TransformerMixin):
         else:
             self.threshold = self.threshold + shift
 
+        # increment genomin distance by 100000 with a minimum of 500000 and maximum of 1000000, in increments of 100000
+        genomic_distance_shift = np.int32(rng.choice([-100000, 100000]))
+        # check if the genomic_distance is going to be less than 500000
+        if self.genomic_distance + genomic_distance_shift < 500000:
+            self.genomic_distance = 500000
+        # check if the genomic_distance is going to be greater than 1000000
+        elif self.genomic_distance + genomic_distance_shift > 1000000:
+            self.genomic_distance = 1000000
+        # if neither of the above, then we can just add the shift
+        else:
+            self.genomic_distance = self.genomic_distance + genomic_distance_shift
+
         # initialize the selector with the new threshold
         self.params['threshold'] = self.threshold
-        self.params['genomic_distance'] = self.genomic_distance
+        self.params['genomic_distance'] = int(self.genomic_distance)
         LDSelector(rng_= rng, params= self.params)
 
     def get_feature_count(self):
