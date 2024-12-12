@@ -400,8 +400,11 @@ class EA:
         """
         # check for missing values
         if isinstance(features, pd.DataFrame):
-                if features.isnull().values.any():
-                    exit('Error: Input data contains missing values. Please impute the missing values before running.', -1)
+                for col in features.columns:
+                    if features[col].isnull().values.any():
+                        # perform mode imputation
+                        features[col] = features[col].fillna(features[col].mode()[0])
+                        print(f"Missing values in column {col} were imputed with the mode value.")
 
         # check for target
         try:
