@@ -412,6 +412,7 @@ class EA:
                     mode_values = features[col].mode()
                     if not mode_values.empty:
                         features[col] = features[col].fillna(mode_values[0])
+                        print(f"Column '{col}' contains missing values. Imputed with mode value: {mode_values[0]}.")
                     else:
                         raise ValueError(f"Cannot calculate mode for column '{col}' due to missing or ambiguous data.")
 
