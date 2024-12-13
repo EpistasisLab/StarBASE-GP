@@ -278,6 +278,8 @@ class SnpHub:
             for chrom, bins in self.bins.items():
                 self.bins[chrom] = [np.array(b, dtype=gen_chrom_pos_t) for b in bins]
 
+            print("Length of snps: ", len(snps), flush=True)
+            print("Result from count_bin_objs: ", self.count_bin_objs(), flush=True)
             # make sure all SNPs are accounted for
             assert len(snps) == self.count_bin_objs()
             # make sure snp_bins is the correct size
@@ -300,7 +302,7 @@ class SnpHub:
 
             return np.uint16(sum)
 
-        # get all snps in a given bin with r2 > 0.0                       SNPS              weighted r2 scores > 0
+        # get all snps in a given bin with r2 > 0.0                   SNPS              weighted r2 scores > 0
         def get_snps_r2_in_bin(self, snp: snp_t, snp_hub) -> Tuple[npt.NDArray[snp_t], npt.NDArray[r2_t]]:
             # make sure that snp_hub is the correct type
             assert isinstance(snp_hub, SnpHub.Hub)
