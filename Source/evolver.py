@@ -32,6 +32,7 @@ import warnings
 from sklearn.exceptions import NotFittedError, ConvergenceWarning
 import matplotlib.pyplot as plt
 from .poster import Poster
+import time
 
 # snp name type
 snp_name_t = np.str_
@@ -100,7 +101,6 @@ def ray_uni_eval(x_train,
 
     return r2_t(best_res), nodelo_t(best_uni), snp_name
 
-# todo: add ld node to the pipeline
 @ray.remote
 def ray_eval_pipeline(x_train,
                       y_train,
@@ -134,7 +134,7 @@ def ray_eval_pipeline(x_train,
     x_train_transformed_df = pd.DataFrame(x_train_transformed, columns=selected_features)
     if x_train_transformed_df.empty:
         return r2_t(-1.0), feature_cnt_t(0), pop_id
-   
+
     # x_train original dataframe
     x_train_original_df = pd.DataFrame(x_train, columns=selected_features)
 
@@ -145,7 +145,7 @@ def ray_eval_pipeline(x_train,
     features_final = ld_node.selected_features_
     # print("Features after LD node: ", features_final, flush=True)
     x_final = pd.DataFrame(x_train_transformed_df[features_final], columns=features_final)
-    print("Shape of x_final: ", x_final.shape, flush=True)
+    # print("Shape of x_final: ", x_final.shape, flush=True)
 
     try:
         # Fit the pipeline with warnings captured as exceptions
@@ -166,14 +166,14 @@ def ray_eval_pipeline(x_train,
 
             # print the number of features seen during the fitting
             # Access the fitted regressor from the pipeline
-            fitted_regressor = pipeline.named_steps['regressor']
+            # fitted_regressor = pipeline.named_steps['regressor']
 
             # Check if the fitted regressor has the attribute n_features_in_
-            if hasattr(fitted_regressor, 'n_features_in_'):
-                features_seen_by_regressor = fitted_regressor.n_features_in_
-                print("Number of features seen by regressor: ", features_seen_by_regressor, flush=True)
-            else:
-                print("The regressor does not have the attribute 'n_features_in_'", flush=True)
+            # if hasattr(fitted_regressor, 'n_features_in_'):
+            #     features_seen_by_regressor = fitted_regressor.n_features_in_
+            #     print("Number of features seen by regressor: ", features_seen_by_regressor, flush=True)
+            # else:
+            #     print("The regressor does not have the attribute 'n_features_in_'", flush=True)
 
 
     except ConvergenceWarning as cw:
@@ -219,6 +219,7 @@ class EA:
                  uni_cnt_max: np.uint16,
                  uni_cnt_min: np.uint16,
                  cores: int,
+                 uni_start_cnt: int = -1,
                  mut_prob: prob_t = prob_t(.5),
                  cross_prob: prob_t = prob_t(.5),
                  mut_selector_p: prob_t = prob_t(.5),
@@ -282,6 +283,7 @@ class EA:
         self.num_add_interactions = num_add_interactions
         self.num_del_interactions = num_del_interactions
         self.population = [] # will hold all the pipelines
+        self.uni_start_cnt = uni_start_cnt
         self.repoduction = Reproduction(uni_cnt_max=uni_cnt_max,
                                         uni_cnt_min=uni_cnt_min,
                                         mut_prob=mut_prob,
@@ -456,8 +458,10 @@ class EA:
         """
         # create the initial population
         print('Initializing population...', flush=True)
+        start_time = time.time()
         self.initialize_population()
-        print('Population initialized -- Entering evolutionary proccess.\n', flush=True)
+        print(f"Population initialized in {(time.time() - start_time) / 60 / 60} hours", flush=True)
+        print('Entering evolutionary proccess.\n', flush=True)
 
         # run the algorithm for the specified number of generations
         for g in range(gens):
@@ -466,6 +470,7 @@ class EA:
             assert(0 < len(self.population) <= self.pop_size)
 
             print('Generation:', g, flush=True)
+            start_time = time.time()
 
             # how many extra pipeline offspring are needed to reach 2*N potentially surviving solutions
             extra_offspring = self.pop_size - len(self.population)
@@ -505,6 +510,9 @@ class EA:
 
             # make sure we have the correct number of pipelines
             assert len(self.population) == self.pop_size
+
+            print(f"Time to finish generation: {(time.time() - start_time) / 60 / 60} hours", flush=True)
+
         # plot the pareto front
         self.plot_pareto_front() # calling the plotting function at the end to get the final pareto plot
         # save the epi_hub to a csv file
@@ -586,14 +594,17 @@ class EA:
         unseen_snps = set()
 
         # create the initial population
-        # we create double the population size to account for bad snps
-        for _ in range(self.pop_size * 2):
+        for _ in range(self.pop_size):
             # holds all interactions we are doing
             # set to make sure we don't have duplicates
             snps = set()
 
-            # add a random number of snps to the set
-            uni_cnt = self.rng.integers(low=self.uni_cnt_min, high=self.uni_cnt_max + 1)
+            if 0 < self.uni_start_cnt:
+                uni_cnt = self.uni_start_cnt
+            else:
+                # add a random number of snps to the set
+                uni_cnt = self.rng.integers(low=self.uni_cnt_min, high=self.uni_cnt_max + 1)
+
             while len(snps) <= uni_cnt:
                 # get random snp and add to snps
                 snp = self.hubs.get_ran_snp(self.rng)
@@ -607,7 +618,7 @@ class EA:
             pop_univariate_sets.append(snps)
 
         # make sure we have the correct number of interactions
-        assert len(pop_univariate_sets) == 2 * self.pop_size
+        assert len(pop_univariate_sets) == self.pop_size
 
         # evaluate all unseen interactions
         self.evaluate_unseen_snps(unseen_snps)
@@ -624,14 +635,11 @@ class EA:
                 # skip this iteration if there are no good snps
                 continue
 
-            # # for debugging purposes
-            # print("Seed for pipeline: ", self.seed, flush=True)
-
             # create pipeline and add to the population
             self.population.append(self.repoduction.generate_random_pipeline(self.rng, good_snps, int(self.seed), self.X_train, self.y_train, self.hubs))
 
         # make sure we have the correct number of pipelines
-        assert len(self.population) ==  2 * self.pop_size
+        assert len(self.population) == self.pop_size
 
         # evaluate the initial population
         self.evaluation(self.population)
@@ -639,33 +647,14 @@ class EA:
         # subset the population to only include pipelines with positive r2 scores
         pop = []
         for pipeline in self.population:
-            print("Pipeline r2 score: ", pipeline.get_trait_r2())
-            print("Pipeline feature count: ", pipeline.get_trait_feature_cnt())
+            # print("Pipeline r2 score: ", pipeline.get_trait_r2())
+            # print("Pipeline feature count: ", pipeline.get_trait_feature_cnt())
             # print("SNPs selected by the LD node: ", len(pipeline.get_ld_node().selected_features_))
             if pipeline.get_trait_r2() > 0.0:
                 pop.append(pipeline)
         self.population = pop
 
-        # make sure no pipelines in self.population have negative r2 scores
-        assert all(pipeline.get_trait_r2() > 0.0 for pipeline in self.population)
-
-        # if size positive_scores is less than the population size, we keep the same population
-        if len(self.population) < self.pop_size:
-            return
-        # else we use nsga to get the pareto front from all the pipelines in the population
-        else:
-            # get the fronts and rank self.get_pipeline_scores(self.population)
-            fronts, ranks = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, (r2_t(1.0), feature_cnt_t(-1))))
-            # make sure that the number of fronts is correct
-            assert sum([len(f) for f in fronts]) == len(ranks)
-
-            # get crowding distance for each solution
-            crowding_distance = nsga.crowding_distance(self.get_pipeline_scores(self.population, weights=(r2_t(1.0), feature_cnt_t(1))), np.int32(2))
-
-            # truncate the population to the population size with nsga ii
-            survivor_ids = nsga.non_dominated_truncate(fronts, crowding_distance, self.pop_size)
-            self.population = [self.population[i] for i in survivor_ids]
-            return
+        return
 
     # evaluate all unevaluated snps and update
     def evaluate_unseen_snps(self, unseen_snps: Set) -> None:
@@ -923,7 +912,7 @@ class EA:
 
         print('Size of Pareto Front:', len(pareto_front), flush=True)
 
-        
+
         # create a poster object
         poster = Poster(self.X_train_id, self.y_train_id, self.X_val_id, self.y_val_id, hub=self.hubs)
 
