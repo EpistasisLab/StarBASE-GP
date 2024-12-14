@@ -16,7 +16,7 @@ from .snp_hub import SnpHub
 import copy as cp
 
 # feature selectors
-from .scikit_node import VarianceThresholdNode, SelectPercentileNode, SelectFweNode, SelectFromModelLasso, SelectFromModelTree, SequentialFeatureSelectorNode
+from .scikit_node import VarianceThresholdNode, SelectPercentileNode, SelectFweNode, SelectFromModelLasso, SelectFromModelTree, SequentialFeatureSelectorNode, LDSelector, FeatureEncodingFrequencySelector
 # regressors
 from .scikit_node import LinearRegressionNode, RandomForestRegressorNode, SGDRegressorNode, DecisionTreeRegressorNode, ElasticNetNode, SVRNode, GradientBoostingRegressorNode
 
@@ -83,21 +83,23 @@ class Reproduction:
         return
 
     # method to generate the initial population
-    # todo: make sure we add the actual ld node later
-    def generate_random_pipeline(self, rng_: rng_t, snps: snps_t, seed: int) -> Pipeline:
+    def generate_random_pipeline(self, rng_: rng_t, snps: snps_t, seed: int, x_original, y_original, hubs) -> Pipeline:
         # quick checks
         assert len(snps) > 0
 
         # set rng
         rng = np.random.default_rng(rng_)
-
+        # print("rng:", rng, flush=True)
+        # assert rng!=None
+       
         # randomly select selector node
         selector_node = rng.choice([VarianceThresholdNode(rng_=rng),
                                     SelectPercentileNode(rng_=rng),
                                     SelectFweNode(rng_=rng),
                                     SelectFromModelLasso(rng_=rng, seed=seed),
                                     SelectFromModelTree(rng_=rng, seed=seed),
-                                    SequentialFeatureSelectorNode(rng_=rng, seed=seed)
+                                    SequentialFeatureSelectorNode(rng_=rng, seed=seed),
+                                    FeatureEncodingFrequencySelector(rng_=rng),
                                 ])
         # randomly select root node
         root_node = rng.choice([LinearRegressionNode(rng_=rng),
@@ -109,8 +111,21 @@ class Reproduction:
                                 GradientBoostingRegressorNode(rng_=rng, seed=seed),
                             ])
         # create the pipeline
-        # todo: pass actual ld node
-        return Pipeline(ld_node=VarianceThresholdNode(rng_=rng) ,selector_node=selector_node, root_node=root_node, uni_snps=snps, traits=[])
+        snps_dict = {snp: hubs.get_snp_pos(snp) for snp in snps}
+        feature_names = [snp for snp in snps]
+        # print("Length of feature names:", len(feature_names), flush=True)
+        # # filter x_original to only include the snps in the snps set
+        # x_original = x_original[feature_names]
+        # selector_node.fit(x_original, y_original)
+        # selector_node.transform(x_original)
+        # filtered_feature_names = selector_node.get_feature_names(feature_names)
+        # print("Length of filtered feature names:", len(filtered_feature_names), flush=True)
+        
+        return Pipeline(ld_node=LDSelector(rng_=rng, seed=seed),
+                        selector_node=selector_node,
+                        root_node=root_node,
+                        uni_snps=snps,
+                        traits=[])
 
     def variation_order(self, rng_: rng_t, offpring_cnt: pop_size_t) -> Tuple[List[str], pop_size_t]:
         """

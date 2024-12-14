@@ -1,3 +1,8 @@
 runner.py
 Source/__pycache__/
 top10k_pruned_BMIres.csv
+pareto_front.png
+snp_hub.csv
+avg_shap_values.csv
+top_20_features.png
+combined_shap_values.csv
