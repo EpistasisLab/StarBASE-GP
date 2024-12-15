@@ -1192,7 +1192,7 @@ class GradientBoostingRegressorNode(ScikitNode, RegressorMixin):
         # randomly pick loss
         self.params['loss'] = rng.choice(['squared_error', 'absolute_error', 'huber', 'quantile'])
         # randomly pick criterion
-        self.params['criterion'] = rng.choice(['squared_error', 'friedman_mse', 'absolute_error'])
+        self.params['criterion'] = rng.choice(['squared_error', 'friedman_mse'])
 
         # new regressor configuration
         self.regressor = GradientBoostingRegressor(**self.params)
