@@ -518,7 +518,7 @@ class EA:
             # make sure we have the correct number of pipelines
             assert len(self.population) == self.pop_size
 
-            print(f"Time to finish generation: {(time.time() - start_time) / 60 / 60} hours", flush=True)
+            print(f"Time to finish generation: {(time.time() - start_time) / 60} minutes", flush=True)
 
         # plot the pareto front
         self.plot_pareto_front() # calling the plotting function at the end to get the final pareto plot
@@ -768,6 +768,9 @@ class EA:
         uni_snps: Set
             Set of snps.
         """
+        # make sure there are snps to construct
+        assert len(uni_snps) > 0
+
         uni_nodes = []
         id = 0
         for snp_name in uni_snps:
