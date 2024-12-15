@@ -127,7 +127,14 @@ def ray_eval_pipeline(x_train,
 
     # fit the pipeline to get the selected features
     pipeline = SklearnPipeline(steps=steps)
-    pipeline_fitted = pipeline.fit(x_train, y_train)
+    try:
+        pipeline_fitted = pipeline.fit(x_train, y_train)
+    except Exception as e:
+        # Catch all other exceptions and log error with relevant context
+        logging.error(f"Exception while fitting model: {e}")
+        logging.error(f"selector_node: {selector_node.name}")
+        return r2_t(-1.0), feature_cnt_t(0), pop_id
+      
     selected_features = pipeline_fitted.named_steps['selector'].get_feature_names(uni_node_names)
     # print("Selected features: ", selected_features, flush=True)
     x_train_transformed = pipeline_fitted.transform(x_train)
