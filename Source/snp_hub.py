@@ -300,7 +300,7 @@ class SnpHub:
                 for bin in bins:
                     sum += len(bin)
 
-            return np.uint16(sum)
+            return np.uint32(sum)
 
         # get all snps in a given bin with r2 > 0.0                   SNPS              weighted r2 scores > 0
         def get_snps_r2_in_bin(self, snp: snp_t, snp_hub) -> Tuple[npt.NDArray[snp_t], npt.NDArray[r2_t]]:
