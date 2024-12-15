@@ -96,7 +96,7 @@ def get_shap_values(pipeline, uni_snps_df, uni_nodes, X_train_id, y_train_id, X_
             # getting the SHAP feature importance values
             number_of_features = len(features_final)
             # max_evals = max(500, 2 * number_of_features + 1)
-            max_evals = 1000
+            max_evals = 600
             root_node.fit(x_final_train, y_train_id)
             explainer = shap.Explainer(root_node.predict, x_final_test)
             shap_values = explainer(x_final_test, max_evals=max_evals)

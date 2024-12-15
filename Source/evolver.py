@@ -522,8 +522,8 @@ class EA:
 
         # plot the pareto front
         self.plot_pareto_front() # calling the plotting function at the end to get the final pareto plot
-        # save the epi_hub to a csv file
-        self.hubs.save_hubs("snp_hub.csv")
+        # save the epi_hub to a csv file in the save directory
+        self.hubs.save_hubs(self.save_directory+"snp_hub.csv")
 
     # get list of pipeline scores (r2, complexity) by position
     def get_pipeline_scores(self, pipelines: List[Pipeline], weights: Tuple[r2_t, feature_cnt_t]) -> npt.NDArray:
