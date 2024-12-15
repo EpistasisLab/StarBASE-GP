@@ -300,7 +300,7 @@ class SnpHub:
                 for bin in bins:
                     sum += len(bin)
 
-            return np.uint16(sum)
+            return np.uint32(sum)
 
         # get all snps in a given bin with r2 > 0.0                   SNPS              weighted r2 scores > 0
         def get_snps_r2_in_bin(self, snp: snp_t, snp_hub) -> Tuple[npt.NDArray[snp_t], npt.NDArray[r2_t]]:
@@ -880,7 +880,7 @@ class SnpHub:
         # combine the wiggle range and return new snps
         wiggle_range = left_wiggle_range + right_wiggle_range
         return np.array([f"{snp_chrom}.{pos}" for pos in wiggle_range], dtype=snp_t)
-    
+
 
     # function to take in a list of snps and generate a dictionary of snps and their corresponding r2 values
     def generate_r2_dict(self, snps: Set[snp_t]) -> List:
