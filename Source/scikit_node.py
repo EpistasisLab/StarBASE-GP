@@ -1192,7 +1192,7 @@ class GradientBoostingRegressorNode(ScikitNode, RegressorMixin):
         # randomly pick loss
         self.params['loss'] = rng.choice(['squared_error', 'absolute_error', 'huber', 'quantile'])
         # randomly pick criterion
-        self.params['criterion'] = rng.choice(['squared_error', 'friedman_mse', 'absolute_error'])
+        self.params['criterion'] = rng.choice(['squared_error', 'friedman_mse'])
 
         # new regressor configuration
         self.regressor = GradientBoostingRegressor(**self.params)
@@ -1309,7 +1309,7 @@ class LDSelector(ScikitNode, TransformerMixin):
             chrom, pos = snp_name.split('.')
             assert type(chrom) == str and type(pos) == str, "Chromosome number must be a string of digits"
             return int(chrom), int(pos)  # Use float for positions to preserve precision
-        
+
 
         # get the column names of the original data which are in numpy array format
         column_names = X_original.columns
