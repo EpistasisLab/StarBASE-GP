@@ -334,9 +334,9 @@ class EA:
             # load the data
             exit('Error: The path provided is not valid. Please provide a valid path to the data file.', -1)
 
-        data = pd.read_csv(path)
-        print('Data loaded successfully.', flush=True)
-        print("Data shape:", data.shape, flush=True)
+        # data = pd.read_csv(path)
+        # print('Data loaded successfully.', flush=True)
+        # print("Data shape:", data.shape, flush=True)
 
         # get pandas dataframe snp names without loading all data
         self.snp_labels = pd.read_csv(path, nrows=0).columns.tolist()
