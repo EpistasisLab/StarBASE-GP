@@ -885,6 +885,6 @@ class SnpHub:
     # function to take in a list of snps and generate a dictionary of snps and their corresponding r2 values
     def generate_r2_dict(self, snps: Set[snp_t]) -> List:
         # make sure
-        assert len(snps)
+        assert len(snps) > 0
 
         return [(snp, self.get_uni_res(snp)) for snp in snps]
