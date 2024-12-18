@@ -112,7 +112,6 @@ def get_shap_values(pipeline, uni_snps_df, uni_nodes, X_train_id, y_train_id, X_
 
         return x_final_test, shap_values_df, selector_name, root_name, id
 
-
 class Poster:
     def __init__(self, X_train, y_train, X_val,  y_val, hub: snp_hub.SnpHub):
         self.X_train_id = X_train

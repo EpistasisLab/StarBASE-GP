@@ -209,10 +209,6 @@ def ray_eval_pipeline(x_train,
         return r2_t(-1.0), feature_cnt_t(0), pop_id, False, ()
 
     try:
-        # print('type of pipeline: ', type(pipeline), flush=True)
-        # # print('type of root: ', type(root_node), flush=True)
-        # # print('root node name: ', root_node.name, flush=True)
-        # print('pipeline: ', pipeline, flush=True)
 
         r2_score = pipeline.score(x_val, y_val)
         feature_count = len(features_final) # get the number of features after the LD node
@@ -220,12 +216,12 @@ def ray_eval_pipeline(x_train,
         logging.error(f"Error while scoring or getting feature count: {e}")
         return r2_t(-1.0), feature_cnt_t(0), pop_id, False, ()
 
-    more_than_one = False
+    one_snp_only_pipeline = False
     if ld_node.name_of_selected_features != None:
-        more_than_one = True
+        one_snp_only_pipeline = True
 
     # return the pipeline
-    return r2_t(r2_score), feature_cnt_t(feature_count), pop_id, more_than_one, [(k,v) for k,v in ld_node.snp_details_after_ld.items()]
+    return r2_t(r2_score), feature_cnt_t(feature_count), pop_id, one_snp_only_pipeline, [(k,v) for k,v in ld_node.snp_details_after_ld.items()]
 
 @typechecked # for debugging purposes
 class EA:
@@ -763,12 +759,12 @@ class EA:
         # process results as they come in
         while len(ray_jobs) > 0:
             finished, ray_jobs = ray.wait(ray_jobs)
-            r2, feature_count, pop_id, more_than_one, pruned_or_not = ray.get(finished)[0]
+            r2, feature_count, pop_id, one_snp_only_pipeline, pruned_or_not = ray.get(finished)[0]
             # update the pipeline
             pop[pop_id].set_traits([r2, feature_count])
 
             print('Pipeline:', pop_id, flush=True)
-            print('more_than_one:', more_than_one, flush=True)
+            print('one_snp_only_pipeline:', one_snp_only_pipeline, flush=True)
             print('pruned_or_not:', pruned_or_not, flush=True)
 
 
