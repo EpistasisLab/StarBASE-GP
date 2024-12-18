@@ -86,10 +86,12 @@ class Pipeline:
     # method to get the number of features/SNPs in the pipeline
     def get_feature_count(self):
         return self.selector_node.get_feature_count()
-    
-    # # method to get the name of the features/SNPs in the pipeline
-    # def get_feature_names(self):
-    #     return self.selector_node.get_feature_names(feature_names_t)
+
+    def get_ld_snp_details_after_ld(self):
+        return self.ld_node.snp_details_after_ld
+
+    def get_ld_name_of_selected_feature(self):
+        return self.ld_node.name_of_selected_features
 
     # method to get the LD node
     def get_ld_node(self):

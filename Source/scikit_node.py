@@ -1214,7 +1214,7 @@ class LDSelector(ScikitNode, TransformerMixin):
 
             # if params is an empty dictionary, then we will initialize the params
             if params == {}:
-                self.params = {'threshold': np.float32(rng.uniform(low=0.1, high=1)), 'genomic_distance': int(500000)}
+                self.params = {'threshold': np.float32(rng.uniform(low=0.6, high=0.95)), 'genomic_distance': int(500000)}
             else:
                 # make sure params is correct
                 assert 'threshold' in params
@@ -1232,6 +1232,14 @@ class LDSelector(ScikitNode, TransformerMixin):
             self.selected_features_ = None
             self.bool_mask = None
 
+            # newly added attributes for ld selector feature selection
+            # if only one returned, get snp_name (np.str_). Or else will be None
+            self.name_of_selected_features = None
+
+            # dictionary to store true or false to see if it was ld pruned or not
+            # {'snp_name': True/False}
+            self.snp_details_after_ld = None
+
 
     def fit(self, X_original, X_encoded, y, snp_r2_dict):
         """
@@ -1244,22 +1252,15 @@ class LDSelector(ScikitNode, TransformerMixin):
         Returns:
         - self: The fitted selector.
         """
-        # print("LDSelector fit method called", flush=True)
-        # print("Printing X original: ", X_original, flush=True)
-        # print("Printing X encoded: ", X_encoded, flush=True)
-        #X = np.asarray(self.x_original)  # Ensure input is a numpy array
         selected_snps = [] # List to store the selected SNPs
         ld_removed_snps = set() # Set to store the SNPs removed due to LD pruning
         ld_removed_details = {} # Dictionary to store the details of the SNPs removed due to LD pruning
+        snp_details_after_ld = {} # Dictionary to store the details of the SNPs after LD pruning
         ld_threshold = self.threshold # Threshold for LD pruning
         max_distance = self.genomic_distance # Maximum genomic distance in between SNPs to be considered for LD pruning
         final_selected_snps = [] # List to store the final selected SNPs after LD pruning and conditional analysis
 
-        # # if X_original and X_encoded are empty dataframes, then assert
-        # assert not X_original.empty, "X_original is empty"
-        # assert not X_encoded.empty, "X_encoded is empty"
-
-        if X_original.empty:
+        if X_original.empty: # If the selector before the LD operator didn't select any features
             # set self.selected_features_ to None and return self
             self.selected_features_ = None
             return self
@@ -1285,13 +1286,8 @@ class LDSelector(ScikitNode, TransformerMixin):
             return unique_groups
 
         # function to calculate the correlation coefficient between two SNPs
-        def calculate_ld(X, snp1: np.str_, snp2: np.str_): # LD coefficient shoud be calculated using original data not reencoded
-            # Extract genotype vectors for the two SNPs
-            # snp1 = X[snp1]
-            # snp2 = X[snp2]
-
+        def calculate_ld(X, snp1: np.str_, snp2: np.str_): # LD coefficient shoud be calculated using original data not reencoded data
             # Calculate correlation coefficient (Pearson's r)
-            # correlation = np.corrcoef(snp1, snp2)[0, 1]
             correlation = np.corrcoef(X[snp1], X[snp2])[0, 1]
 
             # Compute R² value
@@ -1302,13 +1298,13 @@ class LDSelector(ScikitNode, TransformerMixin):
             return r_squared
 
         # extract chromosome number and position from the column names
-        # Assume SNP names are in the format 'X.yyyyy' where X is chromosome and yyyyy is position
-        def extract_chr_pos(snp_name):
-            #print("The SNP name is: ", snp_name, flush=True)
-            assert '.' in snp_name, "SNP names must be in the format 'X.yyyyy' where X is chromosome and yyyyy is position"
-            chrom, pos = snp_name.split('.')
-            assert type(chrom) == str and type(pos) == str, "Chromosome number must be a string of digits"
-            return int(chrom), int(pos)  # Use float for positions to preserve precision
+        # # Assume SNP names are in the format 'X.yyyyy' where X is chromosome and yyyyy is position
+        # def extract_chr_pos(snp_name):
+        #     #print("The SNP name is: ", snp_name, flush=True)
+        #     assert '.' in snp_name, "SNP names must be in the format 'X.yyyyy' where X is chromosome and yyyyy is position"
+        #     chrom, pos = snp_name.split('.')
+        #     assert type(chrom) == str and type(pos) == str, "Chromosome number must be a string of digits"
+        #     return int(chrom), int(pos)  # Use float for positions to preserve precision
 
 
         # get the column names of the original data which are in numpy array format
@@ -1319,68 +1315,43 @@ class LDSelector(ScikitNode, TransformerMixin):
             chr.append(int(snp.split('.')[0]))
             pos.append(int(snp.split('.')[1]))
 
-        # print("Printing the chromosome numbers: ", chr, flush=True)
-        # print("Printing the positions: ", pos, flush=True)
-
         # Create a DataFrame with SNP names, chromosomes, and positions
         genotype_df_columns = pd.DataFrame({'chrom': chr, 'pos': pos, 'snp': column_names})
-        #print the genotype_df_columns
-        #print("Printing the genotype_df_columns: ", genotype_df_columns, flush=True)
-        # genotype_df_columns = pd.DataFrame({'snp': column_names}, index=range(len(column_names)))
-
-        # print("Printing the genotype_df_columns: ", genotype_df_columns, flush=True)
-
-        # print genotype_df_columns column 'snp'
-        # print("Printing the genotype_df_columns column 'snp': ", genotype_df_columns['snp'], flush=True)
-
-        # Apply the function to extract chromosome and position
-        # genotype_df_columns[['chrom', 'pos']] = genotype_df_columns['snp'].apply(
-        #     lambda x: pd.Series(extract_chr_pos(x))
-        # )
-        #print("Printing the genotype_df_columns after extracting chromosome and position: ", genotype_df_columns, flush=True)
-
-        # sort the SNPs by chromosome and position
-        # genotype_df_columns['chrom'] = pd.to_numeric(genotype_df_columns['chrom'], errors='coerce')
-        # genotype_df_columns['pos'] = pd.to_numeric(genotype_df_columns['pos'], errors='coerce')
+        # sort the genotype_df_columns based on chromosome and position
         genotype_df_columns = genotype_df_columns.sort_values(['chrom', 'pos'])
-        #print the genotype_df_columns after sorting
-        #print("Printing the genotype_df_columns after sorting: ", genotype_df_columns, flush=True)
-
+        # get a list of sorted snps
         sorted_snps = genotype_df_columns['snp'].tolist()
-        #print("Printing the sorted snps: ", sorted_snps, flush=True)
-        ################################################################################
-        # extract the sorted_snps from the self.x_original
-        # filter x_original to have the sorted_snps columns only
+        # this dataframe will have the original unencoded data in a sorted order
         genotype_df_original = X_original[sorted_snps]
-        #print("Type of genotype_df_original: ", type(genotype_df_original), flush=True)
-        # print the genotype_df_original
-        #print("Printing the genotype unencoded data: ", genotype_df_original, flush=True)
-        ################################################################################
-        # encoded data
+        # this dataframe will have the encoded data in a sorted order
         genotype_df_encoded = X_encoded[sorted_snps]
-        # print the genotype_df_encoded
-        #print("Printing the genotype encoded data: ", genotype_df_encoded, flush=True)
-
         # all the chromosomes in the data
         chromosomes = genotype_df_columns['chrom'].unique()
 
         # calculate marginal R² values for each SNP
         marginal_r2 = {}
-        # Fit a univariate linear regression model for each SNP
+        # use the snp_r2_dict to get the marginal r2 values
         for snp in column_names:
-            # Extract the genotype vector for the SNP
-            x = X_encoded[[snp]]
-            # Fit a linear regression model
-            model = LinearRegression()
-            model.fit(x, y)
+            marginal_r2[snp] = snp_r2_dict[snp]
+        # # Fit a univariate linear regression model for each SNP
+        # for snp in column_names:
+        #     # Extract the genotype vector for the SNP
+        #     x = X_encoded[[snp]]
+        #     # Fit a linear regression model
+        #     model = LinearRegression()
+        #     model.fit(x, y)
 
-            # Calculate the R² value
-            marginal_r2[snp] = model.score(x, y)
+        #     # Calculate the R² value
+        #     marginal_r2[snp] = model.score(x, y)
+
+        # set the snp_details_after_ld to True for all the snps - True indicates LD pruned snps
+        for snp in column_names:
+            snp_details_after_ld[snp] = True
 
         for chrom in chromosomes:
             # Get SNPs and their positions for the current chromosome
-            chr_snps_df = genotype_df_columns[genotype_df_columns['chrom'] == chrom]
-            chr_snps = chr_snps_df['snp'].tolist()
+            chr_snps_df = genotype_df_columns[genotype_df_columns['chrom'] == chrom] # get the snps for the current chromosome
+            chr_snps = chr_snps_df['snp'].tolist() # get the snps in a list
             num_snps = len(chr_snps)
 
             # Group SNPs by maximum genomic distance
@@ -1404,10 +1375,6 @@ class LDSelector(ScikitNode, TransformerMixin):
 
             # Convert groups back to original SNP names for further processing
             groups = [[snp[0] for snp in group] for group in groups]
-
-            # # Print group statistics
-            # print("A total of", len(groups), "unique groups were created for chromosome", chrom)
-            # print("Group sizes:", [len(group) for group in groups])
 
             # Apply LD pruning within each group (only if group size > 1)
             for group in groups:
@@ -1435,9 +1402,11 @@ class LDSelector(ScikitNode, TransformerMixin):
                                 if marginal_r2[snp1] > marginal_r2[snp2]:
                                     ld_removed_snps.add(snp2)
                                     ld_removed_details[snp2] = f"Removed due to high LD (R²={ld_value:.3f}) with {snp1}"
+                                    snp_details_after_ld[snp2] = True # set to True to indicate that the SNP was removed by LD pruning
                                 else:
                                     ld_removed_snps.add(snp1)
                                     ld_removed_details[snp1] = f"Removed due to high LD (R²={ld_value:.3f}) with {snp2}"
+                                    snp_details_after_ld[snp1] = True # set to True to indicate that the SNP was removed by LD pruning
 
                     # Add non-removed SNPs from this group to group_selected_snps
                     group_selected_snps.extend([snp for snp in snp_list if snp not in ld_removed_snps])
@@ -1460,42 +1429,22 @@ class LDSelector(ScikitNode, TransformerMixin):
 
                         # For each SNP, perform conditional analysis
                         for snp in group_selected_snps:
-                            # print the snp
-                            #print(f"Performing conditional analysis for SNP {snp}", flush=True)
                             if snp == peak_snp:
-                                # print('Peak SNP should not be in the list of removed SNPs')
-                                # print(snp, '---', peak_snp, flush=True)
-                                # exit(0)
+                                # Skip the peak SNP - it is the only included SNP
                                 continue
                             # Full model with peak SNP and the current SNP
                             X_full = pd.concat([X_peak, genotype_df_encoded[[snp]]], axis=1)
                             model_full = LinearRegression().fit(X_full, y)
                             ssr_full = np.sum((y - model_full.predict(X_full)) ** 2)
                             df_full = len(y) - X_full.shape[1]
-                            # Check for valid SSR and DF
-                            # if np.isclose(ssr_full, 0) or df_full <= 0:
-                            #     print(f"Skipping SNP {snp} due to invalid SSR or degrees of freedom.")
-                            #     continue
                             # Reduced model with peak SNP only
                             model_reduced = LinearRegression().fit(X_peak, y)
                             ssr_reduced = np.sum((y - model_reduced.predict(X_peak)) ** 2)
-                            # Check SSR values
-                            # if ssr_reduced < ssr_full:
-                            #     print(f"Skipping SNP {snp} due to invalid SSR values (reduced < full).")
-                            #     continue
-                            #df_reduced = len(y) - X_peak.shape[1]
                             # F-test to see if the current SNP adds significant information
                             num = ssr_reduced - ssr_full
                             denom = ssr_full / df_full
                             F_stat = num / denom
-                            # if np.isnan(F_stat) or np.isinf(F_stat):
-                            #     print(f"Skipping SNP {snp} due to invalid F-statistic.")
-                            #     continue
-                            # print("F statistics: ", F_stat)
-                            # print("DF full: ", df_full)
-                            # print('stats.f.cdf(F_stat, 1, df_full):',stats.f.cdf(F_stat, 1, df_full))
                             p_value = 1 - stats.f.cdf(F_stat, 1, df_full)
-                            #print(f"Conditional analysis for SNP {snp}: F-statistic = {F_stat:.4f}, p-value = {p_value:.4f}", flush=True)
                             # Store the p-value and SNP for FDR correction
                             p_values.append(p_value)
                             snp_list.append(snp)
@@ -1519,10 +1468,6 @@ class LDSelector(ScikitNode, TransformerMixin):
                         final_group_selected_snps = [snp for snp in group_selected_snps if snp not in conditional_removed_snps]
                         final_selected_snps.extend(final_group_selected_snps)
 
-                        # # Print selected SNPs for this group after conditional analysis
-                        # print(f"Selected SNPs for this group after conditional analysis: {final_group_selected_snps}")
-                        # print(f"Total SNPs selected for this group: {len(final_group_selected_snps)}")
-
                     else:
                         # If group size is 1, no conditional analysis is needed; directly add the SNP
                         final_selected_snps.append(group_selected_snps[0])
@@ -1532,11 +1477,19 @@ class LDSelector(ScikitNode, TransformerMixin):
                     #print(f"Group contains only one SNP: {single_snp}. Skipping conditional analysis.")
                     final_selected_snps.append(single_snp)
 
-        # Print the final list of selected SNPs
-        # print"Final list of selected SNPs:")
-        # printfinal_selected_snps, flush=True)
-        # print"Length of final selected SNPs: ", len(final_selected_snps), flush=True)
         assert len(final_selected_snps) > 0, "No SNPs were selected by the LDSelector"
+
+        # setting the name of the selected feature to be used during evolution
+        if len(final_selected_snps) == 1:
+            self.name_of_selected_features = final_selected_snps[0]
+            print(f"Selected SNP name: {self.name_of_selected_features}", flush=True)
+
+        # change the details in snp_details_after_ld to False for the selected snps
+        for snp in final_selected_snps:
+            snp_details_after_ld[snp] = False
+
+        print("Snp details after LD: ", snp_details_after_ld, flush=True)
+        self.snp_details_after_ld = snp_details_after_ld
 
         # Create a boolean mask for the selected SNPs
         boolean_mask = np.isin(column_names, final_selected_snps)
@@ -1559,17 +1512,16 @@ class LDSelector(ScikitNode, TransformerMixin):
             raise RuntimeError("LDSelector has not been fitted yet.")
         return X[:, self.bool_mask]
 
-
     def mutate(self, rng: rng_t):
         # shift is a rng from normal distribution with a change in 1st decimal place
-        shift = np.float32(rng.normal(loc=0.1, scale=1))
+        shift = 0.05 * rng.choice([-1.0, 1.0])
 
         # check if the threshold is going to be less than 0.1
-        if self.threshold + shift < np.float32(0.1):
-            self.threshold = np.float32(0.1)
+        if self.threshold + shift < np.float32(0.6):
+            self.threshold = np.float32(0.6)
         # check if the threshold is going to be greater than 1
-        elif self.threshold + shift > np.float32(1):
-            self.threshold = np.float32(1)
+        elif self.threshold + shift > np.float32(0.95):
+            self.threshold = np.float32(0.95)
         # if neither of the above, then we can just add the shift
         else:
             self.threshold = self.threshold + shift
@@ -1587,7 +1539,7 @@ class LDSelector(ScikitNode, TransformerMixin):
             self.genomic_distance = self.genomic_distance + genomic_distance_shift
 
         # initialize the selector with the new threshold
-        self.params['threshold'] = self.threshold
+        self.params['threshold'] = np.float32(self.threshold)
         self.params['genomic_distance'] = int(self.genomic_distance)
         LDSelector(rng_= rng, params= self.params)
 

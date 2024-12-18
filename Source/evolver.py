@@ -111,7 +111,7 @@ def ray_eval_pipeline(x_train,
                       ld_node: LDSelector,
                       root_node: ScikitNode,
                       pop_id: np.int16,
-                      snp_r2_set: Set) -> Tuple[np.float32, np.uint16, np.int16]:
+                      snp_r2_set: Set) -> Tuple[np.float32, np.uint16, np.int16, bool, List[Tuple]]:
     # make dictionary to hold the snp r2 scores
     snp_r2_dict = {p[0]: p[1] for p in snp_r2_set}
 
@@ -133,14 +133,14 @@ def ray_eval_pipeline(x_train,
         # Catch all other exceptions and log error with relevant context
         logging.error(f"Exception while fitting model: {e}")
         logging.error(f"selector_node: {selector_node.name}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, ()
 
     selected_features = pipeline_fitted.named_steps['selector'].get_feature_names(uni_node_names)
     # print("Selected features: ", selected_features, flush=True)
     x_train_transformed = pipeline_fitted.transform(x_train)
     x_train_transformed_df = pd.DataFrame(x_train_transformed, columns=selected_features)
     if x_train_transformed_df.empty:
-        return r2_t(-1.0), feature_cnt_t(0), pop_id
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, ()
 
     # x_train original dataframe
     x_train_original_df = pd.DataFrame(x_train, columns=selected_features)
@@ -150,8 +150,13 @@ def ray_eval_pipeline(x_train,
 
     # data after LD node
     features_final = ld_node.selected_features_
+
+    # print('pipline_id:', pop_id)
+    # print('snp_pruned:', ld_node.snp_details_after_ld)
+    # print('snp_name_after_ld:', ld_node.name_of_selected_features)
+
     # print("Features after LD node: ", features_final, flush=True)
-    x_final = pd.DataFrame(x_train_transformed_df[features_final], columns=features_final)
+    # x_final = pd.DataFrame(x_train_transformed_df[features_final], columns=features_final)
     # print("Shape of x_final: ", x_final.shape, flush=True)
 
     try:
@@ -189,10 +194,10 @@ def ray_eval_pipeline(x_train,
         logging.error(f"selector_node.params: {selector_node.params}")
         logging.error(f"feature_uni_nodes: {len(uni_nodes)}")
         logging.error(f"LD node: {ld_node.name}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, ()
     except NotFittedError as nfe:
         logging.error(f"NotFittedError occurred: {nfe}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, ()
     except Exception as e:
         # Catch all other exceptions and log error with relevant context
         logging.error(f"Exception while fitting model: {e}")
@@ -201,7 +206,7 @@ def ray_eval_pipeline(x_train,
         logging.error(f"feature_uni_nodes: {len(uni_nodes)}")
         logging.error(f"Shapes -> X_train: {x_train.shape}, Y_train: {y_train.shape}")
         logging.error(f"LD node: {ld_node.name}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, ()
 
     try:
         # print('type of pipeline: ', type(pipeline), flush=True)
@@ -213,10 +218,14 @@ def ray_eval_pipeline(x_train,
         feature_count = len(features_final) # get the number of features after the LD node
     except Exception as e:
         logging.error(f"Error while scoring or getting feature count: {e}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, ()
+
+    more_than_one = False
+    if ld_node.name_of_selected_features != None:
+        more_than_one = True
 
     # return the pipeline
-    return r2_t(r2_score), feature_cnt_t(feature_count), pop_id
+    return r2_t(r2_score), feature_cnt_t(feature_count), pop_id, more_than_one, [(k,v) for k,v in ld_node.snp_details_after_ld.items()]
 
 @typechecked # for debugging purposes
 class EA:
@@ -754,10 +763,15 @@ class EA:
         # process results as they come in
         while len(ray_jobs) > 0:
             finished, ray_jobs = ray.wait(ray_jobs)
-            r2, feature_count, pop_id = ray.get(finished)[0]
+            r2, feature_count, pop_id, more_than_one, pruned_or_not = ray.get(finished)[0]
             # update the pipeline
             pop[pop_id].set_traits([r2, feature_count])
-        return
+
+            print('Pipeline:', pop_id, flush=True)
+            print('more_than_one:', more_than_one, flush=True)
+            print('pruned_or_not:', pruned_or_not, flush=True)
+
+
 
     # construct uni_nodes for a pipeline's set of individual snps
     def construct_uni_nodes(self, uni_snps: Set) -> List[UniNode]:
