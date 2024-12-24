@@ -110,8 +110,8 @@ def ray_eval_pipeline(x_train,
                       selector_node: ScikitNode,
                       ld_node: LDSelector,
                       root_node: ScikitNode,
-                      pop_id: np.int16,
-                      snp_r2_set: Set) -> Tuple[np.float32, np.uint16, np.int16, bool, List[Tuple]]:
+                      pop_id: np.int16,        #    r2, feature count, pop_id, one_snp_only_pipeline, pruned
+                      snp_r2_set: Set) -> Tuple[np.float32, np.uint16, np.int16, snp_name_t, List[np.str_]]:
     # make dictionary to hold the snp r2 scores
     snp_r2_dict = {p[0]: p[1] for p in snp_r2_set}
 
@@ -209,19 +209,18 @@ def ray_eval_pipeline(x_train,
         return r2_t(-1.0), feature_cnt_t(0), pop_id, False, ()
 
     try:
-
         r2_score = pipeline.score(x_val, y_val)
         feature_count = len(features_final) # get the number of features after the LD node
     except Exception as e:
         logging.error(f"Error while scoring or getting feature count: {e}")
         return r2_t(-1.0), feature_cnt_t(0), pop_id, False, ()
 
-    one_snp_only_pipeline = False
+    one_snp_only_pipeline = 'N/A'
     if ld_node.name_of_selected_features != None:
-        one_snp_only_pipeline = True
+        one_snp_only_pipeline = ld_node.name_of_selected_features
 
     # return the pipeline
-    return r2_t(r2_score), feature_cnt_t(feature_count), pop_id, one_snp_only_pipeline, [(k,v) for k,v in ld_node.snp_details_after_ld.items()]
+    return r2_t(r2_score), feature_cnt_t(feature_count), pop_id, snp_name_t(one_snp_only_pipeline), [snp_name_t(k) for k,v in ld_node.snp_details_after_ld.items() if v == True]
 
 @typechecked # for debugging purposes
 class EA:
@@ -528,7 +527,7 @@ class EA:
         # plot the pareto front
         self.plot_pareto_front() # calling the plotting function at the end to get the final pareto plot
         # save the epi_hub to a csv file in the save directory
-        self.hubs.save_hubs(self.save_directory+"snp_hub.csv")
+        self.hubs.save_hubs(self.save_directory)
 
     # get list of pipeline scores (r2, complexity) by position
     def get_pipeline_scores(self, pipelines: List[Pipeline], weights: Tuple[r2_t, feature_cnt_t]) -> npt.NDArray:
@@ -648,7 +647,7 @@ class EA:
                 continue
 
             # create pipeline and add to the population
-            self.population.append(self.repoduction.generate_random_pipeline(self.rng, good_snps, int(self.seed), self.X_train, self.y_train, self.hubs))
+            self.population.append(self.repoduction.generate_random_pipeline(self.rng, good_snps, int(self.seed)))
 
         # make sure we have the correct number of pipelines
         assert len(self.population) == self.pop_size
@@ -739,11 +738,6 @@ class EA:
         ray_jobs = []
         # go through each pipeline in the population and evaluate
         for i, pipeline in enumerate(pop):
-            # add ray job
-            # uni_snps, snps_pos = [],[]
-            # self.construct_uni_nodes(pipeline.get_uni_snps())
-
-
             ray_jobs.append(ray_eval_pipeline.remote(self.X_train_id,
                                                      self.y_train_id,
                                                      self.X_val_id,
@@ -756,18 +750,25 @@ class EA:
                                                      snp_r2_set=self.hubs.generate_r2_dict(pipeline.get_uni_snps())))
         assert len(ray_jobs) == len(pop)
 
+        # keep track of prunned snps
+        prunned_snps = set()
+
         # process results as they come in
         while len(ray_jobs) > 0:
             finished, ray_jobs = ray.wait(ray_jobs)
-            r2, feature_count, pop_id, one_snp_only_pipeline, pruned_or_not = ray.get(finished)[0]
+            r2, feature_count, pop_id, one_snp_only_pipeline, pruned = ray.get(finished)[0]
             # update the pipeline
             pop[pop_id].set_traits([r2, feature_count])
 
-            print('Pipeline:', pop_id, flush=True)
-            print('one_snp_only_pipeline:', one_snp_only_pipeline, flush=True)
-            print('pruned_or_not:', pruned_or_not, flush=True)
 
+            new_snp = set(snp for snp in pruned
+                            if not self.hubs.has_been_prunned(snp))
+            prunned_snps.update(new_snp)
 
+        # process prunned snps
+        self.hubs.process_prunned_snps(prunned_snps)
+
+        print('non pruned hub size:' ,self.hubs.pruned_hub_size())
 
     # construct uni_nodes for a pipeline's set of individual snps
     def construct_uni_nodes(self, uni_snps: Set) -> List[UniNode]:
@@ -1022,3 +1023,85 @@ class EA:
         plt.gca().invert_yaxis()
         plt.tight_layout()
         plt.savefig(self.save_directory + 'top_20_features.png')
+
+    # function to generate N random pipelines and evaluate them
+    def random_pipeline_experiment(self):
+        # will hold a set of snps for each pipeline in the population
+        pop_univariate_sets = []
+        # will hold unseen snps -- snps whose best encoder type is empty
+        unseen_snps = set()
+
+        # create all initial set of snps to add into pipelines
+        for _ in range(self.pop_size):
+            # holds all interactions we are doing
+            snps = set()
+
+            # add a random number of snps to the set
+            uni_cnt = self.rng.integers(low=self.uni_cnt_min, high=self.uni_cnt_max + 1)
+
+            while len(snps) <= uni_cnt:
+                # get random snp and add to snps
+                snps.add(self.hubs.get_ran_snp(self.rng))
+
+            # add any new snps to the unseen snps set
+            # we can assumed all new snps have not been seen yet
+            unseen_snps.update(snps)
+
+            # add to the population
+            pop_univariate_sets.append(snps)
+
+        print('Total number of unseen snps:', len(unseen_snps), flush=True)
+
+        # batch snps in unseen_snps by snp_batch_size
+        snp_batches = [set()]
+        # how many snps to process in parallel
+        snp_batch_size = 10000
+
+        for snp in unseen_snps:
+            s = set()
+            s.add(snp)
+            if len(snp_batches[-1]) == snp_batch_size:
+                snp_batches.append(s)
+            else:
+                snp_batches[-1].update(s)
+
+        print('snp_batches:', len(snp_batches), flush=True)
+
+        for i, snps in enumerate(snp_batches):
+            # evaluate all unseen interactions
+            self.evaluate_unseen_snps(snps)
+            print('Batch complete %:', (i+1)/len(snp_batches), flush=True)
+
+        # batch snps in pop_univariate_sets by pipeline_batch_size
+        pipeline_snp_batches = [[]]
+        # how many pipelines to process in parallel
+        pipeline_batch_size = 1000
+
+        for snps in pop_univariate_sets:
+            if len(pipeline_snp_batches[-1]) == pipeline_batch_size:
+                pipeline_snp_batches.append([snps])
+            else:
+                pipeline_snp_batches[-1].append(snps)
+
+        print('pipeline_snp_batches:', len(pipeline_snp_batches), flush=True)
+        for i,batch_snps in enumerate(pipeline_snp_batches):
+            # hold current batch of valid pipelines
+            batch_pipelines = []
+
+            for snps in batch_snps:
+                # create pipeline and add to the population
+                batch_pipelines.append(self.repoduction.generate_random_pipeline(self.rng, snps, int(self.seed)))
+
+            # make sure we have the correct number of pipelines
+            # assuming perfect divisibility
+            assert len(batch_pipelines) == pipeline_batch_size
+
+            # evaluate the initial population
+            self.evaluation(batch_pipelines)
+
+            # add only pipelines with positive r2 scores
+            for pipeline in self.population:
+                if pipeline.get_trait_r2() > 0.0:
+                    self.population.append(pipeline)
+
+            print('Pipeline batch complete%:',(i+1)/len(pipeline_snp_batches), flush=True)

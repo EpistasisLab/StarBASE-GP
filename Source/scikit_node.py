@@ -1214,7 +1214,7 @@ class LDSelector(ScikitNode, TransformerMixin):
 
             # if params is an empty dictionary, then we will initialize the params
             if params == {}:
-                self.params = {'threshold': np.float32(rng.uniform(low=0.6, high=0.95)), 'genomic_distance': int(500000)}
+                self.params = {'threshold': np.float32(rng.uniform(low=0.6, high=0.95)), 'genomic_distance': int(1000000)}
             else:
                 # make sure params is correct
                 assert 'threshold' in params
@@ -1297,16 +1297,6 @@ class LDSelector(ScikitNode, TransformerMixin):
 
             return r_squared
 
-        # extract chromosome number and position from the column names
-        # # Assume SNP names are in the format 'X.yyyyy' where X is chromosome and yyyyy is position
-        # def extract_chr_pos(snp_name):
-        #     #print("The SNP name is: ", snp_name, flush=True)
-        #     assert '.' in snp_name, "SNP names must be in the format 'X.yyyyy' where X is chromosome and yyyyy is position"
-        #     chrom, pos = snp_name.split('.')
-        #     assert type(chrom) == str and type(pos) == str, "Chromosome number must be a string of digits"
-        #     return int(chrom), int(pos)  # Use float for positions to preserve precision
-
-
         # get the column names of the original data which are in numpy array format
         column_names = X_original.columns
         chr,pos = [],[]
@@ -1333,162 +1323,172 @@ class LDSelector(ScikitNode, TransformerMixin):
         # use the snp_r2_dict to get the marginal r2 values
         for snp in column_names:
             marginal_r2[snp] = snp_r2_dict[snp]
-        # # Fit a univariate linear regression model for each SNP
-        # for snp in column_names:
-        #     # Extract the genotype vector for the SNP
-        #     x = X_encoded[[snp]]
-        #     # Fit a linear regression model
-        #     model = LinearRegression()
-        #     model.fit(x, y)
-
-        #     # Calculate the R² value
-        #     marginal_r2[snp] = model.score(x, y)
 
         # set the snp_details_after_ld to True for all the snps - True indicates LD pruned snps
         for snp in column_names:
             snp_details_after_ld[snp] = True
 
         for chrom in chromosomes:
+            # list of snps to check for conditional analysis in the current chromosome
+            snps_to_check_for_ca_in_chr = []
             # Get SNPs and their positions for the current chromosome
-            chr_snps_df = genotype_df_columns[genotype_df_columns['chrom'] == chrom] # get the snps for the current chromosome
-            chr_snps = chr_snps_df['snp'].tolist() # get the snps in a list
-            num_snps = len(chr_snps)
-
-            # Group SNPs by maximum genomic distance
+            chr_snps_df = genotype_df_columns[genotype_df_columns['chrom'] == chrom]
+            chr_snps = chr_snps_df['snp'].tolist()
+            # ----------------------
+            # Group SNPs by distance
+            # ----------------------
             groups = []
-            current_group = [(chr_snps_df.iloc[0]['snp'], chr_snps_df.iloc[0]['pos'])]  # Store SNP and position as tuples
-
+            current_group = [(chr_snps_df.iloc[0]['snp'], chr_snps_df.iloc[0]['pos'])]
             for i in range(1, len(chr_snps)):
-                current_snp = (chr_snps_df.iloc[i]['snp'], chr_snps_df.iloc[i]['pos'])
-                previous_snp = (chr_snps_df.iloc[i - 1]['snp'], chr_snps_df.iloc[i - 1]['pos'])
-
-                if int(abs(current_snp[1] - previous_snp[1])) <= max_distance:
-                    current_group.append(current_snp)
+                curr_snp = (chr_snps_df.iloc[i]['snp'], chr_snps_df.iloc[i]['pos'])
+                prev_snp = (chr_snps_df.iloc[i - 1]['snp'], chr_snps_df.iloc[i - 1]['pos'])
+                if abs(curr_snp[1] - prev_snp[1]) <= max_distance:
+                    current_group.append(curr_snp)
                 else:
                     groups.append(current_group)
-                    current_group = [current_snp]
-
+                    current_group = [curr_snp]
             groups.append(current_group)
-
             # Remove duplicate groups and subsets
             groups = remove_subsets(groups)
-
-            # Convert groups back to original SNP names for further processing
+            # Convert groups back to original SNP names
             groups = [[snp[0] for snp in group] for group in groups]
-
-            # Apply LD pruning within each group (only if group size > 1)
+            # --------------------
+            # Within-group LD prune
+            # --------------------
             for group in groups:
-                #print("Processing group:", group)
-                group_selected_snps = []  # List to store selected SNPs within the group, which will be later checked for conditional analysis
-                if len(group) > 1:
-                    # Convert group into a DataFrame
+                if len(group) == 1:
+                    final_selected_snps.append(group[0])
+                else:
                     group_df = genotype_df_original[group]
                     snp_list = group_df.columns.tolist()
-
-                    # LD pruning logic: compare every pair of SNPs
+                    # Mark SNPs in high LD
                     for i, snp1 in enumerate(snp_list):
                         if snp1 in ld_removed_snps:
-                            continue  # Skip SNPs already removed
-
+                            continue
                         for j in range(i + 1, len(snp_list)):
                             snp2 = snp_list[j]
-
-                            # Calculate LD between snp1 and snp2
+                            if snp2 in ld_removed_snps:
+                                continue
                             ld_value = calculate_ld(genotype_df_original, snp1, snp2)
                             if ld_value > ld_threshold:
-                                # Mark snp2 as removed due to high LD with snp1
-                                # Compare marginal R² values of the two SNPs
-
+                                # Remove the lower marginal R² SNP
                                 if marginal_r2[snp1] > marginal_r2[snp2]:
                                     ld_removed_snps.add(snp2)
-                                    ld_removed_details[snp2] = f"Removed due to high LD (R²={ld_value:.3f}) with {snp1}"
-                                    snp_details_after_ld[snp2] = True # set to True to indicate that the SNP was removed by LD pruning
+                                    ld_removed_details[snp2] = (
+                                        f"Removed due to high LD (R²={ld_value:.3f}) with {snp1}"
+                                    )
                                 else:
                                     ld_removed_snps.add(snp1)
-                                    ld_removed_details[snp1] = f"Removed due to high LD (R²={ld_value:.3f}) with {snp2}"
-                                    snp_details_after_ld[snp1] = True # set to True to indicate that the SNP was removed by LD pruning
+                                    ld_removed_details[snp1] = (
+                                        f"Removed due to high LD (R²={ld_value:.3f}) with {snp2}"
+                                    )
+                    # Collect non-removed SNPs
+                    non_removed = [s for s in snp_list if s not in ld_removed_snps]
+                    snps_to_check_for_ca_in_chr.extend(non_removed)
 
-                    # Add non-removed SNPs from this group to group_selected_snps
-                    group_selected_snps.extend([snp for snp in snp_list if snp not in ld_removed_snps])
+            # If no SNPs remain in this chromosome, skip
+            snps_to_check_for_ca_in_chr = list(set(snps_to_check_for_ca_in_chr))
+            # print("Number of SNPs to check for conditional analysis in chromosome : ", f'{chrom}', " is ", len(snps_to_check_for_ca_in_chr), flush=True)
+            if len(snps_to_check_for_ca_in_chr) == 0:
+                # print("Entering the if condition for 0 snps in chromosome to check for CA", flush=True)
+                continue
 
-                    # perform conditional anlysis if group_selected_snps is greater than 1
-                    if len(group_selected_snps) > 1:
-                        # Identify peak SNP with the highest marginal R² within this group
-                        group_selected_df = pd.DataFrame({
-                            'snp': group_df.columns,
-                            'marginal_r2': [marginal_r2[snp] for snp in group_df.columns]
-                        })
-                        peak_snp = group_selected_df.loc[group_selected_df['marginal_r2'].idxmax(), 'snp']
-                        #print(f"Peak SNP for the group: {peak_snp}, Marginal R²: {marginal_r2[peak_snp]:.4f}", flush=True)
+            if len(snps_to_check_for_ca_in_chr) == 1:
+                # print("Entering the if condition for 1 snp in chromosome to check for CA", flush=True)
+                #final_chr_snps.extend(snps_to_check_for_ca_in_chr)
+                final_selected_snps.extend(snps_to_check_for_ca_in_chr)
+                continue
+            # --------------------------------------
+            # Iterative (stepwise) conditional analysis
+            # --------------------------------------
+            snps_remaining = snps_to_check_for_ca_in_chr[:]
+            # print("Number of SNPs to check for conditional analysis in chromosome : ", f'{chrom}', " is ", len(snps_remaining), flush=True)
+            final_chr_snps = []
+            # We loop until we can't prune any more SNPs
+            while True:
+                if len(snps_remaining) < 2:
+                    # Either 0 or 1 SNP left, just add them all and break
+                    final_chr_snps.extend(snps_remaining)
+                    break
+                # Find the next peak SNP (highest marginal R² among snps_remaining)
+                candidate_r2 = [(snp, marginal_r2[snp]) for snp in snps_remaining]
+                peak_snp = max(candidate_r2, key=lambda x: x[1])[0]
+                # Perform conditional analysis using ONLY the peak SNP as covariate
+                X_peak = genotype_df_encoded[[peak_snp]]
+                y = y.reshape(-1, 1)
+                p_values = []
+                tested_snps = []
+                for snp in snps_remaining:
+                    if snp == peak_snp:
+                        continue
+                    X_full = pd.concat([X_peak, genotype_df_encoded[[snp]]], axis=1)
+                    model_full = LinearRegression().fit(X_full, y)
+                    beta_snp = model_full.coef_[-1]
+                    residuals = y - model_full.predict(X_full)
+                    sigma_sq = np.sum(residuals**2) / (len(y) - X_full.shape[1])
+                    X_snp_values = genotype_df_encoded[[snp]].values
+                    std_error = np.sqrt(sigma_sq / np.sum((X_snp_values - X_snp_values.mean())**2))
+                    wald_stat = beta_snp / std_error
+                    p_val = 2 * (1 - stats.norm.cdf(abs(wald_stat)))
+                    p_values.append(p_val)
+                    tested_snps.append(snp)
+                # Correct for multiple testing
+                # print("Length of p_values: ", len(p_values), flush=True)
+                alpha = 0.05
+                # Ensure p_values is a 1-dimensional array
+                if len(p_values) == 0:
+                    # print("No p-values to process. Skipping.")
+                    continue  # or handle this case differently if needed
 
-                        # Perform conditional analysis using the peak SNP as covariate
-                        X_peak = genotype_df_encoded[[peak_snp]]
-                        y = y.reshape(-1, 1)
-                        p_values = []
-                        snp_list = []
+                # Convert to 1D array
+                p_values = np.array(p_values).flatten()
 
-                        # For each SNP, perform conditional analysis
-                        for snp in group_selected_snps:
-                            if snp == peak_snp:
-                                # Skip the peak SNP - it is the only included SNP
-                                continue
-                            # Full model with peak SNP and the current SNP
-                            X_full = pd.concat([X_peak, genotype_df_encoded[[snp]]], axis=1)
-                            model_full = LinearRegression().fit(X_full, y)
-                            ssr_full = np.sum((y - model_full.predict(X_full)) ** 2)
-                            df_full = len(y) - X_full.shape[1]
-                            # Reduced model with peak SNP only
-                            model_reduced = LinearRegression().fit(X_peak, y)
-                            ssr_reduced = np.sum((y - model_reduced.predict(X_peak)) ** 2)
-                            # F-test to see if the current SNP adds significant information
-                            num = ssr_reduced - ssr_full
-                            denom = ssr_full / df_full
-                            F_stat = num / denom
-                            p_value = 1 - stats.f.cdf(F_stat, 1, df_full)
-                            # Store the p-value and SNP for FDR correction
-                            p_values.append(p_value)
-                            snp_list.append(snp)
-
-                        # Apply FDR correction to the p-values
-                        alpha = 0.05  # Desired overall significance level
-                        # print"Length of p_values to be FDR corrected: ", len(p_values), flush=True)
-                        if not p_values:
-                            # print"No p-values to correct. Skipping FDR correction.", flush=True)
-                            continue
-                        rejected, p_values_corrected, _, _ = multipletests(p_values, alpha=alpha, method='fdr_bh')
-
-                        # Remove SNPs that did not pass the conditional analysis
-                        conditional_removed_snps = set()
-                        for snp, reject in zip(snp_list, rejected):
-                            if not reject:
-                                # SNP does not provide significant additional information
-                                conditional_removed_snps.add(snp)
-
-                        # Add SNPs that passed the conditional analysis
-                        final_group_selected_snps = [snp for snp in group_selected_snps if snp not in conditional_removed_snps]
-                        final_selected_snps.extend(final_group_selected_snps)
-
+                # Handle single p-value explicitly
+                if len(p_values) == 1:
+                    # print("Only one p-value provided. Skipping multiple testing correction.")
+                    # Decide on how to handle this case
+                    if p_values[0] < alpha:
+                        rejected = [True]
                     else:
-                        # If group size is 1, no conditional analysis is needed; directly add the SNP
-                        final_selected_snps.append(group_selected_snps[0])
+                        rejected = [False]
+                    pvals_corr = p_values  # No correction needed
                 else:
-                    # If group size is 1, no conditional analysis is needed; directly add the SNP
-                    single_snp = group[0]
-                    #print(f"Group contains only one SNP: {single_snp}. Skipping conditional analysis.")
-                    final_selected_snps.append(single_snp)
+                    # Perform multiple testing correction
+                    rejected, pvals_corr, _, _ = multipletests(p_values, alpha=alpha, method='fdr_bh')
+                # Decide which SNPs to remove
+                to_remove = {s for s, r in zip(tested_snps, rejected) if not r}
+                # If we didn't prune anything this round, we're done
+                if not to_remove:
+                    # Add the peak SNP to final list if not already present
+                    if peak_snp not in final_chr_snps:
+                        final_chr_snps.append(peak_snp)
+                    break
+                # Otherwise, remove the pruned SNPs
+                snps_remaining = [s for s in snps_remaining if s not in to_remove]
+                # Add the peak SNP to final list (it is an independent peak)
+                if peak_snp not in final_chr_snps:
+                    final_chr_snps.append(peak_snp)
+                # Remove the peak SNP from further consideration so the next iteration
+                # can find the next peak ignoring this one
+                snps_remaining.remove(peak_snp)
+                # Loop continues with the updated snps_remaining
+            # Add the final chromosome SNPs to the overall final selection
+            final_selected_snps.extend(list(set(final_chr_snps)))
+        # Print the final list of selected SNPs
+        # print("Final list of independent SNPs selected: ", list(set(final_selected_snps)) )
 
         assert len(final_selected_snps) > 0, "No SNPs were selected by the LDSelector"
 
         # setting the name of the selected feature to be used during evolution
         if len(final_selected_snps) == 1:
             self.name_of_selected_features = final_selected_snps[0]
-            print(f"Selected SNP name: {self.name_of_selected_features}", flush=True)
+            # print(f"Selected SNP name: {self.name_of_selected_features}", flush=True)
 
         # change the details in snp_details_after_ld to False for the selected snps
         for snp in final_selected_snps:
             snp_details_after_ld[snp] = False
 
-        print("Snp details after LD: ", snp_details_after_ld, flush=True)
+        # print("Snp details after LD: ", snp_details_after_ld, flush=True)
         self.snp_details_after_ld = snp_details_after_ld
 
         # Create a boolean mask for the selected SNPs
@@ -1527,13 +1527,13 @@ class LDSelector(ScikitNode, TransformerMixin):
             self.threshold = self.threshold + shift
 
         # increment genomin distance by 100000 with a minimum of 500000 and maximum of 1000000, in increments of 100000
-        genomic_distance_shift = np.int32(rng.choice([-100000, 100000]))
+        genomic_distance_shift = np.int32(rng.choice([-500000, 500000]))
         # check if the genomic_distance is going to be less than 500000
         if self.genomic_distance + genomic_distance_shift < 500000:
             self.genomic_distance = 500000
         # check if the genomic_distance is going to be greater than 1000000
-        elif self.genomic_distance + genomic_distance_shift > 1000000:
-            self.genomic_distance = 1000000
+        elif self.genomic_distance + genomic_distance_shift > 10000000:
+            self.genomic_distance = 10000000
         # if neither of the above, then we can just add the shift
         else:
             self.genomic_distance = self.genomic_distance + genomic_distance_shift

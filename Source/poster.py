@@ -38,7 +38,10 @@ def get_shap_values(pipeline, uni_snps_df, uni_nodes, X_train_id, y_train_id, X_
         transformer_pipeline = SklearnPipeline(steps=steps) # pipeline with the epi features and selector
         # make a list of uni node names
         uni_node_names = [uni_node.get_snp_name() for uni_node in uni_nodes]
-
+        # change the feature names to have the inheritance information
+        new_column_names = [ f'{row["feature"]}_{row["inheritence"]}' for _, row in uni_snps_df.iterrows()]
+        # make a dictionary of the new column names where key is the old column name and value is the new column name
+        new_column_names_dict = {uni_node_names[i]: new_column_names[i] for i in range(len(uni_node_names))}
 
         # attempt to fit the pipeline
         try:
@@ -62,8 +65,13 @@ def get_shap_values(pipeline, uni_snps_df, uni_nodes, X_train_id, y_train_id, X_
                 # data after LD node
                 features_final = ld_node.selected_features_
                 # print("Features after LD node: ", features_final, flush=True)
+                features_final_column_names = [new_column_names_dict[feature] for feature in features_final]
                 x_final_train = pd.DataFrame(x_train_transformed_df[features_final], columns=features_final)
                 x_final_test = pd.DataFrame(x_test_transformed_df[features_final], columns=features_final)
+
+                x_final_train.columns = features_final_column_names
+                x_final_test.columns = features_final_column_names
+
 
         except ConvergenceWarning as cw:
             logging.error(f"ConvergenceWarning while fitting model: {cw}")
@@ -78,25 +86,26 @@ def get_shap_values(pipeline, uni_snps_df, uni_nodes, X_train_id, y_train_id, X_
             logging.error(f"Exception while fitting model: {e}")
             return np.array([], dtype=np.float32)
 
-        try:
-             # create the pipeline
-            steps = []
-            # uni nodes into one sklearn union
-            steps.append(('snp_union', FeatureUnion([(uni_node.name, uni_node) for uni_node in uni_nodes if uni_node.get_snp_name() in features_final])))
-            # pass to regressor
-            steps.append(('regressor', root_node.regressor))
+        # try:
+        #      # create the pipeline
+        #     steps = []
+        #     # uni nodes into one sklearn union
+        #     steps.append(('snp_union', FeatureUnion([(uni_node.name, uni_node) for uni_node in uni_nodes if uni_node.get_snp_name() in features_final])))
+        #     # pass to regressor
+        #     steps.append(('regressor', root_node.regressor))
 
-            # create the pipeline without refitting the regressor
-            pipeline = SklearnPipeline(steps=steps)
-        except Exception as e:
-            logging.error(f"Exception while getting features to run SHAP: {e}")
-            return pd.DataFrame()
+        #     # create the pipeline without refitting the regressor
+        #     pipeline = SklearnPipeline(steps=steps)
+        # except Exception as e:
+        #     logging.error(f"Exception while getting features to run SHAP: {e}")
+        #     return pd.DataFrame()
 
         try:
             # getting the SHAP feature importance values
             number_of_features = len(features_final)
-            # max_evals = max(500, 2 * number_of_features + 1)
-            max_evals = 1200
+            print("Number of features from SHAP function: ", number_of_features, flush=True)
+            max_evals = max(500, 2 * number_of_features + 1)
+            #max_evals = 1200
             root_node.fit(x_final_train, y_train_id)
             explainer = shap.Explainer(root_node.predict, x_final_test)
             shap_values = explainer(x_final_test, max_evals=max_evals)
