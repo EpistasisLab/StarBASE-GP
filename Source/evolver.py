@@ -7,6 +7,7 @@
 #####################################################################################################
 
 import numpy as np
+from sklearn.inspection import permutation_importance
 from typeguard import typechecked
 from typing import List, Dict
 import pandas as pd
@@ -48,6 +49,8 @@ r2_t = np.float32
 nodelo_t = np.str_
 # feature count type
 feature_cnt_t = np.int16
+# list of feature names type (for the LD node)
+feature_names_t = List[snp_name_t]
 # population id type
 pop_id_t = np.uint16
 # diversity score type
@@ -110,8 +113,8 @@ def ray_eval_pipeline(x_train,
                       selector_node: ScikitNode,
                       ld_node: LDSelector,
                       root_node: ScikitNode,
-                      pop_id: np.int16,        #    r2, feature count, pop_id, one_snp_only_pipeline, pruned
-                      snp_r2_set: Set) -> Tuple[np.float32, np.uint16, np.int16, snp_name_t, List[np.str_]]:
+                      pop_id: np.int16,        #    r2, feature count, pop_id, one_snp_only_pipeline, pruned, snp_name_after_ld
+                      snp_r2_set: Set) -> Tuple[np.float32, np.uint16, np.int16, snp_name_t, List[np.str_], List[np.str_]]:
     # make dictionary to hold the snp r2 scores
     snp_r2_dict = {p[0]: p[1] for p in snp_r2_set}
 
@@ -133,14 +136,14 @@ def ray_eval_pipeline(x_train,
         # Catch all other exceptions and log error with relevant context
         logging.error(f"Exception while fitting model: {e}")
         logging.error(f"selector_node: {selector_node.name}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, ()
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
 
     selected_features = pipeline_fitted.named_steps['selector'].get_feature_names(uni_node_names)
     # print("Selected features: ", selected_features, flush=True)
     x_train_transformed = pipeline_fitted.transform(x_train)
     x_train_transformed_df = pd.DataFrame(x_train_transformed, columns=selected_features)
     if x_train_transformed_df.empty:
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, ()
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
 
     # x_train original dataframe
     x_train_original_df = pd.DataFrame(x_train, columns=selected_features)
@@ -150,6 +153,10 @@ def ray_eval_pipeline(x_train,
 
     # data after LD node
     features_final = ld_node.selected_features_
+    features_final_list = features_final.tolist()
+    # print("Type of features_final: ", type(features_final), flush=True)
+    # print("Type of features_final after conversion: ", features_final_list, flush=True)
+    # print("Features after LD node: ", features_final, flush=True)
 
     # print('pipline_id:', pop_id)
     # print('snp_pruned:', ld_node.snp_details_after_ld)
@@ -194,10 +201,10 @@ def ray_eval_pipeline(x_train,
         logging.error(f"selector_node.params: {selector_node.params}")
         logging.error(f"feature_uni_nodes: {len(uni_nodes)}")
         logging.error(f"LD node: {ld_node.name}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, ()
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
     except NotFittedError as nfe:
         logging.error(f"NotFittedError occurred: {nfe}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, ()
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
     except Exception as e:
         # Catch all other exceptions and log error with relevant context
         logging.error(f"Exception while fitting model: {e}")
@@ -206,21 +213,21 @@ def ray_eval_pipeline(x_train,
         logging.error(f"feature_uni_nodes: {len(uni_nodes)}")
         logging.error(f"Shapes -> X_train: {x_train.shape}, Y_train: {y_train.shape}")
         logging.error(f"LD node: {ld_node.name}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, ()
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
 
     try:
         r2_score = pipeline.score(x_val, y_val)
         feature_count = len(features_final) # get the number of features after the LD node
     except Exception as e:
         logging.error(f"Error while scoring or getting feature count: {e}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, ()
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
 
     one_snp_only_pipeline = 'N/A'
     if ld_node.name_of_selected_features != None:
         one_snp_only_pipeline = ld_node.name_of_selected_features
 
     # return the pipeline
-    return r2_t(r2_score), feature_cnt_t(feature_count), pop_id, snp_name_t(one_snp_only_pipeline), [snp_name_t(k) for k,v in ld_node.snp_details_after_ld.items() if v == True]
+    return r2_t(r2_score), feature_cnt_t(feature_count), pop_id, snp_name_t(one_snp_only_pipeline), [snp_name_t(k) for k,v in ld_node.snp_details_after_ld.items() if v == True], features_final_list
 
 @typechecked # for debugging purposes
 class EA:
@@ -756,9 +763,9 @@ class EA:
         # process results as they come in
         while len(ray_jobs) > 0:
             finished, ray_jobs = ray.wait(ray_jobs)
-            r2, feature_count, pop_id, one_snp_only_pipeline, pruned = ray.get(finished)[0]
+            r2, feature_count, pop_id, one_snp_only_pipeline, pruned, feature_names = ray.get(finished)[0]
             # update the pipeline
-            pop[pop_id].set_traits([r2, feature_count])
+            pop[pop_id].set_traits([r2, feature_count, feature_names])
 
 
             new_snp = set(snp for snp in pruned
@@ -950,79 +957,108 @@ class EA:
         # print the pipelines in the population
         ray_jobs = []
         for i, pipeline in enumerate(pareto_front): # think this as pareto front pipelines
+            # printing pipeline details from evolver
+            print("Pipeline ID from EVOLVER function:", i, flush=True)
+            print("Pipeline R2 Score from EVOLVER function:", pipeline.get_trait_r2(), flush=True)
+            print("Pipeline Feature Count from EVOLVER function:", pipeline.get_trait_feature_cnt(), flush=True)
+            print("Pipeline feature names after LD node from EVOLVER function:", pipeline.get_trait_feature_names(), flush=True)
             uni_nodes = self.construct_uni_nodes(pipeline.get_uni_snps())
+            uni_snps_df = poster.get_uni_snp(pipeline=pipeline)
 
+            # make a list of uni node names
+            uni_node_names = [uni_node.get_snp_name() for uni_node in uni_nodes]
+            # change the feature names to have the inheritance information
+            new_column_names = [ f'{row["feature"]}_{row["inheritence"]}' for _, row in uni_snps_df.iterrows()]
+            
             # Get R2 and Feature Count for this specific pipeline
             pipeline_r2 = pipeline.get_trait_r2()
             pipeline_feature_count = pipeline.get_trait_feature_cnt()
-            results_refs = poster.run_poster(pipeline,  uni_nodes, self.X_train_id, self.y_train_id, self.X_val_id, self.y_val_id, id = i)
-            ray_jobs.append((results_refs, pipeline_r2, pipeline_feature_count))  # Save the refs along with R2 and Feature Count
+            ############ FOR PERM IMP ############
+            steps = []
+            steps.append(('snp_union', FeatureUnion([(uni_node.name, uni_node) for uni_node in uni_nodes if uni_node.get_snp_name() in pipeline.get_trait_feature_names()])))
+            # pass to regressor
+            steps.append(('regressor', pipeline.get_root_node().regressor))
+            # create the pipeline without refitting the regressor
+            pipeline = SklearnPipeline(steps=steps)
+            pipeline.fit(self.X_train, self.y_train)
+            print("Pipeline fitted for permutation importance", flush=True)
+            # get permutation importance
+            perm_imp = permutation_importance(pipeline, self.X_val, self.y_val, n_repeats=5, random_state=self.seed, n_jobs=-1)
+            # make a sorted dataframe
+            perm_imp_df = pd.DataFrame({'feature': new_column_names, 'perm_importance': perm_imp['importances_mean']})
+            perm_imp_df = perm_imp_df.sort_values(by='perm_importance', ascending=False)
+            # print the perm_imp_df
+            print("Permutation Importance for Pipeline", i, ":", perm_imp_df, flush=True)
+            # save the perm_imp_df to a csv file
+            perm_imp_df.to_csv(self.save_directory + f'perm_imp_pipeline_{i}.csv', index=False)
+            # results_refs = poster.run_poster(pipeline,  uni_nodes, self.X_train_id, self.y_train_id, self.X_val_id, self.y_val_id, id = i, seed=self.seed)
+            # ray_jobs.append((results_refs, pipeline_r2, pipeline_feature_count))  # Save the refs along with R2 and Feature Count
 
-        assert len(ray_jobs) == len(pareto_front)
+        # assert len(ray_jobs) == len(pareto_front)
 
-        uni_feature_datasets = []
+        # uni_feature_datasets = []
 
-        # getting the results from ray
-        while len(ray_jobs) > 0:
-            # Wait for the next job to complete (extracting the refs only)
-            finished_refs, remaining_jobs = ray.wait([job[0] for job in ray_jobs])  # Wait for the first job to finish
+        # # getting the results from ray
+        # while len(ray_jobs) > 0:
+        #     # Wait for the next job to complete (extracting the refs only)
+        #     finished_refs, remaining_jobs = ray.wait([job[0] for job in ray_jobs])  # Wait for the first job to finish
 
-            # Find the corresponding job in ray_jobs
-            for i, (ref, r2_value, feature_count) in enumerate(ray_jobs):
-                if ref == finished_refs[0]:  # Match the finished job reference
-                    # Get the results of the finished job
-                    uni_feature_dataset, shap_values_df, selector_name, root_name,  pipeline_id = ray.get(ref)
+        #     # Find the corresponding job in ray_jobs
+        #     for i, (ref, r2_value, feature_count) in enumerate(ray_jobs):
+        #         if ref == finished_refs[0]:  # Match the finished job reference
+        #             # Get the results of the finished job
+        #             shap_values_df, selector_name, root_name,  pipeline_id = ray.get(ref)
 
-                    # Add pipeline details to the SHAP DataFrame
-                    shap_values_df['Pipeline_No'] = pipeline_id + 1
-                    shap_values_df['Pipeline_R2'] = r2_value
-                    shap_values_df['Pipeline_Feature_Count'] = feature_count
-                    shap_values_df['Pipeline_Selector'] = selector_name
-                    shap_values_df['Pipeline_Root'] = root_name
+        #             # Add pipeline details to the SHAP DataFrame
+        #             shap_values_df['Pipeline_No'] = pipeline_id + 1
+        #             shap_values_df['Pipeline_R2'] = r2_value
+        #             shap_values_df['Pipeline_Feature_Count'] = feature_count
+        #             shap_values_df['Pipeline_Selector'] = selector_name
+        #             shap_values_df['Pipeline_Root'] = root_name
 
-                    # Store the shap_values_df in the list for later processing or concatenation
-                    all_shap_values_df = pd.concat([all_shap_values_df, shap_values_df], ignore_index=True)
+        #             # Store the shap_values_df in the list for later processing or concatenation
+        #             all_shap_values_df = pd.concat([all_shap_values_df, shap_values_df], ignore_index=True)
 
-                    # print the shape of the epi feature dataset with the pipeline number
-                    print(f"Pipeline {pipeline_id + 1} Uni Feature Dataset Shape:", uni_feature_dataset.shape, flush=True)
+        #             # # print the shape of the epi feature dataset with the pipeline number
+        #             # print(f"Pipeline {pipeline_id + 1} Uni Feature Dataset Shape:", uni_feature_dataset.shape, flush=True)
 
-                    # Add the uni_feature_dataset DataFrame to the list
-                    uni_feature_datasets.append(uni_feature_dataset)
+        #             # # Add the uni_feature_dataset DataFrame to the list
+        #             # uni_feature_datasets.append(uni_feature_dataset)
 
-                    # Remove the processed job from ray_jobs
-                    ray_jobs.pop(i)
-                    break
+        #             # Remove the processed job from ray_jobs
+        #             ray_jobs.pop(i)
+        #             break
 
-        # sort the all_shap_values_df by Pipeline_No and then by shap_value
-        all_shap_values_df = all_shap_values_df.sort_values(by=['Pipeline_No', 'shap_value'], ascending=[True, False])
-        # reset the index after sorting
-        all_shap_values_df = all_shap_values_df.reset_index(drop=True)
-        all_shap_values_df.to_csv(self.save_directory + "combined_shap_values.csv", index=False)
-        print("All SHAP values saved to combined_shap_values.csv", flush=True)
+        # # sort the all_shap_values_df by Pipeline_No and then by shap_value
+        # all_shap_values_df = all_shap_values_df.sort_values(by=['Pipeline_No', 'shap_value'], ascending=[True, False])
+        # # reset the index after sorting
+        # all_shap_values_df = all_shap_values_df.reset_index(drop=True)
+        # all_shap_values_df.to_csv(self.save_directory + "combined_shap_values.csv", index=False)
+        # print("All SHAP values saved to combined_shap_values.csv", flush=True)
 
-        # create the average SHAP values for each SNP
-        # add a column added OVERALL_FEATURE_IMP, which will be the multiplication value of shap_value and R2
-        all_shap_values_df['OVERALL_FEATURE_IMP'] = all_shap_values_df['shap_value'] * all_shap_values_df['Pipeline_R2']
+        # # create the average SHAP values for each SNP
+        # # add a column added OVERALL_FEATURE_IMP, which will be the multiplication value of shap_value and R2
+        # all_shap_values_df['OVERALL_FEATURE_IMP'] = all_shap_values_df['shap_value'] * all_shap_values_df['Pipeline_R2']
 
-        # for the each unique feature in feature column add up all the OVERALL_FEATURE_IMP values
-        all_shap_values_df = all_shap_values_df.groupby('feature').agg({'OVERALL_FEATURE_IMP': 'sum'}).reset_index()
+        # # for the each unique feature in feature column add up all the OVERALL_FEATURE_IMP values
+        # all_shap_values_df = all_shap_values_df.groupby('feature').agg({'OVERALL_FEATURE_IMP': 'sum'}).reset_index()
 
-        # sort the dataframe by the OVERALL_FEATURE_IMP
-        all_shap_values_df = all_shap_values_df.sort_values(by='OVERALL_FEATURE_IMP', ascending=False)
+        # # sort the dataframe by the OVERALL_FEATURE_IMP
+        # all_shap_values_df = all_shap_values_df.sort_values(by='OVERALL_FEATURE_IMP', ascending=False)
 
-        # save the all_shap_values_df to a csv file
-        all_shap_values_df.to_csv(self.save_directory + "avg_shap_values.csv", index=False)
+        # # save the all_shap_values_df to a csv file
+        # all_shap_values_df.to_csv(self.save_directory + "avg_shap_values.csv", index=False)
 
-        # plot a bar graph of the top 20 features
-        top_20_features = all_shap_values_df.head(20)
-        plt.figure(figsize=(10, 6))
-        plt.barh(top_20_features['feature'], top_20_features['OVERALL_FEATURE_IMP'], color='skyblue')
-        plt.title('Top 20 Features by Overall FI')
-        plt.xlabel('Overall Feature Importance')
-        plt.ylabel('Feature')
-        plt.gca().invert_yaxis()
-        plt.tight_layout()
-        plt.savefig(self.save_directory + 'top_20_features.png')
+        # # plot a bar graph of the top 20 features
+        # top_20_features = all_shap_values_df.head(20)
+        # plt.figure(figsize=(10, 6))
+        # plt.barh(top_20_features['feature'], top_20_features['OVERALL_FEATURE_IMP'], color='skyblue')
+        # plt.title('Top 20 Features by Overall FI')
+        # plt.xlabel('Overall Feature Importance')
+        # plt.ylabel('Feature')
+        # plt.gca().invert_yaxis()
+        # plt.tight_layout()
+        # plt.savefig(self.save_directory + 'top_20_features.png')
 
     # function to generate N random pipelines and evaluate them
     def random_pipeline_experiment(self):

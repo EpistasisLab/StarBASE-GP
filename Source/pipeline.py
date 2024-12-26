@@ -15,6 +15,7 @@ uniq_chrombin_t = Set
 traits_t = List
 r2_t = np.float32
 feature_cnt_t = np.int16
+feature_name_t = List
 div_score_t = np.float32
 
 
@@ -29,7 +30,7 @@ class Pipeline:
 
         # holds pipeline's set of univariate snps
         self.univariate_snps = cp.deepcopy(uni_snps)
-        # holds pipeline's set of traits: r2 (traits[0]) and feature_cnt (traits[1])
+        # holds pipeline's set of traits: r2 (traits[0]) and feature_cnt (traits[1]) and actual feature names (traits[2])
         self.traits = cp.deepcopy(traits)
         # holds the selector node
         self.selector_node = cp.deepcopy(selector_node)
@@ -53,10 +54,12 @@ class Pipeline:
         # check that internal traits is empty
         assert len(self.traits) == 0
         # make sure that the traits are not empty
-        assert len(traits) == 2
+        assert len(traits) == 3
         # make sure correct types
         assert isinstance(traits[0], r2_t)
         assert isinstance(traits[1], feature_cnt_t)
+        # print("Type of traits[2]:", type(traits[2]))
+        assert isinstance(traits[2], feature_name_t)
         # make sure we have a non-negative number of features
         assert traits[1] >= 0
 
@@ -65,13 +68,18 @@ class Pipeline:
         return
 
     def get_trait_r2(self) -> r2_t:
-        assert len(self.traits) == 2
+        assert len(self.traits) == 3
         return self.traits[0]
 
     def get_trait_feature_cnt(self) -> feature_cnt_t:
-        assert len(self.traits) == 2
+        assert len(self.traits) == 3
         assert self.traits[1] >= 0 # make sure we have a non-negative number of features
         return self.traits[1]
+    
+    def get_trait_feature_names(self) -> feature_name_t:
+        assert len(self.traits) == 3
+        assert self.traits[2] is not None
+        return self.traits[2]
 
     def get_traits(self) -> traits_t:
         return self.traits
