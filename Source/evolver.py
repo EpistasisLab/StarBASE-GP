@@ -54,7 +54,7 @@ nodelo_t = np.str_
 # feature count type
 feature_cnt_t = np.int16
 # list of feature names type (for the LD node)
-feature_names_t = List[snp_name_t]
+feature_names_t = List
 # population id type
 pop_id_t = np.uint16
 # diversity score type
@@ -107,6 +107,7 @@ def ray_uni_eval(x_train,
             best_uni = lo
 
     return r2_t(best_res), nodelo_t(best_uni), snp_name
+
 
 @ray.remote
 def ray_eval_pipeline(x_train,
@@ -928,8 +929,10 @@ class EA:
         plt.grid(True)
         # save the plot
         plt.savefig(self.save_directory + 'pareto_front.png')
+        plt.clf()
 
     # Create a object of Poster class to check the post analyis of the pipelines
+    # to do the feature importance analysis
     def post_analysis(self) -> None:
         """
         Function to perform post analysis of the pipelines.
@@ -1063,6 +1066,8 @@ class EA:
         plt.gca().invert_yaxis()
         plt.tight_layout()
         plt.savefig(self.save_directory + 'top_20_features.png')
+
+        plt.clf()
 
     # function to generate N random pipelines and evaluate them
     def random_pipeline_experiment(self):
