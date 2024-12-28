@@ -7,6 +7,7 @@
 #####################################################################################################
 
 import numpy as np
+import numba as nb
 from typeguard import typechecked
 from typing import List, Dict
 import pandas as pd
@@ -16,6 +17,8 @@ from .pipeline import Pipeline
 from sklearn.model_selection import train_test_split
 from .snp_hub import SnpHub
 from typing import List, Tuple, Set
+import time
+import sys
 
 from .uni_node import UniNode
 from .uni_node import UniDominantNode, UniRecessiveNode, UniHeterosisNode, UniUnderDominantNode, UniSubadditiveNode, UniSuperadditiveNode, UniPAGERNode
@@ -32,6 +35,8 @@ import warnings
 from sklearn.exceptions import NotFittedError, ConvergenceWarning
 import matplotlib.pyplot as plt
 from .poster import Poster
+
+from sklearn.base import BaseEstimator, TransformerMixin
 
 # snp name type
 snp_name_t = np.str_
@@ -99,6 +104,7 @@ def ray_uni_eval(x_train,
             best_uni = lo
 
     return r2_t(best_res), nodelo_t(best_uni), snp_name
+
 
 # todo: add ld node to the pipeline
 @ray.remote
@@ -238,7 +244,9 @@ class EA:
                  smt_out_out_p: prob_t = prob_t(.45),
                  num_add_interactions: np.uint16 = np.uint16(10),
                  num_del_interactions: np.uint16 = np.uint16(10),
-                 save_directory: str = "") -> None:
+                 save_directory: str = "",
+                 debug: bool = False
+                ) -> None:
         """
         Main class for the evolutionary algorithm.
 
@@ -271,6 +279,10 @@ class EA:
             Number of interactions to add within a pipeline.
         num_del_interactions: np.uint16
             Number of interactions to delete within a pipeline.
+        save_directory: str
+            Directory to save the results.
+        debug: bool
+            Debugging flag.
         """
 
         # arguments needed to run
@@ -304,9 +316,15 @@ class EA:
                                         num_add_interactions=num_add_interactions,
                                         num_del_interactions=num_del_interactions)
         self.save_directory = save_directory
+        self.debug = debug
+        self.cores = cores
 
         # Initialize Ray: Will have to specify when running on hpc
-        ray.init(num_cpus=cores, include_dashboard=True)
+        if self.debug:
+            ray.init(logging_level="DEBUG",local_mode=True,log_to_driver=True)
+
+        else:
+            ray.init(num_cpus=cores, include_dashboard=True)
         print(flush=True)
 
     # data loader
@@ -327,54 +345,57 @@ class EA:
         print('Loading data...', flush=True)
         print('Path:', path, flush=True)
 
-        # check if the path is valid
-        if os.path.isfile(path) == False:
-            # load the data
-            exit('Error: The path provided is not valid. Please provide a valid path to the data file.', -1)
+        # Check if the path is valid
+        if not os.path.isfile(path):
+            sys.exit('Error: The path provided is not valid. Please provide a valid path to the data file.')
 
-        data = pd.read_csv(path)
+        # Load the data based on file extension
+        if path.endswith('.csv'):
+            data = pd.read_csv(path)
+        elif path.endswith('.feather') or path.endswith('.ftr'):
+            data = pd.read_feather(path)
+        else:
+            sys.exit('Error: Unsupported file format. Please provide a CSV or Feather file.')
+
         print('Data loaded successfully.', flush=True)
         print("Data shape:", data.shape, flush=True)
 
-        # get pandas dataframe snp names without loading all data
-        self.snp_labels = pd.read_csv(path, nrows=0).columns.tolist()
+        # Get SNP labels
+        self.snp_labels = data.columns.tolist()
 
-        # check if the target label is valid
+        # Check if the target label is valid
         if target_label not in self.snp_labels:
-            exit('Error: The target label provided is not valid. Please provide a valid target label.', -1)
+            sys.exit('Error: The target label provided is not valid. Please provide a valid target label.')
 
-        # remove target label from snp labels
+        # Remove target label from SNP labels
         self.snp_labels.remove(target_label)
 
-        # convert python strings into numpy strings
+        # Convert python strings into numpy strings
         self.snp_labels = np.array(self.snp_labels, dtype=np.str_)
         self.target_label = np.str_(target_label)
 
-        # load the data
-        all_x = pd.read_csv(filepath_or_buffer=path, usecols=self.snp_labels)
-        all_y = pd.read_csv(filepath_or_buffer=path, usecols=[self.target_label]).values.ravel()
+        # Load the data
+        all_x = data[self.snp_labels]
+        all_y = data[self.target_label].values.ravel()
+        del data
 
-        # check if the data was loaded correctly
+        # Check if the data was loaded correctly
         all_x, all_y = self.check_dataset(all_x, all_y)
         print('X_data.shape:', all_x.shape, flush=True)
         print('y_data.shape:', all_y.shape, flush=True)
-        print(flush=True)
 
-        # change all the 1 in all_x to 0.5, all 2 to 1 in all_x - changing the additive encoding from 0,1,2 to 0,0.5,1
-        all_x = all_x.replace(1, 0.5)
-        all_x = all_x.replace(2, 1)
+        # Change all the 1 in all_x to 0.5, all 2 to 1 in all_x - changing the additive encoding from 0,1,2 to 0,0.5,1
+        all_x = all_x.applymap(lambda x: 0.5 if x == 1 else (1 if x == 2 else x))
 
-        # checking the encoding
+        # Checking the encoding
         print("Genotype data: ", all_x, flush=True)
 
-        # partition data based splits
+        # Partition data based on splits and check if the data was partitioned correctly
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(all_x, all_y, test_size=split, random_state=self.seed)
-
-        # check if the data was partitioned correctly
         self.X_train, self.y_train = self.check_dataset(self.X_train, self.y_train)
         self.X_val, self.y_val = self.check_dataset(self.X_val, self.y_val)
 
-        # load data into ray object store
+        # Load data into ray object store
         self.X_train_id = ray.put(self.X_train)
         self.y_train_id = ray.put(self.y_train)
         self.X_val_id = ray.put(self.X_val)
@@ -383,12 +404,9 @@ class EA:
         print('X_train_new.shape:', self.X_train.shape, flush=True)
         print("X_train values: ", self.X_train, flush=True)
         print('y_train_new.shape:', self.y_train.shape, flush=True)
-        print(flush=True)
         print('X_val_new.shape:', self.X_val.shape, flush=True)
         print('y_val_new.shape:', self.y_val.shape, flush=True)
-        print(flush=True)
         print('Data loaded successfully.', flush=True)
-        print(flush=True)
         return
 
     # data checker to check for validity of dataset
@@ -463,7 +481,9 @@ class EA:
         """
         # create the initial population
         print('Initializing population...', flush=True)
+        start_time = time.time()
         self.initialize_population()
+        print(f"Population initialized in {(time.time() - start_time) / 60} mins", flush=True)
         print('Population initialized -- Entering evolutionary proccess.\n', flush=True)
 
         # run the algorithm for the specified number of generations
@@ -586,7 +606,7 @@ class EA:
         If the number of pipelines with positive r2 scores is less than the population size, we keep the same population.
         If the number of pipelines with positive r2 scores is greater than the population size, we use NSGA-II to get the pareto front.
         """
-
+        start_time = time.time()
         # will hold a set of snps for each pipeline in the population
         pop_univariate_sets = []
         # will hold unseen snps -- snps whose best encoder type is empty
@@ -615,10 +635,14 @@ class EA:
 
         # make sure we have the correct number of interactions
         assert len(pop_univariate_sets) == 2 * self.pop_size
-
+        print(f"Population initialized in {(time.time() - start_time) / 60} mins", flush=True)
+        print(flush=True)
+        start_time = time.time()
         # evaluate all unseen interactions
         self.evaluate_unseen_snps(unseen_snps)
-
+        print(f"Unseen snps evaluated in {(time.time() - start_time) / 60} mins", flush=True)
+        print(flush=True)
+        start_time = time.time()
         # remove bad snps for each pipeline's set of snps
         for snps in pop_univariate_sets:
             good_snps = self.remove_bad_snps(snps)
@@ -640,9 +664,13 @@ class EA:
         # make sure we have the correct number of pipelines
         assert len(self.population) ==  2 * self.pop_size
 
+        print(f"Population created in {(time.time() - start_time) / 60} mins", flush=True)
+        print(flush=True)
+        start_time = time.time()
         # evaluate the initial population
         self.evaluation(self.population)
-
+        print(f"Population evaluated in {(time.time() - start_time) / 60} mins", flush=True)
+        print(flush=True)
         # subset the population to only include pipelines with positive r2 scores
         pop = []
         for pipeline in self.population:
@@ -701,6 +729,8 @@ class EA:
             finished, ray_jobs = ray.wait(ray_jobs)
             r2, type, snp_name = ray.get(finished)[0]
             self.hubs.update_snp_hub(snp_name, r2, type)
+
+        self.hubs.save_hubs("snp_hub_" + str(self.seed) + "_"+str(time.time())+".csv")
 
     # remove bad snps (r2 < 0)
     def remove_bad_snps(self, snps: Set) -> Set:
