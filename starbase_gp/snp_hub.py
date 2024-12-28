@@ -1132,6 +1132,7 @@ class SnpHub:
         wiggle_range = left_wiggle_range + right_wiggle_range
         return np.array([f"{snp_chrom}.{pos}" for pos in wiggle_range], dtype=snp_t)
 
+<<<<<<< HEAD:Source/snp_hub.py
     # has snp been prunned?
     def has_been_prunned(self, snp: snp_t) -> bool:
         return self.hub.has_been_prunned(snp)
@@ -1148,6 +1149,8 @@ class SnpHub:
 
             # delete snp from non pruned
             self.non_pruned.remove_snp(snp)
+=======
+>>>>>>> pip_optimized:starbase_gp/snp_hub.py
 
     # function to take in a list of snps and generate a dictionary of snps and their corresponding r2 values
     def generate_r2_dict(self, snps: Set[snp_t]) -> List:
