@@ -1132,6 +1132,7 @@ class SnpHub:
         wiggle_range = left_wiggle_range + right_wiggle_range
         return np.array([f"{snp_chrom}.{pos}" for pos in wiggle_range], dtype=snp_t)
 
+
     # has snp been prunned?
     def has_been_prunned(self, snp: snp_t) -> bool:
         return self.hub.has_been_prunned(snp)
