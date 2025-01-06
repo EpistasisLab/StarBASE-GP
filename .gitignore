@@ -3,7 +3,7 @@ Source/__pycache__/
 top10k_pruned_BMIres.csv
 pareto_front.png
 snp_hub.csv
-avg_shap_values.csv
+overall_feature_importance.csv
 top_20_features.png
-combined_shap_values.csv
-Random_Pipelines/
+all_pipelines_PFI_values.csv
+non_pruned.csv
