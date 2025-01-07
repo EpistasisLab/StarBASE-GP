@@ -121,7 +121,7 @@ def ray_eval_pipeline_new_order(x_train,
                       root_node: ScikitNode,
                       pop_id: np.int16,        #    r2, feature count, pop_id, one_snp_only_pipeline, pruned, snp_name_after_ld
                       snp_r2_set: Set) -> Tuple[np.float32, np.uint16, np.int16, snp_name_t, List[np.str_], List[np.str_]]:
-    
+
     # make dictionary to hold the snp r2 scores
     snp_r2_dict = {p[0]: p[1] for p in snp_r2_set}
 
@@ -131,7 +131,7 @@ def ray_eval_pipeline_new_order(x_train,
     steps.append(('snp_union', FeatureUnion([(uni_node.name, uni_node) for uni_node in uni_nodes])))
     # make a list of uni node names
     uni_node_names = [uni_node.get_snp_name() for uni_node in uni_nodes]
-    
+
     # fit the pipeline to get the selected features
     pipeline = SklearnPipeline(steps=steps)
     try:
@@ -148,9 +148,9 @@ def ray_eval_pipeline_new_order(x_train,
     x_val_transformed_df = pd.DataFrame(x_val_transformed, columns=uni_node_names)
     if x_train_transformed_df.empty:
         return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
-    
+
     x_train_original_df = pd.DataFrame(x_train, columns=uni_node_names)
-    
+
     # Fit the LD node
     try:
         ld_node.fit(x_train_original_df, x_train_transformed_df, y_train, snp_r2_dict)
@@ -163,7 +163,7 @@ def ray_eval_pipeline_new_order(x_train,
     except Exception as e:
         logging.error(f"Exception while fitting LD node: {e}")
         return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
-    
+
     # adding the selector and regressor nodes
     try:
         # create the pipeline
@@ -175,12 +175,12 @@ def ray_eval_pipeline_new_order(x_train,
         # create the pipeline without refitting the regressor
         pipeline = SklearnPipeline(steps=steps)
         pipeline.fit(x_train_transformed_df, y_train)
-    except Exception as e:  
+    except Exception as e:
         logging.error(f"Exception while fitting pipeline after LD: {e}")
         return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
 
     try:
-        
+
         r2_score = pipeline.score(x_val_transformed_df, y_val)
         feature_count = pipeline.named_steps['selector'].get_feature_count() # number of selected features after the selector node
         features_final = (pipeline.named_steps['selector'].get_feature_names(selected_features_after_ld)) # get the names of the features after the selector node by sending the selected features after the LD node
@@ -792,22 +792,13 @@ class EA:
         """
         ray_jobs = []
         # collect all ray jobs for evaluation
-        if self.original_eval_order:
-            for snp_name in unseen_snps:
-                ray_jobs.append(ray_uni_eval.remote(x_train = self.X_train_id,
-                                                    y_train = self.y_train_id,
-                                                    x_val = self.X_val_id,
-                                                    y_val = self.y_val_id,
-                                                    snp_name = snp_name,
-                                                    snp_pos = self.hubs.get_snp_pos(snp_name)))
-        else:
-            for snp_name in unseen_snps:
-                ray_jobs.append(ray_eval_pipeline_new_order.remote(x_train = self.X_train_id,
-                                                    y_train = self.y_train_id,
-                                                    x_val = self.X_val_id,
-                                                    y_val = self.y_val_id,
-                                                    snp_name = snp_name,
-                                                    snp_pos = self.hubs.get_snp_pos(snp_name)))
+        for snp_name in unseen_snps:
+            ray_jobs.append(ray_uni_eval.remote(x_train = self.X_train_id,
+                                                y_train = self.y_train_id,
+                                                x_val = self.X_val_id,
+                                                y_val = self.y_val_id,
+                                                snp_name = snp_name,
+                                                snp_pos = self.hubs.get_snp_pos(snp_name)))
         assert len(ray_jobs) == len(unseen_snps)
 
         # process results as they come in
@@ -858,8 +849,22 @@ class EA:
         # collect all parallel jobs
         ray_jobs = []
         # go through each pipeline in the population and evaluate
-        for i, pipeline in enumerate(pop):
-            ray_jobs.append(ray_eval_pipeline.remote(self.X_train_id,
+        # collect all ray jobs for evaluation
+        if self.original_eval_order:
+            for i, pipeline in enumerate(pop):
+                ray_jobs.append(ray_eval_pipeline.remote(self.X_train_id,
+                                                     self.y_train_id,
+                                                     self.X_val_id,
+                                                     self.y_val_id,
+                                                     self.construct_uni_nodes(pipeline.get_uni_snps()),
+                                                     pipeline.get_selector_node(),
+                                                     pipeline.get_ld_node(),
+                                                     pipeline.get_root_node(),
+                                                     np.int16(i),
+                                                     snp_r2_set=self.hubs.generate_r2_dict(pipeline.get_uni_snps())))
+        else:
+            for i, pipeline in enumerate(pop):
+                ray_jobs.append(ray_eval_pipeline_new_order.remote(self.X_train_id,
                                                      self.y_train_id,
                                                      self.X_val_id,
                                                      self.y_val_id,
