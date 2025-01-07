@@ -110,6 +110,18 @@ def ray_uni_eval(x_train,
 
     return r2_t(best_res), nodelo_t(best_uni), snp_name
 
+@ray.remote
+def ray_eval_pipeline_new_order(x_train,
+                      y_train,
+                      x_val,
+                      y_val,
+                      uni_nodes: uni_node_list_t,
+                      selector_node: ScikitNode,
+                      ld_node: LDSelector,
+                      root_node: ScikitNode,
+                      pop_id: np.int16,        #    r2, feature count, pop_id, one_snp_only_pipeline, pruned, snp_name_after_ld
+                      snp_r2_set: Set) -> Tuple[np.float32, np.uint16, np.int16, snp_name_t, List[np.str_], List[np.str_]]:
+    pass
 
 @ray.remote
 def ray_eval_pipeline(x_train,
@@ -257,7 +269,8 @@ class EA:
                  smt_out_out_p: prob_t = prob_t(.45),
                  num_add_interactions: np.uint16 = np.uint16(10),
                  num_del_interactions: np.uint16 = np.uint16(10),
-                 save_directory: str = "") -> None:
+                 save_directory: str = "",
+                 original_eval_order: bool = True) -> None:
         """
         Main class for the evolutionary algorithm.
 
@@ -324,6 +337,7 @@ class EA:
                                         num_add_interactions=num_add_interactions,
                                         num_del_interactions=num_del_interactions)
         self.save_directory = save_directory
+        self.original_eval_order = original_eval_order
 
         # Initialize Ray: Will have to specify when running on hpc
         ray.init(num_cpus=cores, include_dashboard=True)
@@ -713,13 +727,22 @@ class EA:
         """
         ray_jobs = []
         # collect all ray jobs for evaluation
-        for snp_name in unseen_snps:
-            ray_jobs.append(ray_uni_eval.remote(x_train = self.X_train_id,
-                                                y_train = self.y_train_id,
-                                                x_val = self.X_val_id,
-                                                y_val = self.y_val_id,
-                                                snp_name = snp_name,
-                                                snp_pos = self.hubs.get_snp_pos(snp_name)))
+        if self.original_eval_order:
+            for snp_name in unseen_snps:
+                ray_jobs.append(ray_uni_eval.remote(x_train = self.X_train_id,
+                                                    y_train = self.y_train_id,
+                                                    x_val = self.X_val_id,
+                                                    y_val = self.y_val_id,
+                                                    snp_name = snp_name,
+                                                    snp_pos = self.hubs.get_snp_pos(snp_name)))
+        else:
+            for snp_name in unseen_snps:
+                ray_jobs.append(ray_eval_pipeline_new_order.remote(x_train = self.X_train_id,
+                                                    y_train = self.y_train_id,
+                                                    x_val = self.X_val_id,
+                                                    y_val = self.y_val_id,
+                                                    snp_name = snp_name,
+                                                    snp_pos = self.hubs.get_snp_pos(snp_name)))
         assert len(ray_jobs) == len(unseen_snps)
 
         # process results as they come in
