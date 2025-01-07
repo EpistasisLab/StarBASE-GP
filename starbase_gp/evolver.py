@@ -20,6 +20,7 @@ from .snp_hub import SnpHub
 from typing import List, Tuple, Set
 import time
 import sys
+import datatable as dt
 
 from .uni_node import UniNode
 from .uni_node import UniDominantNode, UniRecessiveNode, UniHeterosisNode, UniUnderDominantNode, UniSubadditiveNode, UniSuperadditiveNode, UniPAGERNode
@@ -400,7 +401,8 @@ class EA:
 
         # Load the data based on file extension
         if path.endswith('.csv'):
-            data = pd.read_csv(path)
+            # data = pd.read_csv(path)
+            data = dt.fread(path).to_pandas()
         elif path.endswith('.feather') or path.endswith('.ftr'):
             data = pd.read_feather(path)
         else:
