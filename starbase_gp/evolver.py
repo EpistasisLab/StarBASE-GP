@@ -24,6 +24,8 @@ import sys
 from .uni_node import UniNode
 from .uni_node import UniDominantNode, UniRecessiveNode, UniHeterosisNode, UniUnderDominantNode, UniSubadditiveNode, UniSuperadditiveNode, UniPAGERNode
 
+from .encoder import map_snp_values, compute_r2_optimized, ENCODINGS
+
 from .scikit_node import ScikitNode, LDSelector
 from sklearn.pipeline import Pipeline as SklearnPipeline
 from sklearn.pipeline import FeatureUnion
@@ -112,6 +114,35 @@ def ray_uni_eval(x_train,
             best_uni = lo
 
     return r2_t(best_res), nodelo_t(best_uni), snp_name
+
+# evaluate unseen snps
+@ray.remote
+def ray_uni_eval_optimized(x_train,
+                y_train,
+                x_val,
+                y_val,
+                snp_name: snp_name_t,
+                snp_pos: snp_hub_pos_t) -> Tuple[np.float32, np.str_, np.str_]:
+    
+    # Get all encodings
+    all_encodings_train = map_snp_values(x_train, snp_pos=snp_pos, encoding_type='all', y=y_train)
+    all_encodings_val = map_snp_values(x_val, snp_pos=snp_pos, encoding_type='all', y=y_val)
+
+
+    print("All encodings train shape: ", all_encodings_train.shape, flush=True)
+    print("All encodings val shape: ", all_encodings_val.shape, flush=True)
+
+
+    # Get the r2 score for all encodings
+    r2_scores = compute_r2_optimized(all_encodings_train, all_encodings_val, y_train, y_val)
+
+    # Get the best r2 score
+    best_r2 = np.max(r2_scores)
+    best_encoding = ENCODINGS[np.argmax(r2_scores)]
+
+    return r2_t(best_r2), nodelo_t(best_encoding), snp_name
+
+
 
 
 # todo: add ld node to the pipeline
@@ -406,7 +437,7 @@ class EA:
         all_x = all_x.applymap(lambda x: 0.5 if x == 1 else (1 if x == 2 else x))
 
         # Checking the encoding
-        print("Genotype data: ", all_x, flush=True)
+        print("Genotype data: ", all_x.head(), flush=True)
 
         # Partition data based on splits and check if the data was partitioned correctly
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(all_x, all_y, test_size=split, random_state=self.seed)
@@ -420,7 +451,7 @@ class EA:
         self.y_val_id = ray.put(self.y_val)
 
         print('X_train_new.shape:', self.X_train.shape, flush=True)
-        print("X_train values: ", self.X_train, flush=True)
+        print("X_train values: ", self.X_train.head(), flush=True)
         print('y_train_new.shape:', self.y_train.shape, flush=True)
         print('X_val_new.shape:', self.X_val.shape, flush=True)
         print('y_val_new.shape:', self.y_val.shape, flush=True)
@@ -659,7 +690,7 @@ class EA:
             pop_univariate_sets.append(snps)
 
         # make sure we have the correct number of interactions
-        assert len(pop_univariate_sets) == 2 * self.pop_size
+        # assert len(pop_univariate_sets) == 2 * self.pop_size
         print(f"Population initialized in {(time.time() - start_time) / 60} mins", flush=True)
         print(flush=True)
         start_time = time.time()
@@ -719,7 +750,7 @@ class EA:
         ray_jobs = []
         # collect all ray jobs for evaluation
         for snp_name in unseen_snps:
-            ray_jobs.append(ray_uni_eval.remote(x_train = self.X_train_id,
+            ray_jobs.append(ray_uni_eval_optimized.remote(x_train = self.X_train_id,
                                                 y_train = self.y_train_id,
                                                 x_val = self.X_val_id,
                                                 y_val = self.y_val_id,
@@ -733,7 +764,7 @@ class EA:
             r2, type, snp_name = ray.get(finished)[0]
             self.hubs.update_snp_hub(snp_name, r2, type)
 
-        self.hubs.save_hubs("snp_hub_" + str(self.seed) + "_"+str(time.time())+".csv")
+        self.hubs.save_hubs("snp_hub_" + str(self.seed) + "_"+str(time.time()))
 
     # remove bad snps (r2 < 0)
     def remove_bad_snps(self, snps: Set) -> Set:

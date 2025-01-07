@@ -29,5 +29,6 @@ setup(
         "statsmodels",
         "shap",
         "pyarrow",
+        "sortedcontainers"
     ]
 )
