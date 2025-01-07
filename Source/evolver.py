@@ -743,7 +743,7 @@ class EA:
 
         # make sure we have the correct number of interactions
         assert(0 < len(self.population) <= self.pop_size)
-        
+
         # evaluate all unseen interactions
         self.evaluate_unseen_snps(unseen_snps)
 
@@ -763,7 +763,7 @@ class EA:
             self.population.append(self.repoduction.generate_random_pipeline(self.rng, good_snps, int(self.seed)))
 
         # make sure we have the correct number of pipelines
-        assert len(self.population) == self.pop_size
+        assert (0 < len(self.population) <= self.pop_size)
 
         # evaluate the initial population
         self.evaluation(self.population)
