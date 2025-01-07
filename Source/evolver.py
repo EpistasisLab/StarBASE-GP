@@ -742,7 +742,7 @@ class EA:
             pop_univariate_sets.append(snps)
 
         # make sure we have the correct number of interactions
-        assert(0 < len(self.population) <= self.pop_size)
+        assert len(self.population) == self.pop_size
 
         # evaluate all unseen interactions
         self.evaluate_unseen_snps(unseen_snps)
