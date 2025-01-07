@@ -17,6 +17,8 @@ from .pipeline import Pipeline
 from sklearn.model_selection import train_test_split
 from .snp_hub import SnpHub
 from typing import List, Tuple, Set
+import copy as cp
+from sklearn.metrics import r2_score
 
 from .uni_node import UniNode
 from .uni_node import UniDominantNode, UniRecessiveNode, UniHeterosisNode, UniUnderDominantNode, UniSubadditiveNode, UniSuperadditiveNode, UniPAGERNode
@@ -499,6 +501,7 @@ class EA:
             extra_offspring = self.pop_size - len(self.population)
             # get order of mutation/crossover to do with the extra offspring
             var_order, parent_cnt = self.repoduction.variation_order(self.rng, np.uint16(extra_offspring + self.pop_size))
+
             # get the parent scores by position
             parent_ids = self.parent_selection(parent_cnt)
 
@@ -573,29 +576,47 @@ class EA:
         assert all(pipeline.get_trait_r2() > 0.0 for pipeline in pop2)
 
         # combine both the population and offspring lists into one
-        combined_pipelines = pop1 + pop2
+        pipelines_original = pop1 + pop2
+
+        # iterate through the combined pipelines and remove duplicates with the same get_trait_feature_names
+        best_pipelines = {}
+        for pipeline in pipelines_original:
+            # Convert features to a frozenset so it can be used as a dict key
+            feats = frozenset(pipeline.get_trait_feature_names())
+
+            if feats not in best_pipelines:
+                best_pipelines[feats] = pipeline
+            else:
+                current_best = best_pipelines[feats]
+                if pipeline.get_trait_r2() > current_best.get_trait_r2():
+                    # Found a strictly better pipeline for this feature set
+                    best_pipelines[feats] = pipeline
+                elif pipeline.get_trait_r2() == current_best.get_trait_r2():
+                    # Tie: pick randomly
+                    if self.rng.choice([True, False]):
+                        best_pipelines[feats] = pipeline
+
+        # get the best pipelines
+        non_dup_pipelines = list(best_pipelines.values())
 
         # get the fronts and rank
-        fronts, _ = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(combined_pipelines, (r2_t(1.0), feature_cnt_t(-1))))
+        fronts, _ = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(non_dup_pipelines, (r2_t(1.0), feature_cnt_t(-1))))
 
         # get crowding distance for each solution
-        crowding_distance = nsga.crowding_distance(self.get_pipeline_scores(combined_pipelines, (r2_t(1.0), feature_cnt_t(1))), np.int32(2))
+        crowding_distance = nsga.crowding_distance(self.get_pipeline_scores(non_dup_pipelines, (r2_t(1.0), feature_cnt_t(1))), np.int32(2))
 
         # truncate the population to the population size with nsga ii
         survivor_ids = nsga.non_dominated_truncate(fronts, crowding_distance, self.pop_size)
         # make sure that the number of survivors is correct
         assert len(survivor_ids) == self.pop_size
 
-        # combine the population and offspring
-        candidates = pop1 + pop2
-
         # subset the candidates to only include the survivors
         new_pop = []
 
         for i in survivor_ids:
             # make sure we are within the bounds of the candidates
-            assert 0 <= i < len(candidates)
-            new_pop.append(candidates[i])
+            assert 0 <= i < len(non_dup_pipelines)
+            new_pop.append(non_dup_pipelines[i])
 
         return new_pop
 
@@ -770,7 +791,7 @@ class EA:
             finished, ray_jobs = ray.wait(ray_jobs)
             r2, feature_count, pop_id, one_snp_only_pipeline, pruned, feature_names = ray.get(finished)[0]
             # update the pipeline
-            pop[pop_id].set_traits([r2, feature_count, feature_names])
+            pop[pop_id].set_traits([r2, feature_count, set(feature_names)])
 
 
             new_snp = set(snp for snp in pruned
@@ -974,15 +995,17 @@ class EA:
             # make a uni_snps_df - which will have the feature and the best inheritence type
             uni_snps_list = []
             uni_snps = pipeline.get_uni_snps()
+            # print('uni_snps:',uni_snps, flush=True)
             for snp_name in uni_snps:
                 best_lo = self.hubs.get_uni_encoding(snp_name)
                 uni_snps_list.append({'feature': snp_name, 'inheritence': best_lo})
             uni_snps_df = pd.DataFrame(uni_snps_list)
-            
+
             #uni_snps_df = poster.get_uni_snp(pipeline=pipeline)
             features_final = pipeline.get_trait_feature_names()
             # filter uni_nodes to only include the snps in the pipeline
             uni_nodes = [uni_node for uni_node in uni_nodes if uni_node.get_snp_name() in features_final]
+            # print('uni_nodes:', uni_nodes, flush=True)
             # filter uni_snps_df to only include the snps in the pipeline
             uni_snps_df = uni_snps_df[uni_snps_df['feature'].isin(features_final)]
 
@@ -991,12 +1014,15 @@ class EA:
 
             # Construct the snp_union FeatureUnion - to transform the training and test datasets to have the encoded SNPs
             snp_union = FeatureUnion([(uni_node.name, uni_node) for uni_node in uni_nodes])
-            
-            # Transform the training and test datasets using snp_union
-            uni_features_train = snp_union.fit_transform(self.X_train)
-            uni_features_test = snp_union.transform(self.X_val)
+            steps = []
+            steps.append(('snp_union',snp_union))
+            pipe = SklearnPipeline(steps=steps)
+            pipe.fit(self.X_train, self.y_train)
 
-                    
+            # Transform the training and test datasets using snp_union
+            uni_features_train = pipe.transform(self.X_train)
+            uni_features_test = pipe.transform(self.X_val)
+
             # Get R2 and Feature Count for this specific pipeline
             pipeline_r2 = pipeline.get_trait_r2()
             pipeline_feature_count = pipeline.get_trait_feature_cnt()
@@ -1008,6 +1034,7 @@ class EA:
             # get permutation importance
             # get a random state using the self.rng to get a number between 1 to 100000
             random_state = self.rng.integers(low=1, high=100000)
+            # perm_imp = self.permutation_importance_inhouse(fitted_model, uni_features_test, self.y_val, n_repeats=500, random_state=random_state)
             perm_imp = permutation_importance(fitted_model, uni_features_test, self.y_val, n_repeats=100, random_state=random_state, n_jobs=-1)
             # make a sorted dataframe
             perm_imp_df = pd.DataFrame({'Feature': new_column_names, 'PFI_importance': perm_imp['importances_mean']})
@@ -1025,7 +1052,7 @@ class EA:
             # perm_imp_df.to_csv(self.save_directory + f'perm_imp_pipeline_{i}.csv', index=False)
             # adding the individual pipeline PFI to the all_perm_imp_df
             all_perm_imp_df = pd.concat([all_perm_imp_df, perm_imp_df], ignore_index=True)
-            
+
         # sort the all_shap_values_df by Pipeline_No and then by shap_value
         all_perm_imp_df = all_perm_imp_df.sort_values(by=['Pipeline_No', 'PFI_importance'], ascending=[True, False])
         # reset the index after sorting
@@ -1044,7 +1071,7 @@ class EA:
         #print("Mean Rank and Feature Count: ", mean_rank, flush=True)
 
         # Calculate the percentage of times each feature appeared in a pipeline
-        total_pipelines = all_perm_imp_df['Pipeline_No'].nunique()  
+        total_pipelines = all_perm_imp_df['Pipeline_No'].nunique()
         mean_rank['Appearance_Percentage'] = mean_rank['Feature_Count'] / total_pipelines
 
         # Calculate the Overall Feature Importance

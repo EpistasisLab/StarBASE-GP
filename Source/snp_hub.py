@@ -688,9 +688,11 @@ class SnpHub:
         # Write snp hub to file
         with open(save_dir+"snp_hub.csv", 'w') as f:
             # Write the headers for the snp_file
-            f.write("snp,r2,bin_num,bin_idx,encoding,seen,pruned\n")
+            f.write("snp,chr,bp,r2,bin_num,bin_idx,encoding,seen,pruned\n")
             for row in snp_data:
-                f.write(f"{row[0]},{row[1]},{row[2]},{row[4]},{row[5]},{row[6]},{row[7]}\n")
+                # split snp into chromosome and position
+                chrom, pos = row[0].split('.')
+                f.write(f"{row[0]},{chrom},{pos},{row[1]},{row[2]},{row[4]},{row[5]},{row[6]},{row[7]}\n")
 
         # save csv with both seen and not prunned snps
         # Write snp hub to file
@@ -700,7 +702,6 @@ class SnpHub:
             for row in snp_data:
                 if row[6] == True and row[7] == False and row[1] > np.float32(0.0):
                     f.write(f"{row[0]},{row[1]},{row[5]}\n")
-
         return
 
     # update snp hub with best univariate r2 result and corresponding encoder type
@@ -1019,119 +1020,6 @@ class SnpHub:
 
     def does_snp_exist(self, snp: snp_t) -> bool:
         return snp in self.hub.hub
-
-    # get a snp from the same chromosome and bin within the wiggle range with r2 > 0.0 based on r2 weight
-    def get_smt_snp_in_bin_wiggle(self, snp: snp_t, rng_: rng_t, step: np.uint16) -> snp_t:
-        rng = np.random.default_rng(rng_)
-
-        # make sure there is a '.' inside the snp string
-        assert '.' in snp
-
-        # get a random snp based
-        wiggle_snps = self.get_wiggle_range(snp, step)
-
-        # collect all snps with a positive r2 score only
-        snps, r2 = [], []
-        for s in wiggle_snps:
-            # make sure this snp is in the hub
-            assert s in self.hub.hub
-
-            # check if r2 is greater than 0.0
-            if self.hub.get_uni_res(s) > np.float32(0.0):
-                snps.append(s)
-                r2.append(self.hub.get_uni_res(s))
-
-        # if no snps have positve r2, return a random one from the wiggle range
-        if len(snps) == 0:
-            return self.get_ran_snp_in_bin_wiggle(snp, rng, step)
-
-        # normalize r2 scores
-        r2 = np.array(r2, dtype=np.float32) / np.sum(r2, dtype=np.float32)
-        # get a snp based on r2 scores as weights
-        choice = rng.choice(snps, p=r2)
-
-        # try to get a random snp that is not the same as the input snp
-        for _ in range(mutation_tries):
-            if choice != snp:
-                return choice
-            choice = rng.choice(snps, p=r2)
-
-        # get a random snp based on r2 scores as weights
-        return self.get_ran_snp_in_bin_wiggle(snp, rng, step)
-
-    # get a random snp from the same chromosome and bin that also considers neighboring bins within wiggle range
-    def get_ran_snp_in_bin_wiggle(self, snp: snp_t, rng: rng_t, step: np.uint16) -> snp_t:
-        # make sure there is a '.' inside the snp string
-        assert '.' in snp
-
-        # get a random snp based
-        wiggle_snps = self.get_wiggle_range(snp, step)
-        choice = rng.choice(wiggle_snps)
-
-        # try to get a random snp that is not the same as the input snp
-        for _ in range(mutation_tries):
-            if choice != snp:
-                return choice
-            choice = rng.choice(wiggle_snps)
-
-        # get a random snp based on r2 scores as weights
-        return choice
-
-    # get all snps from a given range that cross multiple bins if necessary
-    def get_wiggle_range(self, snp: snp_t, step: np.uint16) -> npt.NDArray[snp_t]:
-        # get chromosome and position from snp
-        snp_chrom, _ = self.bins.snp_chrm_pos(snp)
-
-        # wiggle snp holders
-        right_wiggle_range = []
-        left_wiggle_range = []
-
-        # get the right wiggle range
-        right_start = self.hub.get_snp_idx(snp) + 1
-        original_bin_size = self.bins.get_bin_size(snp_chrom, self.hub.get_snp_bin(snp))
-
-        # get all snps from the current bin within the right wiggle step range
-        while len(right_wiggle_range) <= step and right_start < original_bin_size:
-            right_wiggle_range.append(self.bins.get_pos_in_bin(snp_chrom, self.hub.get_snp_bin(snp), right_start))
-            right_start += 1
-
-        # get total number of bins in the chromosome
-        chrm_num_of_bins = self.bins.get_chrom_number_of_bins(snp_chrom)
-        # cross into the right neighboring bins if necessary to get the rest ÷of the snps
-        right_snp_bin_num = self.hub.get_snp_bin(snp) + 1
-
-        while len(right_wiggle_range) <= step and right_snp_bin_num < chrm_num_of_bins:
-            # collect snps from the next bin until the wiggle range is full
-            bin_start = 0
-            while len(right_wiggle_range) <= step and bin_start < self.bins.get_bin_size(snp_chrom, right_snp_bin_num):
-                right_wiggle_range.append(self.bins.get_pos_in_bin(snp_chrom, right_snp_bin_num, bin_start))
-                bin_start += 1
-
-            # move to the next bin to keep collecting snps
-            right_snp_bin_num += 1
-
-        # get all snps from the current bin within the left wiggle step range
-        left_start = self.hub.get_snp_idx(snp) - 1
-        while len(left_wiggle_range) <= step and 0 <= left_start:
-            left_wiggle_range.append(self.bins.get_pos_in_bin(snp_chrom, self.hub.get_snp_bin(snp), left_start))
-            left_start -= 1
-
-        # cross into the left neighboring bins if necessary to get the rest of the snps
-        left_snp_bin_num = self.hub.get_snp_bin(snp) - 1
-        while len(left_wiggle_range) <= step and 0 <= left_snp_bin_num:
-            # collect snps from the previous bin until the wiggle range is full
-            bin_start = self.bins.get_bin_size(snp_chrom, left_snp_bin_num) - 1
-            while len(left_wiggle_range) <= step and 0 <= bin_start:
-                left_wiggle_range.append(self.bins.get_pos_in_bin(snp_chrom, left_snp_bin_num, bin_start))
-                bin_start -= 1
-
-            # move to previous bin to keep collecting snps
-            left_snp_bin_num -= 1
-
-        # combine the wiggle range and return new snps
-        wiggle_range = left_wiggle_range + right_wiggle_range
-        return np.array([f"{snp_chrom}.{pos}" for pos in wiggle_range], dtype=snp_t)
-
 
     # has snp been prunned?
     def has_been_prunned(self, snp: snp_t) -> bool:

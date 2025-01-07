@@ -15,7 +15,7 @@ uniq_chrombin_t = Set
 traits_t = List
 r2_t = np.float32
 feature_cnt_t = np.int16
-feature_name_t = List
+feature_name_t = Set
 div_score_t = np.float32
 
 
@@ -75,7 +75,7 @@ class Pipeline:
         assert len(self.traits) == 3
         assert self.traits[1] >= 0 # make sure we have a non-negative number of features
         return self.traits[1]
-    
+
     def get_trait_feature_names(self) -> feature_name_t:
         assert len(self.traits) == 3
         assert self.traits[2] is not None
