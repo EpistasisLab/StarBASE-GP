@@ -29,6 +29,7 @@ setup(
         "statsmodels",
         "shap",
         "pyarrow",
-        "sortedcontainers"
+        "sortedcontainers",
+        "datatable"
     ]
 )
