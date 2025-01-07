@@ -121,7 +121,82 @@ def ray_eval_pipeline_new_order(x_train,
                       root_node: ScikitNode,
                       pop_id: np.int16,        #    r2, feature count, pop_id, one_snp_only_pipeline, pruned, snp_name_after_ld
                       snp_r2_set: Set) -> Tuple[np.float32, np.uint16, np.int16, snp_name_t, List[np.str_], List[np.str_]]:
-    pass
+    
+    # make dictionary to hold the snp r2 scores
+    snp_r2_dict = {p[0]: p[1] for p in snp_r2_set}
+
+    # create the pipeline
+    steps = []
+    # uni nodes into one sklearn union
+    steps.append(('snp_union', FeatureUnion([(uni_node.name, uni_node) for uni_node in uni_nodes])))
+    # make a list of uni node names
+    uni_node_names = [uni_node.get_snp_name() for uni_node in uni_nodes]
+    
+    # fit the pipeline to get the selected features
+    pipeline = SklearnPipeline(steps=steps)
+    try:
+        pipeline_fitted = pipeline.fit(x_train, y_train)
+    except Exception as e:
+        # Catch all other exceptions and log error with relevant context
+        logging.error(f"Exception while fitting SNP union step: {e}")
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
+
+    # transform the dataset using snp_union
+    x_train_transformed = pipeline_fitted.transform(x_train)
+    x_val_transformed = pipeline_fitted.transform(x_val)
+    x_train_transformed_df = pd.DataFrame(x_train_transformed, columns=uni_node_names)
+    x_val_transformed_df = pd.DataFrame(x_val_transformed, columns=uni_node_names)
+    if x_train_transformed_df.empty:
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
+    
+    x_train_original_df = pd.DataFrame(x_train, columns=uni_node_names)
+    
+    # Fit the LD node
+    try:
+        ld_node.fit(x_train_original_df, x_train_transformed_df, y_train, snp_r2_dict)
+        selected_features_after_ld = ld_node.selected_features_
+        # keeping only the selected features after the LD node
+        x_train_transformed_df = pd.DataFrame(x_train_transformed_df[selected_features_after_ld], columns=selected_features_after_ld)
+        if x_train_transformed_df.empty:
+            return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
+        x_val_transformed_df = pd.DataFrame(x_val_transformed_df[selected_features_after_ld], columns=selected_features_after_ld)
+    except Exception as e:
+        logging.error(f"Exception while fitting LD node: {e}")
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
+    
+    # adding the selector and regressor nodes
+    try:
+        # create the pipeline
+        steps = []
+        # add the selector node
+        steps.append(('selector', selector_node))
+        # pass to regressor
+        steps.append(('regressor', root_node.regressor))
+        # create the pipeline without refitting the regressor
+        pipeline = SklearnPipeline(steps=steps)
+        pipeline.fit(x_train_transformed_df, y_train)
+    except Exception as e:  
+        logging.error(f"Exception while fitting pipeline after LD: {e}")
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
+
+    try:
+        
+        r2_score = pipeline.score(x_val_transformed_df, y_val)
+        feature_count = pipeline.named_steps['selector'].get_feature_count() # number of selected features after the selector node
+        features_final = (pipeline.named_steps['selector'].get_feature_names(selected_features_after_ld)) # get the names of the features after the selector node by sending the selected features after the LD node
+        features_final_list = features_final.tolist()
+        #print("Type of features_final: ", type(features_final_list), flush=True)
+    except Exception as e:
+        logging.error(f"Error while scoring or getting feature count: {e}")
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
+
+    one_snp_only_pipeline = 'N/A'
+    if features_final_list != None:
+        one_snp_only_pipeline = features_final_list
+
+    # return the pipeline
+    return r2_t(r2_score), feature_cnt_t(feature_count), pop_id, snp_name_t(one_snp_only_pipeline), [snp_name_t(k) for k,v in ld_node.snp_details_after_ld.items() if v == True], features_final_list
+
 
 @ray.remote
 def ray_eval_pipeline(x_train,
