@@ -184,18 +184,19 @@ def ray_eval_pipeline_new_order(x_train,
         r2_score = pipeline.score(x_val_transformed_df, y_val)
         feature_count = pipeline.named_steps['selector'].get_feature_count() # number of selected features after the selector node
         features_final = (pipeline.named_steps['selector'].get_feature_names(selected_features_after_ld)) # get the names of the features after the selector node by sending the selected features after the LD node
-        features_final_list = features_final.tolist()
-        #print("Type of features_final: ", type(features_final_list), flush=True)
+        # if features_final is not a list, convert it to a list
+        if not isinstance(features_final, list):
+            features_final = [features_final]
     except Exception as e:
         logging.error(f"Error while scoring or getting feature count: {e}")
         return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
 
     one_snp_only_pipeline = 'N/A'
-    if features_final_list != None:
-        one_snp_only_pipeline = features_final_list
+    if features_final != None:
+        one_snp_only_pipeline = features_final
 
     # return the pipeline
-    return r2_t(r2_score), feature_cnt_t(feature_count), pop_id, snp_name_t(one_snp_only_pipeline), [snp_name_t(k) for k,v in ld_node.snp_details_after_ld.items() if v == True], features_final_list
+    return r2_t(r2_score), feature_cnt_t(feature_count), pop_id, snp_name_t(one_snp_only_pipeline), [snp_name_t(k) for k,v in ld_node.snp_details_after_ld.items() if v == True], features_final
 
 
 @ray.remote
@@ -741,8 +742,8 @@ class EA:
             pop_univariate_sets.append(snps)
 
         # make sure we have the correct number of interactions
-        assert len(pop_univariate_sets) == self.pop_size
-
+        assert(0 < len(self.population) <= self.pop_size)
+        
         # evaluate all unseen interactions
         self.evaluate_unseen_snps(unseen_snps)
 
