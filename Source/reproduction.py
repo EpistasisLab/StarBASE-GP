@@ -34,7 +34,6 @@ class Reproduction:
     def __init__(self,
                  uni_cnt_max: pop_size_t,
                  uni_cnt_min: pop_size_t,
-
                  mut_prob: prob_t = prob_t(.5),
                  cross_prob: prob_t = prob_t(.5),
                  mut_selector_p: prob_t = prob_t(.5),
@@ -44,12 +43,7 @@ class Reproduction:
                  mut_smt_p: prob_t = prob_t(.45),
                  smt_in_in_p: prob_t = prob_t(.1),
                  smt_in_out_p: prob_t = prob_t(.45),
-                 smt_out_out_p: prob_t = prob_t(.45),
-
-                 num_add_interactions: pop_size_t = pop_size_t(10),
-                 num_del_interactions: pop_size_t = pop_size_t(10),
-                 num_add_snps: pop_size_t = pop_size_t(10), #YF
-                 num_del_snps: pop_size_t = pop_size_t(10)) -> None:
+                 smt_out_out_p: prob_t = prob_t(.45)) -> None:
 
         # save all the variables
         self.uni_cnt_max = uni_cnt_max
@@ -64,10 +58,6 @@ class Reproduction:
         self.smt_in_in_p = smt_in_in_p
         self.smt_in_out_p = smt_in_out_p
         self.smt_out_out_p = smt_out_out_p
-        self.num_add_interactions = num_add_interactions
-        self.num_del_interactions = num_del_interactions
-        self.num_add_snps = num_add_snps
-        self.num_del_snps = num_del_snps
 
         return
 

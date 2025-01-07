@@ -267,8 +267,6 @@ class EA:
                  smt_in_in_p: prob_t = prob_t(.1),
                  smt_in_out_p: prob_t = prob_t(.45),
                  smt_out_out_p: prob_t = prob_t(.45),
-                 num_add_interactions: np.uint16 = np.uint16(10),
-                 num_del_interactions: np.uint16 = np.uint16(10),
                  save_directory: str = "",
                  original_eval_order: bool = True) -> None:
         """
@@ -299,10 +297,6 @@ class EA:
             Probability for mutation ocurring.
         cross_prob: prob_t
             Probability for crossover ocurring.
-        num_add_interactions: np.uint16
-            Number of interactions to add within a pipeline.
-        num_del_interactions: np.uint16
-            Number of interactions to delete within a pipeline.
         """
 
         # arguments needed to run
@@ -318,8 +312,6 @@ class EA:
         self.smt_in_in_p = smt_in_in_p
         self.smt_in_out_p = smt_in_out_p
         self.smt_out_out_p = smt_out_out_p
-        self.num_add_interactions = num_add_interactions
-        self.num_del_interactions = num_del_interactions
         self.population = [] # will hold all the pipelines
         self.uni_start_cnt = uni_start_cnt
         self.repoduction = Reproduction(uni_cnt_max=uni_cnt_max,
@@ -333,9 +325,7 @@ class EA:
                                         mut_smt_p=mut_smt_p,
                                         smt_in_in_p=smt_in_in_p,
                                         smt_in_out_p=smt_in_out_p,
-                                        smt_out_out_p=smt_out_out_p,
-                                        num_add_interactions=num_add_interactions,
-                                        num_del_interactions=num_del_interactions)
+                                        smt_out_out_p=smt_out_out_p)
         self.save_directory = save_directory
         self.original_eval_order = original_eval_order
 
