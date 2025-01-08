@@ -188,7 +188,7 @@ def ray_eval_pipeline_new_order(x_train,
         features_final = (pipeline.named_steps['selector'].get_feature_names(selected_features_after_ld)) # get the names of the features after the selector node by sending the selected features after the LD node
         # if features_final is not a list, convert it to a list
         if not isinstance(features_final, list):
-            features_final = [features_final]
+            features_final = features_final.tolist()
     except Exception as e:
         logging.error(f"Error while scoring or getting feature count: {e}")
         return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
