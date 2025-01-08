@@ -46,6 +46,63 @@ class UniNode(BaseEstimator, TransformerMixin, ABC):
     def fit_transform(self, X, y=None):
         self.fit(X, y)
         return self.transform(X)
+    
+class UniAdditiveNode(UniNode):
+    def fit(self, X, y=None):
+        # Get the snp columns from the input data
+        if isinstance(X, pd.DataFrame):
+            snp = X.iloc[:, self.snp_pos]
+        else:
+            snp = X[:, self.snp_pos]
+
+        # no changes required for the snp
+        self.mapping = {0:0, 0.5: 0.5, 1: 1} # will be used in the transform and predict methods
+
+        snp = snp.replace(self.mapping)
+
+        # Store the result in self.encoded_feature for training data
+        self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
+
+        # Mark the node as fitted
+        self.fit_flag = True
+
+        return self
+
+    def transform(self, X):
+        # Always recompute the epistatic feature, regardless of train or validation data
+        if isinstance(X, pd.DataFrame):
+            snp = X.iloc[:, self.snp_pos]
+        else:
+            snp = X[:, self.snp_pos]
+
+        snp = snp.replace(self.mapping)
+
+        # Store the result in self.encoded_feature for training data
+        self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
+
+        # Return the computed feature for this dataset
+        return np.array(snp.astype(np.float32), dtype=np.float32).reshape(-1, 1)
+
+    def predict(self, X):
+        # does the same operation as fit but with the test data
+        if self.fit_flag == False:
+            raise ValueError("Model not fitted yet. Please fit the model first")
+                # Get the snp columns from the input data
+        if isinstance(X, pd.DataFrame):
+            snp = X.iloc[:, self.snp_pos]
+        else:
+            snp = X[:, self.snp_pos]
+
+
+        snp = snp.replace(self.mapping)
+
+        # Store the result in self.encoded_feature for training data
+        self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
+
+        return self.encoded_feature.reshape(-1, 1)
+
+    def get_encoder(self) -> np.str_:
+        return np.str_("additive")
 
 class UniDominantNode(UniNode):
     def fit(self, X, y=None):

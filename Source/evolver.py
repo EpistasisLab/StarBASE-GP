@@ -21,7 +21,7 @@ import copy as cp
 from sklearn.metrics import r2_score
 
 from .uni_node import UniNode
-from .uni_node import UniDominantNode, UniRecessiveNode, UniHeterosisNode, UniUnderDominantNode, UniSubadditiveNode, UniSuperadditiveNode, UniPAGERNode
+from .uni_node import UniAdditiveNode, UniDominantNode, UniRecessiveNode, UniHeterosisNode, UniUnderDominantNode, UniSubadditiveNode, UniSuperadditiveNode, UniPAGERNode
 
 from .scikit_node import ScikitNode, LDSelector
 from sklearn.pipeline import Pipeline as SklearnPipeline
@@ -77,7 +77,8 @@ def ray_uni_eval(x_train,
     best_res = -1.0
 
     # holds all lo's we are going to evaluate
-    unis = {np.str_('dominant'): UniDominantNode,
+    unis = {np.str_('additive'): UniAdditiveNode,
+            np.str_('dominant'): UniDominantNode,
             np.str_('recessive'): UniRecessiveNode,
             np.str_('heterosis'): UniHeterosisNode,
             np.str_('underdominant'): UniUnderDominantNode,
@@ -918,7 +919,9 @@ class EA:
             # get each snps position in the hub
             snp_pos = self.hubs.get_snp_pos(snp_name)
 
-            if uni_type == np.str_('dominant'):
+            if uni_type == np.str_('additive'):
+                uni_nodes.append(UniAdditiveNode(name=f"UniAdditiveNode_{id}", snp_name=snp_name, snp_pos=snp_pos))
+            elif uni_type == np.str_('dominant'):
                 uni_nodes.append(UniDominantNode(name=f"UniDominantNode_{id}", snp_name=snp_name, snp_pos=snp_pos))
             elif uni_type == np.str_('recessive'):
                 uni_nodes.append(UniRecessiveNode(name=f"UniRecessiveNode_{id}", snp_name=snp_name, snp_pos=snp_pos))
