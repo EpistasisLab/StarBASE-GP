@@ -155,7 +155,13 @@ class Reproduction:
                 p_id += 1
             # crossover only
             elif op == 'c':
-                offspring.append(self.crossover(rng, population[parent_ids[p_id]], population[parent_ids[p_id+1]], hub))
+                off = self.crossover(rng, population[parent_ids[p_id]], population[parent_ids[p_id+1]], hub)
+
+                # coin flip to decide if we should mutate the offspring
+                if rng.choice([True, False], p=[self.mut_prob, 1.0-self.mut_prob]):
+                    off = self.mutate(rng, off, hub)
+
+                offspring.append(off)
                 p_id += 2
             else:
                 raise ValueError(f"Unknown operator: {op}")
@@ -295,22 +301,24 @@ class Reproduction:
         p1_snps = cp.deepcopy(parent1.get_uni_snps())
         p2_snps = cp.deepcopy(parent2.get_uni_snps())
         combined_snps = p1_snps.union(p2_snps)
+        assert self.uni_cnt_min <= len(combined_snps)
         snps = None
 
-        # if the combined snps is greater than the maximum allowed, we smaple the maximum allowed
-        if len(combined_snps) > self.uni_cnt_max:
-            # roll to see if we should randomly sample or use r2 to sample
-            if rng.choice([True, False], p=[self.mut_smt_p / (self.mut_smt_p + self.mut_ran_p), self.mut_ran_p / (self.mut_smt_p + self.mut_ran_p)]):
-                # collect all snps r2 to sample based of that
-                r2 = np.array([hub.get_uni_res(snp) for snp in combined_snps], dtype=np.float32)
-                r2 = r2 / np.sum(r2, dtype=np.float32)
+        # sample a range between the minimum and maximum allowed
+        size = rng.integers(self.uni_cnt_min, self.uni_cnt_max, endpoint=True)
 
-                # sample the snps
-                snps = rng.choice(list(combined_snps), self.uni_cnt_max, replace=False, p=r2)
-            else:
-                snps = rng.choice(list(combined_snps), self.uni_cnt_max, replace=False)
-        else:
+        # if the combined snps is greater than the maximum allowed, we smaple the maximum allowed
+        if len(combined_snps) < size:
             snps = combined_snps
+        elif rng.choice([True, False], p=[self.mut_smt_p / (self.mut_smt_p + self.mut_ran_p), self.mut_ran_p / (self.mut_smt_p + self.mut_ran_p)]):
+            # collect all snps r2 to sample based of that
+            r2 = np.array([hub.get_uni_res(snp) for snp in combined_snps], dtype=np.float32)
+            r2 = r2 / np.sum(r2, dtype=np.float32)
+
+            # sample the snps
+            snps = rng.choice(list(combined_snps), size, replace=False, p=r2)
+        else:
+            snps = rng.choice(list(combined_snps), size, replace=False)
 
         return Pipeline(uni_snps=set(snps),
                         selector_node=cp.deepcopy(parent1.get_selector_node()) if rng.choice([True, False]) else cp.deepcopy(parent2.get_selector_node()),

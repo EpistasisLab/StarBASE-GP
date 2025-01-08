@@ -41,6 +41,9 @@ snp_hub_cnt_t = np.uint32
 # header position
 snp_hub_pos_t = np.uint32
 
+# generation found/pruned type
+snp_hub_gen_t = np.int32
+
 # best individual r2 value type
 snp_hub_res_t = np.float32
 # best encoder type (in str)
@@ -151,19 +154,23 @@ class SnpHub:
             assuming that all snps are already in the hub
             if we get a snp that is not in the hub, we throw an error in debug mode
 
-               res_pos = 0 # position for r2 recived from evaluation
-               bin_pos = 1 # id for bin assigned to
-               idx_pos = 2 # position for bin number in hub value list
-               pos_pos = 3 # position for header position in hub value list
-               enc_pos = 4 # position for the corresponding encoder types in hub value list
-              seen_pos = 5 # position for the seen flag in hub value list
-            pruned_pos = 6 # position for the pruned flag in hub value list
+                   res_pos = 0 # position for r2 recived from evaluation
+                   bin_pos = 1 # id for bin assigned to
+                   idx_pos = 2 # position for bin number in hub value list
+                   pos_pos = 3 # position for header position in hub value list
+                   enc_pos = 4 # position for the corresponding encoder types in hub value list
+                  seen_pos = 5 # position for the seen flag in hub value list
+                pruned_pos = 6 # position for the pruned flag in hub value list
+              gen_seen_pos = 7 # position for the general seen flag in hub value list
+            gen_pruned_pos = 8 # position for the general pruned flag in hub value list
             """
 
-            # {snp: [res(np.float32),bin(np.uint32),idx(np.uint32),pos(np.uint32),enc(np.str_),seen(bool)],...}
+            # {snp: [res(np.float32),bin(np.uint32),idx(np.uint32),
+            # pos(np.uint32),enc(np.str_),seen(bool)], prunned(bool),
+            # gen_seen(np.unit32), gen_prunned(np.unit32)}
             self.hub = {}
 
-        # will add snp, sum, bin, pos， idx, res, typ to the hub #YF
+        # will add snp, sum, bin, pos， idx, res, typ to the hub
         def add_to_hub(self,
                        snp: snp_t,
                        res: snp_hub_res_t,
@@ -171,7 +178,10 @@ class SnpHub:
                        idx: snp_hub_idx_t,
                        pos: snp_hub_pos_t,
                        enc: snp_hub_enc_t,
-                       seen=False, prunned=False) -> None:
+                       seen=False,
+                       prunned=False,
+                       gen_seen: snp_hub_gen_t=snp_hub_gen_t(-1),
+                       gen_pruned:snp_hub_gen_t=snp_hub_gen_t(-1)) -> None:
             """
             will take in a snp, sum, cnt, bin, and pos and add it to the hub
 
@@ -183,10 +193,13 @@ class SnpHub:
                 pos (snp_hub_pos_t): position of the snp in the csv header
                 enc (snp_hub_enc_t): best encoder type placeholder, default = ''
                 seen (bool): has this snp been seen before, default = False
+                prunned (bool): has this snp been prunned, default = False
+                gen_seen (snp_hub_gen_t): generation seen, default = -1
+                gen_prunned (snp_hub_gen_t): generation prunned, default = -1
             """
 
             # add to hub
-            self.hub[snp] = [res,bin,idx,pos,enc,seen,prunned]
+            self.hub[snp] = [res,bin,idx,pos,enc,seen,prunned,gen_seen,gen_pruned]
             return
 
         # get snp result r^2
@@ -239,7 +252,7 @@ class SnpHub:
             return self.hub[snp][6]
 
         # flip the prunned flag
-        def flip_prunned(self, snp: snp_t) -> None:
+        def flip_prunned(self, snp: snp_t, gen_pruned: snp_hub_gen_t) -> None:
             # check snp exists in the hub
             assert snp in self.hub
             # make sure we have not seen this snp before
@@ -247,6 +260,9 @@ class SnpHub:
 
             # flip the flag
             self.hub[snp][6] = True
+            # record the generation prunned
+            self.hub[snp][8] = gen_pruned
+
             return
 
         # flip the seen flag
@@ -262,7 +278,7 @@ class SnpHub:
 
         # update snp hub with the r2 and encoding type
         # assuming that this only gets called once per snp
-        def update_snp(self, snp: snp_t, value: np.float32, encoding:np.str_) -> None:
+        def update_snp(self, snp: snp_t, value: np.float32, encoding:np.str_, gen_seen: snp_hub_gen_t) -> None:
             # assert that snp is in hub
             assert snp in self.hub
             # make sure we have not seen this snp before
@@ -274,6 +290,8 @@ class SnpHub:
             self.hub[snp][0] = value
             # update the encoder type
             self.hub[snp][4] = encoding
+            # update the generation seen
+            self.hub[snp][7] = gen_seen
 
             return
 
@@ -653,7 +671,9 @@ class SnpHub:
                                 pos=h_pos,
                                 enc=snp_hub_enc_t(''),
                                 seen=False,
-                                prunned=False)
+                                prunned=False,
+                                gen_seen=snp_hub_gen_t(-1),
+                                gen_pruned=snp_hub_gen_t(-1))
         print('SNP Hub Initialized')
         return
 
@@ -668,19 +688,21 @@ class SnpHub:
     # save the epi_hub and snp_hub to a file
     def save_hubs(self, save_dir: str) -> None:
         """
-           res_pos = 0 # position for r2 recived from evaluation
-           bin_pos = 1 # id for bin assigned to
-           idx_pos = 2 # position for bin number in hub value list
-           pos_pos = 3 # position for header position in hub value list
-           enc_pos = 4 # position for the corresponding encoder types in hub value list
-          seen_pos = 5 # position for the seen flag in hub value list
-        pruned_pos = 6 # position for the pruned flag in hub value list
+               res_pos = 0 # position for r2 recived from evaluation
+               bin_pos = 1 # id for bin assigned to
+               idx_pos = 2 # position for bin number in hub value list
+               pos_pos = 3 # position for header position in hub value list
+               enc_pos = 4 # position for the corresponding encoder types in hub value list
+              seen_pos = 5 # position for the seen flag in hub value list
+            pruned_pos = 6 # position for the pruned flag in hub value list
+          gen_seen_pos = 7 # position for the seen flag in hub value list
+        gen_pruned_pos = 8 # position for the pruned flag in hub value list
         """
 
         # Save snp hub with headers
         snp_data = []
         for k, v in self.hub.hub.items():
-            snp_data.append([k, v[0], v[1], v[2], v[3], v[4], v[5], v[6]])
+            snp_data.append([k, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]])
 
         # Sort snp_data by the second column (AVG_R2)
         snp_data.sort(key=lambda x: x[1], reverse=True)  # reverse=True for descending order
@@ -688,11 +710,11 @@ class SnpHub:
         # Write snp hub to file
         with open(save_dir+"snp_hub.csv", 'w') as f:
             # Write the headers for the snp_file
-            f.write("snp,chr,bp,r2,bin_num,bin_idx,encoding,seen,pruned\n")
+            f.write("snp,chr,bp,r2,bin_num,bin_idx,encoding,seen,pruned,gen_seen,gen_pruned\n")
             for row in snp_data:
                 # split snp into chromosome and position
                 chrom, pos = row[0].split('.')
-                f.write(f"{row[0]},{chrom},{pos},{row[1]},{row[2]},{row[4]},{row[5]},{row[6]},{row[7]}\n")
+                f.write(f"{row[0]},{chrom},{pos},{row[1]},{row[2]},{row[4]},{row[5]},{row[6]},{row[7]},{row[8]},{row[9]}\n")
 
         # save csv with both seen and not prunned snps
         # Write snp hub to file
@@ -705,8 +727,8 @@ class SnpHub:
         return
 
     # update snp hub with best univariate r2 result and corresponding encoder type
-    def update_snp_hub(self, snp:snp_t, result:snp_hub_res_t, type: snp_hub_enc_t) -> None:
-        self.hub.update_snp(snp, result, type)
+    def update_snp_hub(self, snp:snp_t, result:snp_hub_res_t, type: snp_hub_enc_t, gen_seen: snp_hub_gen_t) -> None:
+        self.hub.update_snp(snp, result, type, gen_seen)
         return
 
     # check if snp has encoder type recorded in the snp hub
@@ -1026,14 +1048,14 @@ class SnpHub:
         return self.hub.has_been_prunned(snp)
 
     # process the prunned snps
-    def process_prunned_snps(self, snps: Set[snp_t]) -> None:
+    def process_prunned_snps(self, snps: Set[snp_t], gen_pruned: snp_hub_gen_t) -> None:
         # go through each snp and update the hub
         for snp in snps:
             # check to make sure we have not prunned this snp before
             assert self.hub.has_been_prunned(snp) == False
 
             # flip snp to prunned
-            self.hub.flip_prunned(snp)
+            self.hub.flip_prunned(snp, gen_pruned)
 
             # delete snp from non pruned
             self.non_pruned.remove_snp(snp)
@@ -1044,6 +1066,17 @@ class SnpHub:
         assert len(snps) > 0
 
         return [(snp, self.get_uni_res(snp)) for snp in snps]
+
+    # check if all snps have been prunned
+    def all_snps_prunned(self, snps: Set[snp_t]) -> bool:
+
+        # if any snps has not been prunned return False
+        for snp in snps:
+            if self.hub.has_been_prunned(snp) == False:
+                return False
+
+        # return true if all snps have been prunned
+        return True
 
     # print size of non pruned hub
     def pruned_hub_size(self) -> np.uint32:

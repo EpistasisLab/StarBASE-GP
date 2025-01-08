@@ -61,6 +61,8 @@ feature_names_t = List
 pop_id_t = np.uint16
 # diversity score type
 div_t = np.float32
+# snp hub generation type
+snp_hub_gen_t = np.int32
 
 # evaluate unseen snps
 @ray.remote
@@ -596,20 +598,13 @@ class EA:
             assert len(offspring) + len(self.population) == 2 * self.pop_size
 
             # process offspring: evaluation interactions and remove bad interactions
-            offspring = self.process_offspring(offspring)
+            offspring = self.process_offspring(offspring, snp_hub_gen_t(g))
 
             # evaluate the offspring
-            self.evaluation(offspring)
-
-            # subset the population to only include pipelines with positive r2 scores
-            off = []
-            for pipeline in offspring:
-                if pipeline.get_trait_r2() > 0.0:
-                    off.append(pipeline)
-            offspring = off
+            offspring = self.evaluation(offspring, snp_hub_gen_t(g))
 
             # must be less than or equal bc of potential negative r2 offspring pipelines
-            assert len(offspring) + len(self.population) <= 2 * self.pop_size
+            assert (0 < len(offspring) + len(self.population) <= 2 * self.pop_size)
 
             # survival selection
             self.population = self.survival_selection(self.population, offspring)
@@ -742,10 +737,10 @@ class EA:
             pop_univariate_sets.append(snps)
 
         # make sure we have the correct number of interactions
-        assert len(self.population) == self.pop_size
+        assert len(pop_univariate_sets) == self.pop_size
 
         # evaluate all unseen interactions
-        self.evaluate_unseen_snps(unseen_snps)
+        self.evaluate_unseen_snps(unseen_snps, snp_hub_gen_t(0))
 
         # remove bad snps for each pipeline's set of snps
         for snps in pop_univariate_sets:
@@ -766,22 +761,15 @@ class EA:
         assert (0 < len(self.population) <= self.pop_size)
 
         # evaluate the initial population
-        self.evaluation(self.population)
+        self.population = self.evaluation(self.population, snp_hub_gen_t(0))
 
-        # subset the population to only include pipelines with positive r2 scores
-        pop = []
-        for pipeline in self.population:
-            # print("Pipeline r2 score: ", pipeline.get_trait_r2())
-            # print("Pipeline feature count: ", pipeline.get_trait_feature_cnt())
-            # print("SNPs selected by the LD node: ", len(pipeline.get_ld_node().selected_features_))
-            if pipeline.get_trait_r2() > 0.0:
-                pop.append(pipeline)
-        self.population = pop
+        # make sure we have the correct number of pipelines
+        assert (0 < len(self.population) <= self.pop_size)
 
         return
 
     # evaluate all unevaluated snps and update
-    def evaluate_unseen_snps(self, unseen_snps: Set) -> None:
+    def evaluate_unseen_snps(self, unseen_snps: Set, gen_seen: snp_hub_gen_t) -> None:
         """
         Function to evaluate all unseen snps and add their best R2 and Encoder type to the SnpHub.
         All of this should be done in asyncronous parallel jobs.
@@ -806,7 +794,7 @@ class EA:
         while len(ray_jobs) > 0:
             finished, ray_jobs = ray.wait(ray_jobs)
             r2, type, snp_name = ray.get(finished)[0]
-            self.hubs.update_snp_hub(snp_name, r2, type)
+            self.hubs.update_snp_hub(snp_name, r2, type, gen_seen)
 
     # remove bad snps (r2 < 0)
     def remove_bad_snps(self, snps: Set) -> Set:
@@ -835,7 +823,7 @@ class EA:
             p.print_pipeline()
 
     # evaluate the population                                   # r2 , feature count, pop_id
-    def evaluation(self, pop: List[Pipeline]) -> None:
+    def evaluation(self, pop: List[Pipeline], gen_pruned: snp_hub_gen_t) -> List[Pipeline]:
         """
         Function to evaluate entire pipelines.
         We will evaluate all unseen interactions and snps and add them to the SnpHub.
@@ -887,15 +875,23 @@ class EA:
             # update the pipeline
             pop[pop_id].set_traits([r2, feature_count, set(feature_names)])
 
-
             new_snp = set(snp for snp in pruned
                             if not self.hubs.has_been_prunned(snp))
             prunned_snps.update(new_snp)
 
         # process prunned snps
-        self.hubs.process_prunned_snps(prunned_snps)
+        self.hubs.process_prunned_snps(prunned_snps, gen_pruned)
 
-        print('non pruned hub size:' ,self.hubs.pruned_hub_size())
+        # collect only pipelines that do not consist of only prunned snps
+        new_pop = []
+
+        for pipeline in pop:
+            if self.hubs.all_snps_prunned(pipeline.get_uni_snps()) == False and pipeline.get_trait_r2() > 0.0:
+                new_pop.append(pipeline)
+
+        print('non pruned hub size:' , self.hubs.pruned_hub_size())
+
+        return new_pop
 
     # construct uni_nodes for a pipeline's set of individual snps
     def construct_uni_nodes(self, uni_snps: Set) -> List[UniNode]:
@@ -967,12 +963,12 @@ class EA:
         return parent_ids
 
     # process offspring: evaluate new snps, remove bad snps, and create pipelines with good snps
-    def process_offspring(self, pipelines: List[Pipeline]) -> List[Pipeline]:
+    def process_offspring(self, pipelines: List[Pipeline], gen_found: snp_hub_gen_t) -> List[Pipeline]:
         # get unseen interactions
         unseen_snps = self.get_unseen_univariates(pipelines)
 
         # evaluate all unseen interactions
-        self.evaluate_unseen_snps(unseen_snps)
+        self.evaluate_unseen_snps(unseen_snps, gen_found)
 
         # remove bad interactions for each pipeline's set of interactions
         updated_pipelines = []
