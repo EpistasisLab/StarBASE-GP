@@ -191,10 +191,6 @@ class Reproduction:
         # get parent uni snps
         parent_uni_snps = cp.deepcopy(parent.get_uni_snps())
 
-        # delete snps that have been pruned before
-        # possible to have less than the minimum
-        parent_uni_snps = self.delete_pruned_snps(parent_uni_snps, hub)
-
         # get the number of snps to add
         snps_to_add = self.num_snps_to_add(rng, parent_uni_snps)
 
@@ -222,20 +218,6 @@ class Reproduction:
 
         return offspring
 
-    # delete snps that have been pruned before
-    def delete_pruned_snps(self,
-                        uni_snps: snps_t,
-                        hub: SnpHub) -> snps_t:
-
-        # get the set of snps that have not been pruned
-        not_pruned_snps = set()
-
-        for snp in uni_snps:
-            if hub.has_been_prunned(snp) == False:
-                not_pruned_snps.add(snp)
-
-        return not_pruned_snps
-
     # add a set of snps: smart or random addition depends on the probabilities
     def num_snps_to_add(self,
                     rng: rng_t,
@@ -246,7 +228,7 @@ class Reproduction:
 
         # get a number of interactions to add based on self.epi_cnt_max and self.epi_cnt_min
         if len(uni_snps) < self.uni_cnt_min:
-            num_add_range = np.uint16(self.uni_cnt_min - len(uni_snps))
+            return np.uint16(rng.integers(self.uni_cnt_min - len(uni_snps), self.uni_cnt_max - len(uni_snps), endpoint=False))
         else:
             num_add_range = np.uint16(max(self.uni_cnt_max - len(uni_snps), 0))
 
@@ -255,7 +237,7 @@ class Reproduction:
             return np.uint16(num_add_range)
         # else pick a number between the range and 1 (range < self.num_add_interactions)
         else:
-            return np.uint16(rng.integers(1, num_add_range, endpoint=True))
+            return np.uint16(rng.integers(1, num_add_range, endpoint=False))
 
     def get_ran_snp_mut(self, rng_: rng_t, snp_name: snp_t, hub: SnpHub) -> snp_t:
         # set the random number generator
@@ -301,14 +283,15 @@ class Reproduction:
         p1_snps = cp.deepcopy(parent1.get_uni_snps())
         p2_snps = cp.deepcopy(parent2.get_uni_snps())
         combined_snps = p1_snps.union(p2_snps)
-        assert self.uni_cnt_min <= len(combined_snps)
         snps = None
 
         # sample a range between the minimum and maximum allowed
         size = rng.integers(self.uni_cnt_min, self.uni_cnt_max, endpoint=True)
 
         # if the combined snps is greater than the maximum allowed, we smaple the maximum allowed
-        if len(combined_snps) < size:
+        if len(combined_snps) < self.uni_cnt_min:
+            snps = combined_snps
+        elif len(combined_snps) < size:
             snps = combined_snps
         elif rng.choice([True, False], p=[self.mut_smt_p / (self.mut_smt_p + self.mut_ran_p), self.mut_ran_p / (self.mut_smt_p + self.mut_ran_p)]):
             # collect all snps r2 to sample based of that

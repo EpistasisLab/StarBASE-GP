@@ -200,7 +200,6 @@ def ray_eval_pipeline_new_order(x_train,
     # return the pipeline
     return r2_t(r2_score), feature_cnt_t(feature_count), pop_id, snp_name_t(one_snp_only_pipeline), [snp_name_t(k) for k,v in ld_node.snp_details_after_ld.items() if v == True], features_final
 
-
 @ray.remote
 def ray_eval_pipeline(x_train,
                       y_train,
@@ -603,6 +602,9 @@ class EA:
             # evaluate the offspring
             offspring = self.evaluation(offspring, snp_hub_gen_t(g))
 
+            # remove bad snps from the offspring
+            offspring = self.clean_pipeline_post_eval(offspring)
+
             # must be less than or equal bc of potential negative r2 offspring pipelines
             assert (0 < len(offspring) + len(self.population) <= 2 * self.pop_size)
 
@@ -763,6 +765,9 @@ class EA:
         # evaluate the initial population
         self.population = self.evaluation(self.population, snp_hub_gen_t(0))
 
+        # remove bad snps from the population
+        self.population = self.clean_pipeline_post_eval(self.population)
+
         # make sure we have the correct number of pipelines
         assert (0 < len(self.population) <= self.pop_size)
 
@@ -796,7 +801,7 @@ class EA:
             r2, type, snp_name = ray.get(finished)[0]
             self.hubs.update_snp_hub(snp_name, r2, type, gen_seen)
 
-    # remove bad snps (r2 < 0)
+    # remove bad snps: r2 < 0 and snp has been prunned
     def remove_bad_snps(self, snps: Set) -> Set:
         """
         Function to remove bad snps with r2<0 for a given set of snps
@@ -807,7 +812,7 @@ class EA:
         good_snps = set()
         for snp_name in snps:
             # check if r2 is positive
-            if self.hubs.get_uni_res(snp_name) > np.float32(0.0):
+            if self.hubs.get_uni_res(snp_name) > np.float32(0.0) and self.hubs.has_been_prunned(snp_name) == False:
                 # add to good snps
                 good_snps.add(snp_name)
         # return the good snps
@@ -985,6 +990,24 @@ class EA:
                                               ld_node=pipeline.get_ld_node(),
                                               root_node=pipeline.get_root_node(),
                                               traits=[]))
+        return updated_pipelines
+
+    def clean_pipeline_post_eval(self, pipelines: List[Pipeline]) -> List[Pipeline]:
+        # remove bad interactions for each pipeline's set of interactions
+        updated_pipelines = []
+        for pipeline in pipelines:
+            # remove bad snps and make sure more than 0 snps are left
+            good_snps = self.remove_bad_snps(pipeline.get_uni_snps())
+
+            if len(good_snps) == 0:
+                # skip this iteration if there are no good snps
+                continue
+
+            updated_pipelines.append(Pipeline(uni_snps=good_snps,
+                                              selector_node=pipeline.get_selector_node(),
+                                              ld_node=pipeline.get_ld_node(),
+                                              root_node=pipeline.get_root_node(),
+                                              traits=pipeline.get_traits()))
         return updated_pipelines
 
     def get_unseen_univariates(self, pipelines: List[Pipeline]) -> Set[snp_name_t]:
