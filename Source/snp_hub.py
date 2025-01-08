@@ -144,6 +144,14 @@ class SnpHub:
                 sum += len(pos_l)
             return np.uint32(sum)
 
+        # get list of keys with at least one snp
+        def get_keys_with_snps(self) -> List[gen_chrom_num_t]:
+            keys = []
+            for k, v in self.non_pruned.items():
+                if len(v) > 0:
+                    keys.append(k)
+            return keys
+
     class Hub:
         """
         Hub to keep track of snp weights.
@@ -292,6 +300,10 @@ class SnpHub:
             self.hub[snp][4] = encoding
             # update the generation seen
             self.hub[snp][7] = gen_seen
+
+            # if value is negative, set as prunned
+            if value < 0.0:
+                self.flip_prunned(snp, gen_seen)
 
             return
 
@@ -722,7 +734,7 @@ class SnpHub:
             # Write the headers for the snp_file
             f.write("snp,r2,encoding\n")
             for row in snp_data:
-                if row[6] == True and row[7] == False and row[1] > np.float32(0.0):
+                if row[6] == True and row[7] == False:
                     f.write(f"{row[0]},{row[1]},{row[5]}\n")
         return
 
@@ -748,7 +760,7 @@ class SnpHub:
         rng = np.random.default_rng(rng_)
 
         # break snp into chromosome and position
-        chrom, pos = self.bins.snp_chrm_pos(snp)
+        chrom, _ = self.bins.snp_chrm_pos(snp)
 
         # get the bin number for the snp
         bin_id = self.hub.get_snp_bin(snp)
@@ -767,10 +779,6 @@ class SnpHub:
                 snps.append(s)
                 r2.append(self.hub.get_uni_res(s))
 
-        # get all snps and r2 scores for a given snp within the same chorosome and bin
-        # snps, r2 = self.bins.get_snps_r2_in_bin(snp, self.hub)
-        # assert(len(snps) == len(r2))
-
         # if no snps were returned, return a random one
         if len(snps) == 0:
             return self.get_ran_snp_in_bin(snp, rng)
@@ -786,7 +794,7 @@ class SnpHub:
             choice = rng.choice(snps, p=r2)
 
         # get a random snp based on r2 scores as weights
-        return choice
+        return snp
 
     # get a random snp from the same chromosome and bin
     def get_ran_snp_in_bin(self, snp: snp_t, rng_: rng_t) -> snp_t:
@@ -797,23 +805,41 @@ class SnpHub:
         rng = np.random.default_rng(rng_)
 
         # break snp into chromosome and position
-        chrom, pos = self.bins.snp_chrm_pos(snp)
+        chrom, _ = self.bins.snp_chrm_pos(snp)
 
         # get the bin number for the snp
         bin_id = self.hub.get_snp_bin(snp)
 
+        # get actual bin from Bin class
+        bin = self.bins.get_bin(chrom, bin_id)
+
+        # collect all snps that have (not prunned and seen) or (r2 > 0.0 and seen)
+        snps = []
+        for p in bin:
+            s = snp_t(f"{chrom}.{p}")
+
+            # not seen
+            not_seen = self.hub.has_been_seen(s) == False
+            # r2 > 0.0 and seen and not prunned
+            seen_r2_np = self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_seen(s) and self.hub.has_been_prunned(s) == False
+
+            if (not_seen or seen_r2_np) and s != snp:
+                snps.append(s)
+
+        # if no snps were collected, it's the best in the bin
+        if len(snps) == 0:
+            return snp
+
         # try to get a random snp position that is not the same as the input snp
-        choice = rng.choice(self.bins.get_bin(chrom, bin_id))
-        s = snp_t(f"{chrom}.{choice}")
+        choice = rng.choice(snps)
 
         for _ in range(mutation_tries):
-            if s != snp:
+            if choice != snp:
                 return s
-            choice = rng.choice(self.bins.get_bin(chrom, bin_id))
-            s = snp_t(f"{chrom}.{choice}")
+            choice = rng.choice(snps)
 
         # get a random snp based
-        return choice
+        return snp
 
     # geta snp from the same chromosome but different bin
     def get_smt_snp_in_chrm(self, snp: snp_t, rng_: rng_t) -> snp_t:
@@ -821,7 +847,7 @@ class SnpHub:
         rng = np.random.default_rng(rng_)
 
         # break snp into chromosome and position
-        chrom, pos = self.bins.snp_chrm_pos(snp)
+        chrom, _ = self.bins.snp_chrm_pos(snp)
 
         # get bin id for the snp
         bin_id = self.hub.get_snp_bin(snp)
@@ -840,10 +866,6 @@ class SnpHub:
 
         r2 = r2 / np.sum(r2, dtype=np.float32)
 
-        # # get all snps and r2 scores for a given snp within the same chorosome and bin
-        # snps, r2 = self.bins.get_snps_r2_in_chrom(snp, self.hub)
-        # assert(len(snps) == len(r2))
-
         # if no snps were returned, return a random one
         if len(snps) == 0:
             return self.get_ran_snp_in_chrm(snp, rng)
@@ -858,7 +880,7 @@ class SnpHub:
             choice = rng.choice(snps, p=r2)
 
         # get a random snp based on r2 scores as weights
-        return choice
+        return snp
 
     # get a random snp from the same chromosome but different bin
     def get_ran_snp_in_chrm(self, snp: snp_t, rng_: rng_t) -> snp_t:
@@ -869,7 +891,7 @@ class SnpHub:
         rng = np.random.default_rng(rng_)
 
         # break snp into chromosome and position
-        chrom, pos = self.bins.snp_chrm_pos(snp)
+        chrom, _ = self.bins.snp_chrm_pos(snp)
 
         # get bin id for the snp
         bin_id = self.hub.get_snp_bin(snp)
@@ -879,23 +901,30 @@ class SnpHub:
 
         # loop through all non prunned snps and collect the ones with r2 > 0.0 and not prunned
         for pos in self.non_pruned.non_pruned[chrom]:
+            # make snps
             s = snp_t(f"{chrom}.{pos}")
+            # not seen
+            not_seen = self.hub.has_been_seen(s) == False
+            # r2 > 0.0 and seen and not prunned
+            seen_r2_np = self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_seen(s) and self.hub.has_been_prunned(s) == False
 
-            if self.hub.get_snp_bin(s) != bin_id:
-            # if self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_seen(s) and self.hub.get_snp_bin(s) != bin_id:
+            if (not_seen or seen_r2_np) and self.hub.get_snp_bin(s) != bin_id:
                 snps.append(s)
+
+        # if no snps were collected, it's the best in the chormosome
+        if len(snps) == 0:
+            return snp
 
         # try to get a random snp that is not the same as the input snp
         choice = rng.choice(snps)
-        # choice = self.bins.get_ran_snp_in_chrom(snp, rng, self.hub)
 
         for _ in range(mutation_tries):
             if choice != snp:
                 return choice
             choice = rng.choice(snps)
 
-        # get a random snp based
-        return choice
+        # return same snp
+        return snp
 
     # get a snp from outside the chromosome with r2 > 0.0 based on r2 weight
     def get_smt_snp_out_chrm(self, snp: snp_t, rng_: rng_t) -> snp_t:
@@ -909,10 +938,11 @@ class SnpHub:
         chrom, pos = self.bins.snp_chrm_pos(snp)
 
         # get keys for non pruned snps
-        chrom_keys = list(self.non_pruned.non_pruned.keys())
+        chrom_keys = self.non_pruned.get_keys_with_snps()
 
         # remove the current chromosome from the list
-        chrom_keys.remove(chrom)
+        if chrom in chrom_keys:
+            chrom_keys.remove(chrom)
 
         # randomly select a chromosome
         c_pic = rng.choice(chrom_keys)
@@ -931,10 +961,6 @@ class SnpHub:
 
         r2 = r2 / np.sum(r2, dtype=np.float32)
 
-        # get all snps and r2 scores for a given snp within the same chorosome and bin
-        # snps, r2 = self.bins.get_snps_r2_out_chrom(snp, self.hub)
-        # assert(len(snps) == len(r2))
-
         # if no snps were returned, return a random one
         if len(snps) == 0:
             return self.get_ran_snp_out_chrm(snp, rng)
@@ -949,7 +975,7 @@ class SnpHub:
             choice = rng.choice(snps, p=r2)
 
         # get a random snp based on r2 scores as weights
-        return choice
+        return snp
 
     # get random snp from outside the chromosome
     def get_ran_snp_out_chrm(self, snp: snp_t, rng_: rng_t) -> snp_t:
@@ -960,13 +986,14 @@ class SnpHub:
         rng = np.random.default_rng(rng_)
 
         # split up the snp into chromosome and position
-        chrom, pos = self.bins.snp_chrm_pos(snp)
+        chrom, _ = self.bins.snp_chrm_pos(snp)
 
         # get keys for non pruned snps
-        chrom_keys = list(self.non_pruned.non_pruned.keys())
+        chrom_keys = self.non_pruned.get_keys_with_snps()
 
         # remove the current chromosome from the list
-        chrom_keys.remove(chrom)
+        if chrom in chrom_keys:
+            chrom_keys.remove(chrom)
 
         # randomly select a chromosome
         c_pic = rng.choice(chrom_keys)
@@ -976,11 +1003,19 @@ class SnpHub:
 
         # loop through all non prunned snps and collect them
         for pos in self.non_pruned.non_pruned[c_pic]:
+            # make snps
             s = snp_t(f"{c_pic}.{pos}")
-            snps.append(s)
+            # not seen
+            not_seen = self.hub.has_been_seen(s) == False
+            # r2 > 0.0 and seen and not prunned
+            seen_r2_np = self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_seen(s) and self.hub.has_been_prunned(s) == False
 
-            # if self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_seen(s):
-                # snps.append(s)
+            if (not_seen or seen_r2_np):
+                snps.append(s)
+
+        # if no snps were collected, it's the best overall
+        if len(snps) == 0:
+            return snp
 
         # try to get a random snp that is not the same as the input snp
         choice = rng.choice(snps)
@@ -989,7 +1024,8 @@ class SnpHub:
             if choice != snp:
                 return choice
             choice = rng.choice(snps)
-        return choice
+
+        return snp
 
     # get a random snp from all possible snps
     def get_ran_snp(self, rng_: rng_t, snp = None) -> snp_t:
@@ -1014,31 +1050,6 @@ class SnpHub:
             # choice = self.bins.get_ran_snp(rng)
 
         return choice
-
-    # get snp from hub based on r2 weight
-    # this is only called for to get the first snp -- no need to check if snp is the same
-    def get_smt_snp(self, rng:rng_t):
-        # call snp hub to get snps and r2 scores based on r2 weight > 0 and count > 0
-        # snps, r2 = self.hub.get_snp_r2_weighted()
-
-        # collect all snps with r2 > 0.0 from the non pruned hub
-        snps = []
-        r2 = []
-
-        # go through snps from the non pruned hub and collect the ones with r2 > 0.0
-        for chrom in self.non_pruned.non_pruned.keys():
-            for pos in self.non_pruned.non_pruned[chrom]:
-                s = snp_t(f"{chrom}.{pos}")
-
-                if self.hub.get_uni_res(s) > np.float32(0.0) and self.hub.has_been_seen(s):
-                    snps.append(s)
-                    r2.append(self.hub.get_uni_res(s))
-
-        # if no snps were returned, return a random one
-        if len(snps) == 0:
-            return self.get_ran_snp(rng, None)
-        # else return a random snp based on r2 scores as weights
-        return rng.choice(snps, p=r2 / np.sum(r2, dtype=np.float32))
 
     def does_snp_exist(self, snp: snp_t) -> bool:
         return snp in self.hub.hub
