@@ -46,7 +46,7 @@ class UniNode(BaseEstimator, TransformerMixin, ABC):
     def fit_transform(self, X, y=None):
         self.fit(X, y)
         return self.transform(X)
-    
+
 class UniAdditiveNode(UniNode):
     def fit(self, X, y=None):
         # Get the snp columns from the input data
