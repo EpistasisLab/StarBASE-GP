@@ -21,7 +21,7 @@ import copy as cp
 from sklearn.metrics import r2_score
 
 from .uni_node import UniNode
-from .uni_node import UniDominantNode, UniRecessiveNode, UniHeterosisNode, UniUnderDominantNode, UniSubadditiveNode, UniSuperadditiveNode, UniPAGERNode
+from .uni_node import UniAdditiveNode, UniDominantNode, UniRecessiveNode, UniHeterosisNode, UniUnderDominantNode, UniSubadditiveNode, UniSuperadditiveNode, UniPAGERNode
 
 from .scikit_node import ScikitNode, LDSelector
 from sklearn.pipeline import Pipeline as SklearnPipeline
@@ -77,7 +77,8 @@ def ray_uni_eval(x_train,
     best_res = -1.0
 
     # holds all lo's we are going to evaluate
-    unis = {np.str_('dominant'): UniDominantNode,
+    unis = {np.str_('additive'): UniAdditiveNode,
+            np.str_('dominant'): UniDominantNode,
             np.str_('recessive'): UniRecessiveNode,
             np.str_('heterosis'): UniHeterosisNode,
             np.str_('underdominant'): UniUnderDominantNode,
@@ -113,7 +114,8 @@ def ray_uni_eval(x_train,
     return r2_t(best_res), nodelo_t(best_uni), snp_name
 
 @ray.remote
-def ray_eval_pipeline_new_order(x_train,
+# LD first then FS
+def ray_eval_pipeline(x_train,
                       y_train,
                       x_val,
                       y_val,
@@ -200,130 +202,131 @@ def ray_eval_pipeline_new_order(x_train,
     # return the pipeline
     return r2_t(r2_score), feature_cnt_t(feature_count), pop_id, snp_name_t(one_snp_only_pipeline), [snp_name_t(k) for k,v in ld_node.snp_details_after_ld.items() if v == True], features_final
 
-@ray.remote
-def ray_eval_pipeline(x_train,
-                      y_train,
-                      x_val,
-                      y_val,
-                      uni_nodes: uni_node_list_t,
-                      selector_node: ScikitNode,
-                      ld_node: LDSelector,
-                      root_node: ScikitNode,
-                      pop_id: np.int16,        #    r2, feature count, pop_id, one_snp_only_pipeline, pruned, snp_name_after_ld
-                      snp_r2_set: Set) -> Tuple[np.float32, np.uint16, np.int16, snp_name_t, List[np.str_], List[np.str_]]:
-    # make dictionary to hold the snp r2 scores
-    snp_r2_dict = {p[0]: p[1] for p in snp_r2_set}
+# @ray.remote
+# # first FS then LD
+# def ray_eval_pipeline(x_train,
+#                       y_train,
+#                       x_val,
+#                       y_val,
+#                       uni_nodes: uni_node_list_t,
+#                       selector_node: ScikitNode,
+#                       ld_node: LDSelector,
+#                       root_node: ScikitNode,
+#                       pop_id: np.int16,        #    r2, feature count, pop_id, one_snp_only_pipeline, pruned, snp_name_after_ld
+#                       snp_r2_set: Set) -> Tuple[np.float32, np.uint16, np.int16, snp_name_t, List[np.str_], List[np.str_]]:
+#     # make dictionary to hold the snp r2 scores
+#     snp_r2_dict = {p[0]: p[1] for p in snp_r2_set}
 
-    # create the pipeline
-    steps = []
-    # uni nodes into one sklearn union
-    steps.append(('snp_union', FeatureUnion([(uni_node.name, uni_node) for uni_node in uni_nodes])))
-    # make a list of uni node names
-    uni_node_names = [uni_node.get_snp_name() for uni_node in uni_nodes]
-    # print("Uni node names: ", uni_node_names, flush=True)
-    # add the selector node
-    steps.append(('selector', selector_node))
+#     # create the pipeline
+#     steps = []
+#     # uni nodes into one sklearn union
+#     steps.append(('snp_union', FeatureUnion([(uni_node.name, uni_node) for uni_node in uni_nodes])))
+#     # make a list of uni node names
+#     uni_node_names = [uni_node.get_snp_name() for uni_node in uni_nodes]
+#     # print("Uni node names: ", uni_node_names, flush=True)
+#     # add the selector node
+#     steps.append(('selector', selector_node))
 
-    # fit the pipeline to get the selected features
-    pipeline = SklearnPipeline(steps=steps)
-    try:
-        pipeline_fitted = pipeline.fit(x_train, y_train)
-    except Exception as e:
-        # Catch all other exceptions and log error with relevant context
-        logging.error(f"Exception while fitting model: {e}")
-        logging.error(f"selector_node: {selector_node.name}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
+#     # fit the pipeline to get the selected features
+#     pipeline = SklearnPipeline(steps=steps)
+#     try:
+#         pipeline_fitted = pipeline.fit(x_train, y_train)
+#     except Exception as e:
+#         # Catch all other exceptions and log error with relevant context
+#         logging.error(f"Exception while fitting model: {e}")
+#         logging.error(f"selector_node: {selector_node.name}")
+#         return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
 
-    selected_features = pipeline_fitted.named_steps['selector'].get_feature_names(uni_node_names)
-    # print("Selected features: ", selected_features, flush=True)
-    x_train_transformed = pipeline_fitted.transform(x_train)
-    x_train_transformed_df = pd.DataFrame(x_train_transformed, columns=selected_features)
-    if x_train_transformed_df.empty:
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
+#     selected_features = pipeline_fitted.named_steps['selector'].get_feature_names(uni_node_names)
+#     # print("Selected features: ", selected_features, flush=True)
+#     x_train_transformed = pipeline_fitted.transform(x_train)
+#     x_train_transformed_df = pd.DataFrame(x_train_transformed, columns=selected_features)
+#     if x_train_transformed_df.empty:
+#         return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
 
-    # x_train original dataframe
-    x_train_original_df = pd.DataFrame(x_train, columns=selected_features)
+#     # x_train original dataframe
+#     x_train_original_df = pd.DataFrame(x_train, columns=selected_features)
 
-    # # reinitialize the LD node with the selected features, and the other features already in the LD node
-    ld_node.fit(x_train_original_df, x_train_transformed_df, y_train, snp_r2_dict)
+#     # # reinitialize the LD node with the selected features, and the other features already in the LD node
+#     ld_node.fit(x_train_original_df, x_train_transformed_df, y_train, snp_r2_dict)
 
-    # data after LD node
-    features_final = ld_node.selected_features_
-    features_final_list = features_final.tolist()
-    # print("Type of features_final: ", type(features_final), flush=True)
-    # print("Type of features_final after conversion: ", features_final_list, flush=True)
-    # print("Features after LD node: ", features_final, flush=True)
+#     # data after LD node
+#     features_final = ld_node.selected_features_
+#     features_final_list = features_final.tolist()
+#     # print("Type of features_final: ", type(features_final), flush=True)
+#     # print("Type of features_final after conversion: ", features_final_list, flush=True)
+#     # print("Features after LD node: ", features_final, flush=True)
 
-    # print('pipline_id:', pop_id)
-    # print('snp_pruned:', ld_node.snp_details_after_ld)
-    # print('snp_name_after_ld:', ld_node.name_of_selected_features)
+#     # print('pipline_id:', pop_id)
+#     # print('snp_pruned:', ld_node.snp_details_after_ld)
+#     # print('snp_name_after_ld:', ld_node.name_of_selected_features)
 
-    # print("Features after LD node: ", features_final, flush=True)
-    # x_final = pd.DataFrame(x_train_transformed_df[features_final], columns=features_final)
-    # print("Shape of x_final: ", x_final.shape, flush=True)
+#     # print("Features after LD node: ", features_final, flush=True)
+#     # x_final = pd.DataFrame(x_train_transformed_df[features_final], columns=features_final)
+#     # print("Shape of x_final: ", x_final.shape, flush=True)
 
-    try:
-        # Fit the pipeline with warnings captured as exceptions
-        with warnings.catch_warnings():
-            warnings.filterwarnings('error', category=ConvergenceWarning)
+#     try:
+#         # Fit the pipeline with warnings captured as exceptions
+#         with warnings.catch_warnings():
+#             warnings.filterwarnings('error', category=ConvergenceWarning)
 
-            # create the pipeline
-            steps = []
-            # uni nodes into one sklearn union
-            steps.append(('snp_union', FeatureUnion([(uni_node.name, uni_node) for uni_node in uni_nodes if uni_node.get_snp_name() in features_final])))
-            # pass to regressor
-            steps.append(('regressor', root_node.regressor))
+#             # create the pipeline
+#             steps = []
+#             # uni nodes into one sklearn union
+#             steps.append(('snp_union', FeatureUnion([(uni_node.name, uni_node) for uni_node in uni_nodes if uni_node.get_snp_name() in features_final])))
+#             # pass to regressor
+#             steps.append(('regressor', root_node.regressor))
 
-            # create the pipeline without refitting the regressor
-            pipeline = SklearnPipeline(steps=steps)
+#             # create the pipeline without refitting the regressor
+#             pipeline = SklearnPipeline(steps=steps)
 
-            pipeline.fit(x_train, y_train)
+#             pipeline.fit(x_train, y_train)
 
-            # print the number of features seen during the fitting
-            # Access the fitted regressor from the pipeline
-            # fitted_regressor = pipeline.named_steps['regressor']
+#             # print the number of features seen during the fitting
+#             # Access the fitted regressor from the pipeline
+#             # fitted_regressor = pipeline.named_steps['regressor']
 
-            # Check if the fitted regressor has the attribute n_features_in_
-            # if hasattr(fitted_regressor, 'n_features_in_'):
-            #     features_seen_by_regressor = fitted_regressor.n_features_in_
-            #     print("Number of features seen by regressor: ", features_seen_by_regressor, flush=True)
-            # else:
-            #     print("The regressor does not have the attribute 'n_features_in_'", flush=True)
+#             # Check if the fitted regressor has the attribute n_features_in_
+#             # if hasattr(fitted_regressor, 'n_features_in_'):
+#             #     features_seen_by_regressor = fitted_regressor.n_features_in_
+#             #     print("Number of features seen by regressor: ", features_seen_by_regressor, flush=True)
+#             # else:
+#             #     print("The regressor does not have the attribute 'n_features_in_'", flush=True)
 
 
-    except ConvergenceWarning as cw:
-        logging.error(f"ConvergenceWarning while fitting model: {cw}")
-        logging.error(f"selector_node: {selector_node.name}")
-        logging.error(f"selector_node.params: {selector_node.params}")
-        logging.error(f"feature_uni_nodes: {len(uni_nodes)}")
-        logging.error(f"LD node: {ld_node.name}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
-    except NotFittedError as nfe:
-        logging.error(f"NotFittedError occurred: {nfe}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
-    except Exception as e:
-        # Catch all other exceptions and log error with relevant context
-        logging.error(f"Exception while fitting model: {e}")
-        logging.error(f"selector_node: {selector_node.name}")
-        logging.error(f"selector_node.params: {selector_node.params}")
-        logging.error(f"feature_uni_nodes: {len(uni_nodes)}")
-        logging.error(f"Shapes -> X_train: {x_train.shape}, Y_train: {y_train.shape}")
-        logging.error(f"LD node: {ld_node.name}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
+#     except ConvergenceWarning as cw:
+#         logging.error(f"ConvergenceWarning while fitting model: {cw}")
+#         logging.error(f"selector_node: {selector_node.name}")
+#         logging.error(f"selector_node.params: {selector_node.params}")
+#         logging.error(f"feature_uni_nodes: {len(uni_nodes)}")
+#         logging.error(f"LD node: {ld_node.name}")
+#         return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
+#     except NotFittedError as nfe:
+#         logging.error(f"NotFittedError occurred: {nfe}")
+#         return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
+#     except Exception as e:
+#         # Catch all other exceptions and log error with relevant context
+#         logging.error(f"Exception while fitting model: {e}")
+#         logging.error(f"selector_node: {selector_node.name}")
+#         logging.error(f"selector_node.params: {selector_node.params}")
+#         logging.error(f"feature_uni_nodes: {len(uni_nodes)}")
+#         logging.error(f"Shapes -> X_train: {x_train.shape}, Y_train: {y_train.shape}")
+#         logging.error(f"LD node: {ld_node.name}")
+#         return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
 
-    try:
-        r2_score = pipeline.score(x_val, y_val)
-        feature_count = len(features_final) # get the number of features after the LD node
-    except Exception as e:
-        logging.error(f"Error while scoring or getting feature count: {e}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
+#     try:
+#         r2_score = pipeline.score(x_val, y_val)
+#         feature_count = len(features_final) # get the number of features after the LD node
+#     except Exception as e:
+#         logging.error(f"Error while scoring or getting feature count: {e}")
+#         return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
 
-    one_snp_only_pipeline = 'N/A'
-    if ld_node.name_of_selected_features != None:
-        one_snp_only_pipeline = ld_node.name_of_selected_features
+#     one_snp_only_pipeline = 'N/A'
+#     if ld_node.name_of_selected_features != None:
+#         one_snp_only_pipeline = ld_node.name_of_selected_features
 
-    # return the pipeline
-    return r2_t(r2_score), feature_cnt_t(feature_count), pop_id, snp_name_t(one_snp_only_pipeline), [snp_name_t(k) for k,v in ld_node.snp_details_after_ld.items() if v == True], features_final_list
+#     # return the pipeline
+#     return r2_t(r2_score), feature_cnt_t(feature_count), pop_id, snp_name_t(one_snp_only_pipeline), [snp_name_t(k) for k,v in ld_node.snp_details_after_ld.items() if v == True], features_final_list
 
 @typechecked # for debugging purposes
 class EA:
@@ -344,8 +347,8 @@ class EA:
                  smt_in_in_p: prob_t = prob_t(.1),
                  smt_in_out_p: prob_t = prob_t(.45),
                  smt_out_out_p: prob_t = prob_t(.45),
-                 save_directory: str = "",
-                 original_eval_order: bool = True) -> None:
+                 save_directory: str = ""
+                 ) -> None:
         """
         Main class for the evolutionary algorithm.
 
@@ -404,7 +407,7 @@ class EA:
                                         smt_in_out_p=smt_in_out_p,
                                         smt_out_out_p=smt_out_out_p)
         self.save_directory = save_directory
-        self.original_eval_order = original_eval_order
+        
 
         # Initialize Ray: Will have to specify when running on hpc
         ray.init(num_cpus=cores, include_dashboard=True)
@@ -844,30 +847,18 @@ class EA:
         ray_jobs = []
         # go through each pipeline in the population and evaluate
         # collect all ray jobs for evaluation
-        if self.original_eval_order:
-            for i, pipeline in enumerate(pop):
-                ray_jobs.append(ray_eval_pipeline.remote(self.X_train_id,
-                                                     self.y_train_id,
-                                                     self.X_val_id,
-                                                     self.y_val_id,
-                                                     self.construct_uni_nodes(pipeline.get_uni_snps()),
-                                                     pipeline.get_selector_node(),
-                                                     pipeline.get_ld_node(),
-                                                     pipeline.get_root_node(),
-                                                     np.int16(i),
-                                                     snp_r2_set=self.hubs.generate_r2_dict(pipeline.get_uni_snps())))
-        else:
-            for i, pipeline in enumerate(pop):
-                ray_jobs.append(ray_eval_pipeline_new_order.remote(self.X_train_id,
-                                                     self.y_train_id,
-                                                     self.X_val_id,
-                                                     self.y_val_id,
-                                                     self.construct_uni_nodes(pipeline.get_uni_snps()),
-                                                     pipeline.get_selector_node(),
-                                                     pipeline.get_ld_node(),
-                                                     pipeline.get_root_node(),
-                                                     np.int16(i),
-                                                     snp_r2_set=self.hubs.generate_r2_dict(pipeline.get_uni_snps())))
+        for i, pipeline in enumerate(pop):
+            ray_jobs.append(ray_eval_pipeline.remote(self.X_train_id,
+                                                self.y_train_id,
+                                                self.X_val_id,
+                                                self.y_val_id,
+                                                self.construct_uni_nodes(pipeline.get_uni_snps()),
+                                                pipeline.get_selector_node(),
+                                                pipeline.get_ld_node(),
+                                                pipeline.get_root_node(),
+                                                np.int16(i),
+                                                snp_r2_set=self.hubs.generate_r2_dict(pipeline.get_uni_snps())))
+        
         assert len(ray_jobs) == len(pop)
 
         # keep track of prunned snps
@@ -918,7 +909,9 @@ class EA:
             # get each snps position in the hub
             snp_pos = self.hubs.get_snp_pos(snp_name)
 
-            if uni_type == np.str_('dominant'):
+            if uni_type == np.str_('additive'):
+                uni_nodes.append(UniAdditiveNode(name=f"UniAdditiveNode_{id}", snp_name=snp_name, snp_pos=snp_pos))
+            elif uni_type == np.str_('dominant'):
                 uni_nodes.append(UniDominantNode(name=f"UniDominantNode_{id}", snp_name=snp_name, snp_pos=snp_pos))
             elif uni_type == np.str_('recessive'):
                 uni_nodes.append(UniRecessiveNode(name=f"UniRecessiveNode_{id}", snp_name=snp_name, snp_pos=snp_pos))
