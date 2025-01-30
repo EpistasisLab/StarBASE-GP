@@ -126,11 +126,20 @@ class SnpHub:
 
         # get a random snp from the hub
         def get_ran_snp(self, rng_: rng_t) -> snp_t:
+            # make sure we have at least one snp
+            assert self.get_total() > 0
+
             # initialize rng
             rng = np.random.default_rng(rng_)
+            chrom = []
+
+            for chrm in list(self.non_pruned.keys()):
+                if len(self.non_pruned[chrm]) > 0:
+                    chrom.append(chrm)
+
 
             # get a random chromosome key
-            chrom = rng.choice(list(self.non_pruned.keys()))
+            chrom = rng.choice(chrom)
 
             # get a random bin index from the chromosome
             position = rng.choice(self.non_pruned[chrom])
@@ -826,9 +835,9 @@ class SnpHub:
             if (not_seen or seen_r2_np) and s != snp:
                 snps.append(s)
 
-        # if no snps were collected, it's the best in the bin
+        # if no snps were collected, return a random snp from non prunned
         if len(snps) == 0:
-            return snp
+            return self.get_random_non_pruned_snp(snp, rng)
 
         # try to get a random snp position that is not the same as the input snp
         choice = rng.choice(snps)
@@ -911,9 +920,9 @@ class SnpHub:
             if (not_seen or seen_r2_np) and self.hub.get_snp_bin(s) != bin_id:
                 snps.append(s)
 
-        # if no snps were collected, it's the best in the chormosome
+        # if no snps were collected, return a random snp from non prunned
         if len(snps) == 0:
-            return snp
+            return self.get_random_non_pruned_snp(snp, rng)
 
         # try to get a random snp that is not the same as the input snp
         choice = rng.choice(snps)
@@ -1013,9 +1022,9 @@ class SnpHub:
             if (not_seen or seen_r2_np):
                 snps.append(s)
 
-        # if no snps were collected, it's the best overall
+        # if no snps were collected, return a random snp from non prunned
         if len(snps) == 0:
-            return snp
+            return self.get_random_non_pruned_snp(snp, rng)
 
         # try to get a random snp that is not the same as the input snp
         choice = rng.choice(snps)
@@ -1092,3 +1101,8 @@ class SnpHub:
     # print size of non pruned hub
     def pruned_hub_size(self) -> np.uint32:
         return self.non_pruned.get_total()
+
+    # return a random snp from the non pruned hub
+    def get_random_non_pruned_snp(self, rng_: rng_t) -> snp_t:
+        rng = np.random.default_rng(rng_)
+        return self.non_pruned.get_ran_snp(rng)
