@@ -837,7 +837,7 @@ class SnpHub:
 
         # if no snps were collected, return a random snp from non prunned
         if len(snps) == 0:
-            return self.get_random_non_pruned_snp(snp, rng)
+            return self.get_random_non_pruned_snp(rng)
 
         # try to get a random snp position that is not the same as the input snp
         choice = rng.choice(snps)
@@ -922,7 +922,7 @@ class SnpHub:
 
         # if no snps were collected, return a random snp from non prunned
         if len(snps) == 0:
-            return self.get_random_non_pruned_snp(snp, rng)
+            return self.get_random_non_pruned_snp(rng)
 
         # try to get a random snp that is not the same as the input snp
         choice = rng.choice(snps)
@@ -1024,7 +1024,7 @@ class SnpHub:
 
         # if no snps were collected, return a random snp from non prunned
         if len(snps) == 0:
-            return self.get_random_non_pruned_snp(snp, rng)
+            return self.get_random_non_pruned_snp(rng)
 
         # try to get a random snp that is not the same as the input snp
         choice = rng.choice(snps)
