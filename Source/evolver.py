@@ -754,7 +754,7 @@ class EA:
             if self.hubs.all_snps_prunned(pipeline.get_uni_snps()) == False and pipeline.get_trait_r2() > 0.0:
                 new_pop.append(pipeline)
 
-        print('non pruned hub size:' , self.hubs.pruned_hub_size())
+        print('non pruned hub size:' , self.hubs.pruned_hub_size(), flush=True)
 
         return new_pop
 
