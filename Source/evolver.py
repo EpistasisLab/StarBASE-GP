@@ -21,7 +21,7 @@ import copy as cp
 from sklearn.metrics import r2_score
 
 from .uni_node import UniNode
-from .uni_node import UniAdditiveNode, UniDominantNode, UniRecessiveNode, UniHeterosisNode, UniUnderDominantNode, UniSubadditiveNode, UniSuperadditiveNode, UniPAGERNode
+from .uni_node import UniAdditiveNode, UniDominantNode, UniRecessiveNode, UniHeterosisNode, UniUnderDominantNode, UniOverDominantNode, UniSubAdditiveNode, UniSuperAdditiveNode, UniPAGERNode
 
 from .scikit_node import ScikitNode, LDSelector
 from sklearn.pipeline import Pipeline as SklearnPipeline
@@ -82,8 +82,9 @@ def ray_uni_eval(x_train,
             np.str_('recessive'): UniRecessiveNode,
             np.str_('heterosis'): UniHeterosisNode,
             np.str_('underdominant'): UniUnderDominantNode,
-            np.str_('subadd'): UniSubadditiveNode,
-            np.str_('superadd'): UniSuperadditiveNode,
+            np.str_('overdominant'): UniOverDominantNode,
+            np.str_('subadd'): UniSubAdditiveNode,
+            np.str_('superadd'): UniSuperAdditiveNode,
             np.str_('pager'): UniPAGERNode,
             }
 
@@ -286,7 +287,7 @@ class EA:
         print(flush=True)
 
     # data loader
-    def data_loader(self, path: str, target_label: str = "y", split: float = 0.50) -> None:
+    def data_loader(self, path: str, data_seed: int, target_label: str = "y", split: float = 0.50) -> None:
         """
         Function to load data from a csv file into a pandas dataframe.
         We assume that the target label is 'y', unless otherwise specified.
@@ -302,6 +303,7 @@ class EA:
 
         print('Loading data...', flush=True)
         print('Path:', path, flush=True)
+        print("Dataset split seed:", data_seed, flush=True)
 
         # check if the path is valid
         if os.path.isfile(path) == False:
@@ -344,7 +346,7 @@ class EA:
         print("Genotype data: ", all_x, flush=True)
 
         # partition data based splits
-        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(all_x, all_y, test_size=split, random_state=self.seed)
+        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(all_x, all_y, test_size=split, random_state=data_seed)
 
         # check if the data was partitioned correctly
         self.X_train, self.y_train = self.check_dataset(self.X_train, self.y_train)
@@ -437,6 +439,8 @@ class EA:
             Number of generations to run the algorithm.
 
         """
+        # start the timer for the entire process
+        start_time = time.time()
         # create the initial population
         print('Initializing population...', flush=True)
         start_time = time.time()
@@ -490,6 +494,9 @@ class EA:
             assert len(self.population) == self.pop_size
 
             print(f"Time to finish generation: {(time.time() - start_time) / 60} minutes", flush=True)
+    
+        # end the timer for generational time
+        print(f"Time to finish {gens} generations: {(time.time() - start_time) / 60} minutes", flush=True)
 
         # plot the pareto front
         self.plot_pareto_front() # calling the plotting function at the end to get the final pareto plot
@@ -788,10 +795,12 @@ class EA:
                 uni_nodes.append(UniHeterosisNode(name=f"UniHeterosisNode_{id}", snp_name=snp_name, snp_pos=snp_pos))
             elif uni_type == np.str_('underdominant'):
                 uni_nodes.append(UniUnderDominantNode(name=f"UniUnderDominantNode_{id}", snp_name=snp_name, snp_pos=snp_pos))
+            elif uni_type == np.str_('overdominant'):
+                uni_nodes.append(UniOverDominantNode(name=f"UniOverDominantNode_{id}", snp_name=snp_name, snp_pos=snp_pos))
             elif uni_type == np.str_('subadd'):
-                uni_nodes.append(UniSubadditiveNode(name=f"UniSubadditiveNode_{id}", snp_name=snp_name, snp_pos=snp_pos))
+                uni_nodes.append(UniSubAdditiveNode(name=f"UniSubAdditiveNode_{id}", snp_name=snp_name, snp_pos=snp_pos))
             elif uni_type == np.str_('superadd'):
-                uni_nodes.append(UniSuperadditiveNode(name=f"UniSuperadditiveNode_{id}", snp_name=snp_name, snp_pos=snp_pos))
+                uni_nodes.append(UniSuperAdditiveNode(name=f"UniSuperAdditiveNode_{id}", snp_name=snp_name, snp_pos=snp_pos))
             elif uni_type == np.str_('pager'):
                 uni_nodes.append(UniPAGERNode(name=f"UniPAGERNode_{id}", snp_name=snp_name, snp_pos=snp_pos))
             else:

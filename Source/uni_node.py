@@ -330,8 +330,65 @@ class UniUnderDominantNode(UniNode):
 
     def get_encoder(self) -> np.str_:
         return np.str_("underdominant")
+    
+class UniOverDominantNode(UniNode):
+    def fit(self, X, y=None):
+        # Get the snp columns from the input data
+        if isinstance(X, pd.DataFrame):
+            snp = X.iloc[:, self.snp_pos]
+        else:
+            snp = X[:, self.snp_pos]
 
-class UniSubadditiveNode(UniNode):
+        # change all the 0 to 0, 0.5 to 1 and 1 to 0.5
+        self.mapping = {0:0, 0.5: 1, 1: 0.5} # will be used in the transform and predict methods
+
+        snp = snp.replace(self.mapping)
+
+        # Store the result in self.encoded_feature for training data
+        self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
+
+        # Mark the node as fitted
+        self.fit_flag = True
+
+        return self
+
+    def transform(self, X):
+        # Always recompute the epistatic feature, regardless of train or validation data
+        if isinstance(X, pd.DataFrame):
+            snp = X.iloc[:, self.snp_pos]
+        else:
+            snp = X[:, self.snp_pos]
+
+        snp = snp.replace(self.mapping)
+
+        # Store the result in self.encoded_feature for training data
+        self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
+
+        # Return the computed feature for this dataset
+        return np.array(snp.astype(np.float32), dtype=np.float32).reshape(-1, 1)
+
+    def predict(self, X):
+        # does the same operation as fit but with the test data
+        if self.fit_flag == False:
+            raise ValueError("Model not fitted yet. Please fit the model first")
+                # Get the snp columns from the input data
+        if isinstance(X, pd.DataFrame):
+            snp = X.iloc[:, self.snp_pos]
+        else:
+            snp = X[:, self.snp_pos]
+
+
+        snp = snp.replace(self.mapping)
+
+        # Store the result in self.encoded_feature for training data
+        self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
+
+        return self.encoded_feature.reshape(-1, 1)
+
+    def get_encoder(self) -> np.str_:
+        return np.str_("overdominant")
+
+class UniSubAdditiveNode(UniNode):
     def fit(self, X, y=None):
         # Get the snp columns from the input data
         if isinstance(X, pd.DataFrame):
@@ -389,7 +446,7 @@ class UniSubadditiveNode(UniNode):
     def get_encoder(self) -> np.str_:
         return np.str_("subadditive")
 
-class UniSuperadditiveNode(UniNode):
+class UniSuperAdditiveNode(UniNode):
     def fit(self, X, y=None):
         # Get the snp columns from the input data
         if isinstance(X, pd.DataFrame):
