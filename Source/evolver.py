@@ -440,7 +440,7 @@ class EA:
 
         """
         # start the timer for the entire process
-        start_time = time.time()
+        total_gp_run = time.time()
         # create the initial population
         print('Initializing population...', flush=True)
         start_time = time.time()
@@ -496,12 +496,25 @@ class EA:
             print(f"Time to finish generation: {(time.time() - start_time) / 60} minutes", flush=True)
     
         # end the timer for generational time
-        print(f"Time to finish {gens} generations: {(time.time() - start_time) / 60} minutes", flush=True)
+        total_gp_run = time.time() - total_gp_run
+        print(f"Time to finish {gens} generations: {(total_gp_run) / 60} minutes", flush=True)
 
         # plot the pareto front
         self.plot_pareto_front() # calling the plotting function at the end to get the final pareto plot
         # save the epi_hub to a csv file in the save directory
         self.hubs.save_hubs(self.save_directory)
+        self.save_total_runtime(total_gp_run/60)
+
+    def save_total_runtime(self, total_runtime: float) -> None:
+        """
+        Function to save the total runtime in minutes of the algorithm to a file.
+
+        Parameters:
+        total_runtime: float
+            Total runtime of the algorithm.
+        """
+        with open(os.path.join(self.save_directory, 'total_runtime.csv'), 'w') as f:
+            f.write(str(total_runtime))
 
     # get list of pipeline scores (r2, complexity) by position
     def get_pipeline_scores(self, pipelines: List[Pipeline], weights: Tuple[r2_t, feature_cnt_t]) -> npt.NDArray:
