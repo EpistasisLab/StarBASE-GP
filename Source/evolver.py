@@ -494,7 +494,7 @@ class EA:
             assert len(self.population) == self.pop_size
 
             print(f"Time to finish generation: {(time.time() - start_time) / 60} minutes", flush=True)
-    
+
         # end the timer for generational time
         total_gp_run = time.time() - total_gp_run
         print(f"Time to finish {gens} generations: {(total_gp_run) / 60} minutes", flush=True)
@@ -750,7 +750,7 @@ class EA:
 
         assert len(ray_jobs) == len(pop)
 
-        # keep track of prunned snps
+        # keep track of LD prunned snps
         prunned_snps = set()
 
         # process results as they come in
@@ -774,7 +774,7 @@ class EA:
             if self.hubs.all_snps_prunned(pipeline.get_uni_snps()) == False and pipeline.get_trait_r2() > 0.0:
                 new_pop.append(pipeline)
 
-        print('non pruned hub size:' , self.hubs.pruned_hub_size(), flush=True)
+        print('# of snps still consider (non_pruned + not_seen):' , self.hubs.pruned_hub_size(), flush=True)
 
         return new_pop
 
