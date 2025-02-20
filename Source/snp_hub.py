@@ -723,6 +723,16 @@ class SnpHub:
         # Save snp hub with headers
         snp_data = []
         for k, v in self.hub.hub.items():
+            # k: snp (row[0])
+            # v[0]: r2 (row[1])
+            # v[1]: bin (row[2])
+            # v[2]: idx (row[3])
+            # v[3]: pos (row[4])
+            # v[4]: enc (row[5])
+            # v[5]: seen (row[6])
+            # v[6]: prunned (row[7])
+            # v[7]: gen_seen (row[8])
+            # v[8]: gen_prunned (row[9])
             snp_data.append([k, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]])
 
         # Sort snp_data by the second column (AVG_R2)
@@ -739,7 +749,7 @@ class SnpHub:
 
         # save csv with both seen and not prunned snps
         # Write snp hub to file
-        with open(save_dir+"non_pruned.csv", 'w') as f:
+        with open(save_dir+"non_pruned_and_seen.csv", 'w') as f:
             # Write the headers for the snp_file
             f.write("snp,r2,encoding\n")
             for row in snp_data:
@@ -749,7 +759,11 @@ class SnpHub:
 
     # update snp hub with best univariate r2 result and corresponding encoder type
     def update_snp_hub(self, snp:snp_t, result:snp_hub_res_t, type: snp_hub_enc_t, gen_seen: snp_hub_gen_t) -> None:
+        # update Hub object: if r2 is negative, flip prunned flag
         self.hub.update_snp(snp, result, type, gen_seen)
+        # update Non_Pruned_Hub object: if r2 is negative, remove snp from non prunned
+        if result < r2_t(0.0):
+            self.non_pruned.remove_snp(snp)
         return
 
     # check if snp has encoder type recorded in the snp hub
