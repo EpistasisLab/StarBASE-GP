@@ -211,6 +211,7 @@ class EA:
                  uni_cnt_max: np.uint16,
                  uni_cnt_min: np.uint16,
                  cores: int,
+                 rand_init: bool = True,
                  mut_prob: prob_t = prob_t(.5),
                  cross_prob: prob_t = prob_t(.5),
                  mut_selector_p: prob_t = prob_t(.5),
@@ -251,6 +252,8 @@ class EA:
             Probability for mutation ocurring.
         cross_prob: prob_t
             Probability for crossover ocurring.
+        rand_init: bool 
+            The mode for initializating snps. Random mode when True, and Uniform mode when False.
         """
 
         # arguments needed to run
@@ -280,6 +283,7 @@ class EA:
                                         smt_in_out_p=smt_in_out_p,
                                         smt_out_out_p=smt_out_out_p)
         self.save_directory = save_directory
+        self.rand_init = rand_init
 
 
         # Initialize Ray: Will have to specify when running on hpc
@@ -610,26 +614,57 @@ class EA:
         unseen_snps = set()
 
         # create the initial population
-        for _ in range(self.pop_size):
-            # holds all interactions we are doing
-            # set to make sure we don't have duplicates
-            snps = set()
+        # check the init mode
+        assert type(self.rand_init)==bool
+        if self.rand_init==True:
+            for _ in range(self.pop_size):
+                # holds all interactions we are doing
+                # set to make sure we don't have duplicates
+                snps = set()
 
-            # get a random number of univariate snps
-            uni_cnt = self.rng.integers(low=self.uni_cnt_min, high=self.uni_cnt_max, endpoint=True)
+                if 0 < self.uni_start_cnt:
+                    uni_cnt = self.uni_start_cnt
+                else:
+                    # add a random number of snps to the set
+                    uni_cnt = self.rng.integers(low=self.uni_cnt_min, high=self.uni_cnt_max + 1)
 
-            while len(snps) <= uni_cnt:
-                # get random snp and add to snps
-                snp = self.hubs.get_ran_snp(self.rng)
-                # add snp to the snps set
-                snps.add(snp)
+                while len(snps) <= uni_cnt:
+                    # get random snp and add to snps
+                    snp = self.hubs.get_ran_snp(self.rng)
+                    # add snp to the snps set
+                    snps.add(snp)
+                new_snp = set(snp for snp in snps
+                                if not self.hubs.is_encoder_in_hub(snp))
+                unseen_snps.update(new_snp)
+                # add to the population
+                pop_univariate_sets.append(snps)
 
-            new_snp = set(snp for snp in snps
-                            if not self.hubs.is_encoder_in_hub(snp))
-            unseen_snps.update(new_snp)
-            # add to the population
-            pop_univariate_sets.append(snps)
-
+        elif self.rand_init==False:
+            for _ in range(self.pop_size):
+                snps = set()
+                if 0 < self.uni_start_cnt:
+                    uni_cnt = self.uni_start_cnt
+                else:
+                    # add a random number of snps to the set
+                    uni_cnt = self.rng.integers(low=self.uni_cnt_min, high=self.uni_cnt_max + 1)
+                
+                # get the num of chrom from snp hub dictionary
+                chroms = self.hubs.non_pruned.get_keys_with_snps()
+                chrom_num = len(chroms)
+                # generate the sampling list based on the uni_cnt and number of chromosomes
+                sampling_list = self.get_sampling(cnt = uni_cnt, chrom_num = chrom_num)
+                # shuffle the list
+                sampling_list = self.rng.shuffle(sampling_list)
+                # get the designated number of snps from each chromosome based on shuffled sampling
+                for chrom, val in enumerate(sampling_list):
+                    snps_in_chrom = self.hubs.get_k_snps_from_chrom(chrom,val)
+                    snps.update(snps_in_chrom)
+        
+                new_snp = set(snp for snp in snps
+                                        if not self.hubs.is_encoder_in_hub(snp))
+                unseen_snps.update(new_snp)
+                # add to the population
+                pop_univariate_sets.append(snps)
         # make sure we have the correct number of interactions
         assert len(pop_univariate_sets) == self.pop_size
 

@@ -1073,6 +1073,26 @@ class SnpHub:
             # choice = self.bins.get_ran_snp(rng)
 
         return choice
+    
+    def get_k_snps_from_chrom(self, rng_:rng_t, chrom:int, k:int) -> Set[snp_t]:
+        # initialize rng and set
+        rng_ = np.random.default_rng(rng_)
+        k_snps = set() 
+        
+        # make sure the chrom is not out of bound
+        assert self.bins[chrom] 
+        # get random k snps from the chromosome
+        bins = [i for i in range(len(self.bins[chrom]))]
+        while len(k_snps) < k: # to make sure there are no replicates
+            # get a random bin
+            bin = rng_.choice(bins)
+            # sample a random snp from the bin
+            sample = rng_.integers(0, len(self.bins[chrom][bin]), dtype=np.uint16)
+            # get random snp from the bin
+            pos = self.bins[chrom][bin][sample]
+            k_snps.add(snp_t(f"{chrom}.{pos}"))
+        # return the snp set
+        return k_snps
 
     def does_snp_exist(self, snp: snp_t) -> bool:
         return snp in self.hub.hub
