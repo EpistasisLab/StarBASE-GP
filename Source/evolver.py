@@ -699,6 +699,28 @@ class EA:
         assert (0 < len(self.population) <= self.pop_size)
 
         return
+    
+    def get_sampling(self, cnt:int, chrom_num:int):
+        """
+        Function to get the sampling list that evenly splits the number of snps to sample from each chromosome.
+        Parameters:
+        cnt: int
+            total number of snps to sample based on each pipeline's randomized init
+        chrom_num: int
+            total number of chromosomes based on snp hub
+        """
+        assert cnt > 0
+        assert chrom_num > 0
+        
+        sample_num = cnt//chrom_num
+        remainder = cnt%chrom_num
+        sampling_list = np.full(shape=chrom_num,fill_value=sample_num)
+        if remainder > 0:
+            start_idx = self.rng.integers(low=0, high=chrom_num)
+            for i in range(remainder):
+                # Use modulo to wrap around and avoid index errors
+                sampling_list[(start_idx+i) % chrom_num] += 1
+        return sampling_list
 
     # evaluate all unevaluated snps and update
     def evaluate_unseen_snps(self, unseen_snps: Set, gen_seen: snp_hub_gen_t) -> None:
