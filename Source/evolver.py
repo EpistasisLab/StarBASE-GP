@@ -252,7 +252,7 @@ class EA:
             Probability for mutation ocurring.
         cross_prob: prob_t
             Probability for crossover ocurring.
-        rand_init: bool 
+        rand_init: bool
             The mode for initializating snps. Random mode when True, and Uniform mode when False.
         """
 
@@ -387,11 +387,6 @@ class EA:
         sample_weight: array-like {n_samples} (optional)
             List of weights indicating relative importance
         """
-        # # check for missing values
-        # if isinstance(features, pd.DataFrame):
-        #         for col in features.columns:
-        #             #if features[col].isnull().values.any():
-        #                features[col].fillna(features[col].mode()[0], inplace=True)
 
         # Check if features is a DataFrame and handle missing values
         if isinstance(features, pd.DataFrame):
@@ -622,11 +617,8 @@ class EA:
                 # set to make sure we don't have duplicates
                 snps = set()
 
-                if 0 < self.uni_start_cnt:
-                    uni_cnt = self.uni_start_cnt
-                else:
-                    # add a random number of snps to the set
-                    uni_cnt = self.rng.integers(low=self.uni_cnt_min, high=self.uni_cnt_max + 1)
+                # add a random number of snps to the set
+                uni_cnt = int(self.rng.integers(low=self.uni_cnt_min, high=self.uni_cnt_max + 1))
 
                 while len(snps) <= uni_cnt:
                     # get random snp and add to snps
@@ -642,24 +634,23 @@ class EA:
         elif self.rand_init==False:
             for _ in range(self.pop_size):
                 snps = set()
-                if 0 < self.uni_start_cnt:
-                    uni_cnt = self.uni_start_cnt
-                else:
-                    # add a random number of snps to the set
-                    uni_cnt = self.rng.integers(low=self.uni_cnt_min, high=self.uni_cnt_max + 1)
-                
+                # add a random number of snps to the set
+                uni_cnt = int(self.rng.integers(low=self.uni_cnt_min, high=self.uni_cnt_max + 1))
+
                 # get the num of chrom from snp hub dictionary
                 chroms = self.hubs.non_pruned.get_keys_with_snps()
                 chrom_num = len(chroms)
                 # generate the sampling list based on the uni_cnt and number of chromosomes
                 sampling_list = self.get_sampling(cnt = uni_cnt, chrom_num = chrom_num)
                 # shuffle the list
-                sampling_list = self.rng.shuffle(sampling_list)
+                self.rng.shuffle(sampling_list)
                 # get the designated number of snps from each chromosome based on shuffled sampling
                 for chrom, val in enumerate(sampling_list):
-                    snps_in_chrom = self.hubs.get_k_snps_from_chrom(chrom,val)
+                    snps_in_chrom = self.hubs.get_k_snps_from_chrom(self.rng,
+                                                                    chroms[chrom],
+                                                                    int(val))
                     snps.update(snps_in_chrom)
-        
+
                 new_snp = set(snp for snp in snps
                                         if not self.hubs.is_encoder_in_hub(snp))
                 unseen_snps.update(new_snp)
@@ -699,7 +690,7 @@ class EA:
         assert (0 < len(self.population) <= self.pop_size)
 
         return
-    
+
     def get_sampling(self, cnt:int, chrom_num:int):
         """
         Function to get the sampling list that evenly splits the number of snps to sample from each chromosome.
@@ -711,7 +702,7 @@ class EA:
         """
         assert cnt > 0
         assert chrom_num > 0
-        
+
         sample_num = cnt//chrom_num
         remainder = cnt%chrom_num
         sampling_list = np.full(shape=chrom_num,fill_value=sample_num)
