@@ -935,6 +935,7 @@ class EA:
                 # skip this iteration if there are no good snps
                 continue
 
+            # todo: see if keeping all original snps or using the current good snps makes a diff
             updated_pipelines.append(Pipeline(uni_snps=good_snps,
                                               selector_node=pipeline.get_selector_node(),
                                               ld_node=pipeline.get_ld_node(),

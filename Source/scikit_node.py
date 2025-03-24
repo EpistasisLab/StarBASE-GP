@@ -1526,14 +1526,14 @@ class LDSelector(ScikitNode, TransformerMixin):
         else:
             self.threshold = self.threshold + shift
 
-        # increment genomin distance by 100000 with a minimum of 500000 and maximum of 1000000, in increments of 100000
-        genomic_distance_shift = np.int32(rng.choice([-500000, 500000]))
+        # increment genomic distance by 100000 with a minimum of 500000 and maximum of 1000000, in increments of 100000
+        genomic_distance_shift = np.int32(rng.choice([-100000, 100000]))
         # check if the genomic_distance is going to be less than 500000
         if self.genomic_distance + genomic_distance_shift < 500000:
             self.genomic_distance = 500000
         # check if the genomic_distance is going to be greater than 1000000
-        elif self.genomic_distance + genomic_distance_shift > 10000000:
-            self.genomic_distance = 10000000
+        elif self.genomic_distance + genomic_distance_shift > 1000000:
+            self.genomic_distance = 1000000
         # if neither of the above, then we can just add the shift
         else:
             self.genomic_distance = self.genomic_distance + genomic_distance_shift
