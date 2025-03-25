@@ -124,8 +124,8 @@ def ray_eval_pipeline(x_train,
                       selector_node: ScikitNode,
                       ld_node: LDSelector,
                       root_node: ScikitNode,
-                      pop_id: np.int16,        #    r2, feature count, pop_id, one_snp_only_pipeline, pruned, snp_name_after_ld
-                      snp_r2_set: Set) -> Tuple[np.float32, np.uint16, np.int16, snp_name_t, List[np.str_], List[np.str_]]:
+                      pop_id: np.int16,        #    r2, feature count, pop_id, pruned, snp_name_after_ld
+                      snp_r2_set: Set) -> Tuple[np.float32, np.uint16, np.int16, List[np.str_], List[np.str_]]:
 
     # make dictionary to hold the snp r2 scores
     snp_r2_dict = {p[0]: p[1] for p in snp_r2_set}
@@ -144,7 +144,7 @@ def ray_eval_pipeline(x_train,
     except Exception as e:
         # Catch all other exceptions and log error with relevant context
         logging.error(f"Exception while fitting SNP union step: {e}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, (), []
 
     # transform the dataset using snp_union
     x_train_transformed = pipeline_fitted.transform(x_train)
@@ -152,7 +152,7 @@ def ray_eval_pipeline(x_train,
     x_train_transformed_df = pd.DataFrame(x_train_transformed, columns=uni_node_names)
     x_val_transformed_df = pd.DataFrame(x_val_transformed, columns=uni_node_names)
     if x_train_transformed_df.empty:
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, (), []
 
     x_train_original_df = pd.DataFrame(x_train, columns=uni_node_names)
 
@@ -167,7 +167,7 @@ def ray_eval_pipeline(x_train,
         x_val_transformed_df = pd.DataFrame(x_val_transformed_df[selected_features_after_ld], columns=selected_features_after_ld)
     except Exception as e:
         logging.error(f"Exception while fitting LD node: {e}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, (), []
 
     # adding the selector and regressor nodes
     try:
@@ -182,10 +182,9 @@ def ray_eval_pipeline(x_train,
         pipeline.fit(x_train_transformed_df, y_train)
     except Exception as e:
         logging.error(f"Exception while fitting pipeline after LD: {e}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, (), []
 
     try:
-
         r2_score = pipeline.score(x_val_transformed_df, y_val)
         feature_count = pipeline.named_steps['selector'].get_feature_count() # number of selected features after the selector node
         features_final = (pipeline.named_steps['selector'].get_feature_names(selected_features_after_ld)) # get the names of the features after the selector node by sending the selected features after the LD node
@@ -194,14 +193,10 @@ def ray_eval_pipeline(x_train,
             features_final = features_final.tolist()
     except Exception as e:
         logging.error(f"Error while scoring or getting feature count: {e}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, False, (), []
-
-    one_snp_only_pipeline = 'N/A'
-    if features_final != None:
-        one_snp_only_pipeline = features_final
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, (), []
 
     # return the pipeline
-    return r2_t(r2_score), feature_cnt_t(feature_count), pop_id, snp_name_t(one_snp_only_pipeline), [snp_name_t(k) for k,v in ld_node.snp_details_after_ld.items() if v == True], features_final
+    return r2_t(r2_score), feature_cnt_t(feature_count), pop_id, [snp_name_t(k) for k,v in ld_node.snp_details_after_ld.items() if v == True], features_final
 
 @typechecked # for debugging purposes
 class EA:
@@ -480,11 +475,12 @@ class EA:
             # evaluate the offspring
             offspring = self.evaluation(offspring, snp_hub_gen_t(g))
 
-            # remove bad snps from the offspring
-            offspring = self.clean_pipeline_post_eval(offspring)
-
             # must be less than or equal bc of potential negative r2 offspring pipelines
             assert (0 < len(offspring) + len(self.population) <= 2 * self.pop_size)
+
+            # will remove any bad pipeline from both the population and offspring
+            self.population = self.remove_bad_pipleines(self.population)
+            offspring = self.remove_bad_pipleines(offspring)
 
             # survival selection
             self.population = self.survival_selection(self.population, offspring)
@@ -498,9 +494,8 @@ class EA:
         total_gp_run = time.time() - total_gp_run
         print(f"Time to finish {gens} generations: {(total_gp_run) / 60} minutes", flush=True)
 
-        # plot the pareto front
-        self.plot_pareto_front() # calling the plotting function at the end to get the final pareto plot
         # save the epi_hub to a csv file in the save directory
+        self.plot_pareto_front(self.population) # calling the plotting function at the end to get the final pareto plot
         self.hubs.save_hubs(self.save_directory)
         self.save_total_runtime(total_gp_run/60)
 
@@ -683,13 +678,18 @@ class EA:
         # evaluate the initial population
         self.population = self.evaluation(self.population, snp_hub_gen_t(0))
 
-        # remove bad snps from the population
-        self.population = self.clean_pipeline_post_eval(self.population)
-
         # make sure we have the correct number of pipelines
         assert (0 < len(self.population) <= self.pop_size)
 
         return
+
+    # remove pipelines with all bad snps
+    def remove_bad_pipleines(self, pipelines: List[Pipeline]) -> List[Pipeline]:
+        good_pipelines = []
+        for pipeline in pipelines:
+            if self.hubs.all_snps_prunned(pipeline.get_uni_snps()) == False:
+                good_pipelines.append(pipeline)
+        return good_pipelines
 
     def get_sampling(self, cnt:int, chrom_num:int):
         """
@@ -804,13 +804,11 @@ class EA:
         # process results as they come in
         while len(ray_jobs) > 0:
             finished, ray_jobs = ray.wait(ray_jobs)
-            r2, feature_count, pop_id, one_snp_only_pipeline, pruned, feature_names = ray.get(finished)[0]
+            r2, feature_count, pop_id, pruned, feature_names = ray.get(finished)[0]
             # update the pipeline
             pop[pop_id].set_traits([r2, feature_count, set(feature_names)])
 
-            new_snp = set(snp for snp in pruned
-                            if not self.hubs.has_been_prunned(snp))
-            prunned_snps.update(new_snp)
+            prunned_snps.update(set(snp for snp in pruned if not self.hubs.has_been_prunned(snp)))
 
         # process prunned snps
         self.hubs.process_prunned_snps(prunned_snps, gen_pruned)
@@ -899,7 +897,7 @@ class EA:
 
         return parent_ids
 
-    # process offspring: evaluate new snps, remove bad snps, and create pipelines with good snps
+    # evaluate unseen snps, check length of good snps, return pipelines that have at least one good snp
     def process_offspring(self, pipelines: List[Pipeline], gen_found: snp_hub_gen_t) -> List[Pipeline]:
         # get unseen interactions
         unseen_snps = self.get_unseen_univariates(pipelines)
@@ -907,40 +905,16 @@ class EA:
         # evaluate all unseen interactions
         self.evaluate_unseen_snps(unseen_snps, gen_found)
 
-        # remove bad interactions for each pipeline's set of interactions
+        # offspring pipelines with no good snps
         updated_pipelines = []
-        for pipeline in pipelines:
-            # remove bad snps and make sure more than 0 snps are left
-            good_snps = self.remove_bad_snps(pipeline.get_uni_snps())
 
+        for pipeline in pipelines:
+            good_snps = self.remove_bad_snps(pipeline.get_uni_snps())
             if len(good_snps) == 0:
                 # skip this iteration if there are no good snps
                 continue
 
-            updated_pipelines.append(Pipeline(uni_snps=good_snps,
-                                              selector_node=pipeline.get_selector_node(),
-                                              ld_node=pipeline.get_ld_node(),
-                                              root_node=pipeline.get_root_node(),
-                                              traits=[]))
-        return updated_pipelines
-
-    def clean_pipeline_post_eval(self, pipelines: List[Pipeline]) -> List[Pipeline]:
-        # remove bad interactions for each pipeline's set of interactions
-        updated_pipelines = []
-        for pipeline in pipelines:
-            # remove bad snps and make sure more than 0 snps are left
-            good_snps = self.remove_bad_snps(pipeline.get_uni_snps())
-
-            if len(good_snps) == 0:
-                # skip this iteration if there are no good snps
-                continue
-
-            # todo: see if keeping all original snps or using the current good snps makes a diff
-            updated_pipelines.append(Pipeline(uni_snps=good_snps,
-                                              selector_node=pipeline.get_selector_node(),
-                                              ld_node=pipeline.get_ld_node(),
-                                              root_node=pipeline.get_root_node(),
-                                              traits=pipeline.get_traits()))
+            updated_pipelines.append(pipeline)
         return updated_pipelines
 
     def get_unseen_univariates(self, pipelines: List[Pipeline]) -> Set[snp_name_t]:
@@ -959,19 +933,23 @@ class EA:
         return unseen_univariates
 
     # plot the current pareto front from the population with complexity and r2 scores
-    def plot_pareto_front(self) -> None:
+    def plot_pareto_front(self, pop: List[Pipeline]) -> None:
         """
         Function to plot the current pareto front from the population with complexity and r2 scores.
         """
 
         # get all scores from the current population
-        pop_scores = self.get_pipeline_scores(self.population, weights=(r2_t(1.0), feature_cnt_t(1)))
+        pop_scores = self.get_pipeline_scores(pop, weights=(r2_t(1.0), feature_cnt_t(1)))
 
         # get the fronts and rank
-        fronts, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(r2_t(1.0), feature_cnt_t(-1))))
+        _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(pop, weights=(r2_t(1.0), feature_cnt_t(-1))))
 
         # remove scores that are not of rank 0
         pareto_front = pop_scores[rank == 0]
+
+        # sort front by feature count
+        pareto_front = sorted(pareto_front, key=lambda x: x[1])
+
         print('pareto front:', pareto_front, flush=True)
 
         # plot the pareto front
@@ -998,20 +976,16 @@ class EA:
         plt.savefig(self.save_directory + 'pareto_front.png')
         plt.clf()
 
-    # Create a object of Poster class to check the post analyis of the pipelines
-    # to do the feature importance analysis
-    def post_analysis(self) -> None:
+    # save pareto plot and calculate permutation importance for each pipeline with only good snps
+    def post_analysis_with_good_snps(self) -> None:
         """
         Function to perform post analysis of the pipelines.
         """
 
-        #epi_nodes = [self.construct_epi_nodes(pipeline.get_epi_pairs()) for pipeline in self.population]
-
         ###################### create the pareto front #######################
 
         # get the fronts and rank
-        fronts, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(r2_t(1.0), feature_cnt_t(-1))))
-
+        _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(r2_t(1.0), feature_cnt_t(-1))))
 
         pareto_front = []
         # get rank == 0 pipelines
@@ -1021,38 +995,29 @@ class EA:
 
         print('Size of Pareto Front:', len(pareto_front), flush=True)
 
-
-        # create a poster object
-        #poster = Poster(self.X_train_id, self.y_train_id, self.X_val_id, self.y_val_id, hub=self.hubs)
+        # sort the pareto front by feature count
+        pareto_front = sorted(pareto_front, key=lambda x: x.get_trait_feature_cnt())
 
         # Initialize an empty DataFrame to save all shap_values_df
         all_perm_imp_df = pd.DataFrame()
 
-        # print the pipelines in the population
-        ray_jobs = []
-        for i, pipeline in enumerate(pareto_front): # think this as pareto front pipelines
-            # # printing pipeline details from evolver
-            # print("Pipeline ID from EVOLVER function:", i, flush=True)
-            # print("Pipeline R2 Score from EVOLVER function:", pipeline.get_trait_r2(), flush=True)
-            # print("Pipeline Feature Count from EVOLVER function:", pipeline.get_trait_feature_cnt(), flush=True)
-            # print("Pipeline feature names after LD node from EVOLVER function:", pipeline.get_trait_feature_names(), flush=True)
+        # calculate the permutation importance for each pipeline in the pareto front
+        for i, pipeline in enumerate(pareto_front):
             # get the uni_nodes - has the SNP Name, SNP position and the best encoder type
             uni_nodes = self.construct_uni_nodes(pipeline.get_uni_snps())
+
             # make a uni_snps_df - which will have the feature and the best inheritence type
             uni_snps_list = []
             uni_snps = pipeline.get_uni_snps()
-            # print('uni_snps:',uni_snps, flush=True)
+
             for snp_name in uni_snps:
                 best_lo = self.hubs.get_uni_encoding(snp_name)
                 uni_snps_list.append({'feature': snp_name, 'inheritence': best_lo})
             uni_snps_df = pd.DataFrame(uni_snps_list)
 
-            #uni_snps_df = poster.get_uni_snp(pipeline=pipeline)
-            features_final = pipeline.get_trait_feature_names()
-            # filter uni_nodes to only include the snps in the pipeline
+            # filter uni_nodes to only include good snps that are not prunned
+            features_final = [snp_name for snp_name in pipeline.get_trait_feature_names() if self.hubs.has_been_prunned(np.str_(snp_name)) == False]
             uni_nodes = [uni_node for uni_node in uni_nodes if uni_node.get_snp_name() in features_final]
-            # print('uni_nodes:', uni_nodes, flush=True)
-            # filter uni_snps_df to only include the snps in the pipeline
             uni_snps_df = uni_snps_df[uni_snps_df['feature'].isin(features_final)]
 
             # change the feature names to have the inheritance information - from the filtered uni_snps_df
@@ -1071,31 +1036,32 @@ class EA:
 
             # Get R2 and Feature Count for this specific pipeline
             pipeline_r2 = pipeline.get_trait_r2()
-            pipeline_feature_count = pipeline.get_trait_feature_cnt()
+            pipeline_feature_count = len(uni_nodes)
+
             ############ FOR PERM IMP ############
+
             # create the pipeline without refitting the regressor
             model = pipeline.get_root_node().regressor
             #pipeline_fitted = pipeline.fit(self.X_train, self.y_train)
             fitted_model = model.fit(uni_features_train, self.y_train)
+
             # get permutation importance
             # get a random state using the self.rng to get a number between 1 to 100000
             random_state = self.rng.integers(low=1, high=100000)
-            # perm_imp = self.permutation_importance_inhouse(fitted_model, uni_features_test, self.y_val, n_repeats=500, random_state=random_state)
             perm_imp = permutation_importance(fitted_model, uni_features_test, self.y_val, n_repeats=100, random_state=random_state, n_jobs=-1)
+
             # make a sorted dataframe
             perm_imp_df = pd.DataFrame({'Feature': new_column_names, 'PFI_importance': perm_imp['importances_mean']})
             perm_imp_df = perm_imp_df.sort_values(by='PFI_importance', ascending=False)
             perm_imp_df['Rank'] = range(1, len(perm_imp_df) + 1)
+
             # Add pipeline details to the PFI DataFrame
             perm_imp_df['Pipeline_No'] = i + 1
             perm_imp_df['Pipeline_R2'] = pipeline_r2
             perm_imp_df['Pipeline_Feature_Count'] = pipeline_feature_count
             perm_imp_df['Pipeline_Selector'] = pipeline.get_selector_node().name
             perm_imp_df['Pipeline_Root'] = pipeline.get_root_node().name
-            # # print the perm_imp_df
-            # print("Permutation Importance for Pipeline", i, ":", perm_imp_df, flush=True)
-            # # save the perm_imp_df to a csv file
-            # perm_imp_df.to_csv(self.save_directory + f'perm_imp_pipeline_{i}.csv', index=False)
+
             # adding the individual pipeline PFI to the all_perm_imp_df
             all_perm_imp_df = pd.concat([all_perm_imp_df, perm_imp_df], ignore_index=True)
 
@@ -1103,7 +1069,7 @@ class EA:
         all_perm_imp_df = all_perm_imp_df.sort_values(by=['Pipeline_No', 'PFI_importance'], ascending=[True, False])
         # reset the index after sorting
         all_perm_imp_df = all_perm_imp_df.reset_index(drop=True)
-        all_perm_imp_df.to_csv(self.save_directory + "all_pipelines_PFI_values.csv", index=False)
+        all_perm_imp_df.to_csv(self.save_directory + "attri_all_pipelines_PFI_values.csv", index=False)
         print("All PFI values saved to all_pipelines_PFI_values.csv", flush=True)
 
         # create overall feature importance for all features seen in all_perm_imp_df by using the formula: 1/mean_rank * percentage of times appeared in a pipeline
@@ -1138,6 +1104,138 @@ class EA:
         plt.ylabel('Feature')
         plt.gca().invert_yaxis()
         plt.tight_layout()
-        plt.savefig(self.save_directory + 'top_20_features.png')
+        plt.savefig(self.save_directory + 'attri_top_20_features.png')
+
+        plt.clf()
+
+    # save pareto plot and calculate permutation importance for each pipeline with all feature snps
+    def post_analysis_with_all_snps(self)  -> None:
+        """
+        Function to perform post analysis of the pipelines.
+        """
+
+        ###################### create the pareto front #######################
+
+        # get the fronts and rank
+        _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(r2_t(1.0), feature_cnt_t(-1))))
+
+        pareto_front = []
+        # get rank == 0 pipelines
+        for i, r in enumerate(rank):
+            if r == 0:
+                pareto_front.append(self.population[i])
+
+        print('Size of Pareto Front:', len(pareto_front), flush=True)
+
+        # sort the pareto front by feature count
+        pareto_front = sorted(pareto_front, key=lambda x: x.get_trait_feature_cnt())
+
+        # Initialize an empty DataFrame to save all shap_values_df
+        all_perm_imp_df = pd.DataFrame()
+
+        # calculate the permutation importance for each pipeline in the pareto front
+        for i, pipeline in enumerate(pareto_front):
+            # get the uni_nodes - has the SNP Name, SNP position and the best encoder type
+            uni_nodes = self.construct_uni_nodes(pipeline.get_uni_snps())
+
+            # make a uni_snps_df - which will have the feature and the best inheritence type
+            uni_snps_list = []
+            uni_snps = pipeline.get_uni_snps()
+
+            for snp_name in uni_snps:
+                best_lo = self.hubs.get_uni_encoding(snp_name)
+                uni_snps_list.append({'feature': snp_name, 'inheritence': best_lo})
+            uni_snps_df = pd.DataFrame(uni_snps_list)
+
+            # include all snps that made it to the regressor
+            features_final = [snp_name for snp_name in pipeline.get_trait_feature_names()]
+            uni_nodes = [uni_node for uni_node in uni_nodes if uni_node.get_snp_name() in features_final]
+            uni_snps_df = uni_snps_df[uni_snps_df['feature'].isin(features_final)]
+
+            # change the feature names to have the inheritance information - from the filtered uni_snps_df
+            new_column_names = [ f'{row["feature"]}_{row["inheritence"]}' for _, row in uni_snps_df.iterrows()]
+
+            # Construct the snp_union FeatureUnion - to transform the training and test datasets to have the encoded SNPs
+            snp_union = FeatureUnion([(uni_node.name, uni_node) for uni_node in uni_nodes])
+            steps = []
+            steps.append(('snp_union',snp_union))
+            pipe = SklearnPipeline(steps=steps)
+            pipe.fit(self.X_train, self.y_train)
+
+            # Transform the training and test datasets using snp_union
+            uni_features_train = pipe.transform(self.X_train)
+            uni_features_test = pipe.transform(self.X_val)
+
+            # Get R2 and Feature Count for this specific pipeline
+            pipeline_r2 = pipeline.get_trait_r2()
+            pipeline_feature_count = len(uni_nodes)
+
+            ############ FOR PERM IMP ############
+
+            # create the pipeline without refitting the regressor
+            model = pipeline.get_root_node().regressor
+            #pipeline_fitted = pipeline.fit(self.X_train, self.y_train)
+            fitted_model = model.fit(uni_features_train, self.y_train)
+
+            # get permutation importance
+            # get a random state using the self.rng to get a number between 1 to 100000
+            random_state = self.rng.integers(low=1, high=100000)
+            perm_imp = permutation_importance(fitted_model, uni_features_test, self.y_val, n_repeats=100, random_state=random_state, n_jobs=-1)
+
+            # make a sorted dataframe
+            perm_imp_df = pd.DataFrame({'Feature': new_column_names, 'PFI_importance': perm_imp['importances_mean']})
+            perm_imp_df = perm_imp_df.sort_values(by='PFI_importance', ascending=False)
+            perm_imp_df['Rank'] = range(1, len(perm_imp_df) + 1)
+
+            # Add pipeline details to the PFI DataFrame
+            perm_imp_df['Pipeline_No'] = i + 1
+            perm_imp_df['Pipeline_R2'] = pipeline_r2
+            perm_imp_df['Pipeline_Feature_Count'] = pipeline_feature_count
+            perm_imp_df['Pipeline_Selector'] = pipeline.get_selector_node().name
+            perm_imp_df['Pipeline_Root'] = pipeline.get_root_node().name
+
+            # adding the individual pipeline PFI to the all_perm_imp_df
+            all_perm_imp_df = pd.concat([all_perm_imp_df, perm_imp_df], ignore_index=True)
+
+        # sort the all_shap_values_df by Pipeline_No and then by shap_value
+        all_perm_imp_df = all_perm_imp_df.sort_values(by=['Pipeline_No', 'PFI_importance'], ascending=[True, False])
+        # reset the index after sorting
+        all_perm_imp_df = all_perm_imp_df.reset_index(drop=True)
+        all_perm_imp_df.to_csv(self.save_directory + "phil_all_pipelines_PFI_values.csv", index=False)
+        print("All PFI values saved to all_pipelines_PFI_values.csv", flush=True)
+
+        # create overall feature importance for all features seen in all_perm_imp_df by using the formula: 1/mean_rank * percentage of times appeared in a pipeline
+        # get the mean rank of each feature
+        mean_rank = all_perm_imp_df.groupby('Feature').agg({'Rank': 'mean'}).reset_index()
+        # get the count of each feature
+        feature_count = all_perm_imp_df.groupby('Feature').agg({'Rank': 'count'}).reset_index()
+        # Merge the mean_rank and feature_count dataframes
+        mean_rank = mean_rank.merge(feature_count, on='Feature', how='left')
+        mean_rank.rename(columns={'Rank_x': 'Mean_Rank', 'Rank_y': 'Feature_Count'}, inplace=True)
+        #print("Mean Rank and Feature Count: ", mean_rank, flush=True)
+
+        # Calculate the percentage of times each feature appeared in a pipeline
+        total_pipelines = all_perm_imp_df['Pipeline_No'].nunique()
+        mean_rank['Appearance_Percentage'] = mean_rank['Feature_Count'] / total_pipelines
+
+        # Calculate the Overall Feature Importance
+        mean_rank['Overall_Feature_Importance'] = (1 / mean_rank['Mean_Rank']) * mean_rank['Appearance_Percentage']
+
+        # Sort by Overall_Feature_Importance
+        mean_rank = mean_rank.sort_values(by='Overall_Feature_Importance', ascending=False)
+        # save the mean_rank to a csv file
+        mean_rank.to_csv(self.save_directory + "overall_feature_importance.csv", index=False)
+
+
+        # plot a bar graph of the top 20 features
+        top_20_features = mean_rank.head(20)
+        plt.figure(figsize=(10, 6))
+        plt.barh(top_20_features['Feature'], top_20_features['Overall_Feature_Importance'], color='skyblue')
+        plt.title('Top 20 Features by Overall FI')
+        plt.xlabel('Overall Feature Importance')
+        plt.ylabel('Feature')
+        plt.gca().invert_yaxis()
+        plt.tight_layout()
+        plt.savefig(self.save_directory + 'phil_top_20_features.png')
 
         plt.clf()

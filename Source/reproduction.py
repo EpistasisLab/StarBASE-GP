@@ -91,8 +91,7 @@ class Reproduction:
         return Pipeline(ld_node=LDSelector(rng_=rng, seed=seed),
                         selector_node=selector_node,
                         root_node=root_node,
-                        uni_snps=snps,
-                        traits=[])
+                        uni_snps=snps)
 
     def variation_order(self, rng_: rng_t, offpring_cnt: pop_size_t) -> Tuple[List[str], pop_size_t]:
         """
@@ -158,6 +157,7 @@ class Reproduction:
                 off = self.crossover(rng, population[parent_ids[p_id]], population[parent_ids[p_id+1]], hub)
 
                 # coin flip to decide if we should mutate the offspring
+                # todo: should we append snps to the offspring if it is less than uni_cnt_min?
                 if rng.choice([True, False], p=[self.mut_prob, 1.0-self.mut_prob]):
                     off = self.mutate(rng, off, hub)
 
@@ -181,15 +181,12 @@ class Reproduction:
         # set the random number generator
         rng = np.random.default_rng(rng_)
 
-        # clone the pipeline
-        offspring = Pipeline(uni_snps=set(),
-                            selector_node=parent.get_selector_node(),
-                            ld_node=parent.get_ld_node(),
-                            root_node=parent.get_root_node(),
-                            traits=[])
+        assert(len(parent.get_uni_snps()) > 0)
 
-        # get parent uni snps
-        parent_uni_snps = cp.deepcopy(parent.get_uni_snps())
+        # get parent uni snps and remove any bad snps
+        parent_uni_snps = cp.deepcopy(self.remove_bad_snps(parent.get_uni_snps(), hub))
+
+        assert(len(parent_uni_snps) > 0)
 
         # get the number of snps to add
         snps_to_add = self.num_snps_to_add(rng, parent_uni_snps)
@@ -201,8 +198,8 @@ class Reproduction:
         for uni_snp in mutated_snps:
             parent_uni_snps.add(self.get_ran_snp_mut(rng, uni_snp, hub))
 
-        # update the epi pairs + new interactions
-        offspring.set_uni_snps(parent_uni_snps)
+        offspring = Pipeline(uni_snps=parent_uni_snps, selector_node=parent.get_selector_node(),
+                             ld_node=parent.get_ld_node(), root_node=parent.get_root_node())
 
         # mutate the selector node
         if rng.choice([True, False], p=[self.mut_selector_p, 1.0-self.mut_selector_p]):
@@ -274,15 +271,25 @@ class Reproduction:
 
     # execute a crossover between two pipelines
     def crossover(self,
-                  rng: np.random.Generator,
+                  rng_: np.random.Generator,
                   parent1: Pipeline,
                   parent2: Pipeline,
                   hub: SnpHub) -> Pipeline:
 
-        # combine the univariate snps from both parents
-        p1_snps = cp.deepcopy(parent1.get_uni_snps())
-        p2_snps = cp.deepcopy(parent2.get_uni_snps())
+        rng = np.random.default_rng(rng_)
+
+        # make sure the parents have more than 0 univariate snps
+        assert len(parent1.get_uni_snps()) > 0
+        assert len(parent2.get_uni_snps()) > 0
+
+        # combine the univariate snps from both parents but remove any bad snps first
+        p1_snps = cp.deepcopy(self.remove_bad_snps(parent1.get_uni_snps(), hub))
+        p2_snps = cp.deepcopy(self.remove_bad_snps(parent2.get_uni_snps(), hub))
+
+        # combine the snps from both parents and make sure we have at least one
         combined_snps = p1_snps.union(p2_snps)
+        assert len(combined_snps) > 0
+
         snps = None
 
         # sample a range between the minimum and maximum allowed
@@ -306,5 +313,22 @@ class Reproduction:
         return Pipeline(uni_snps=set(snps),
                         selector_node=cp.deepcopy(parent1.get_selector_node()) if rng.choice([True, False]) else cp.deepcopy(parent2.get_selector_node()),
                         ld_node=cp.deepcopy(parent1.get_ld_node()) if rng.choice([True, False]) else cp.deepcopy(parent2.get_ld_node()),
-                        root_node=cp.deepcopy(parent1.get_root_node()) if rng.choice([True, False]) else cp.deepcopy(parent2.get_root_node()),
-                        traits=[])
+                        root_node=cp.deepcopy(parent1.get_root_node()) if rng.choice([True, False]) else cp.deepcopy(parent2.get_root_node()))
+
+    # remove bad snps: r2 < 0 and snp has been prunned
+    def remove_bad_snps(self, snps: Set, hub: SnpHub) -> Set:
+        """
+        Function to remove bad snps with r2<0 for a given set of snps
+
+        Parameters:
+        snps: Set of snps
+        """
+        good_snps = set()
+        for snp_name in snps:
+            # check if r2 is positive
+            if hub.get_uni_res(snp_name) > np.float32(0.0) and hub.has_been_prunned(snp_name) == False:
+                # add to good snps
+                good_snps.add(snp_name)
+        # return the good snps
+        assert(0 < len(good_snps) <= len(snps))
+        return good_snps

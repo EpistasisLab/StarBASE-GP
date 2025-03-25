@@ -21,33 +21,26 @@ div_score_t = np.float32
 
 @typechecked
 class Pipeline:
+    # initialize the pipeline with a set of univariate snps, an LD node, a selector node and a root node
     def __init__(self,
                  uni_snps: uni_snps_t,
                  ld_node: LDSelector,
                  selector_node: ScikitNode,
-                 root_node: ScikitNode,
-                 traits: traits_t) -> None:
+                 root_node: ScikitNode) -> None:
+
+        # make sure uni_snps is not empty
+        assert len(uni_snps) > 0
 
         # holds pipeline's set of univariate snps
         self.univariate_snps = cp.deepcopy(uni_snps)
         # holds pipeline's set of traits: r2 (traits[0]) and feature_cnt (traits[1]) and actual feature names (traits[2])
-        self.traits = cp.deepcopy(traits)
+        self.traits = []
         # holds the selector node
         self.selector_node = cp.deepcopy(selector_node)
         # holds the LD node
         self.ld_node = cp.deepcopy(ld_node)
         # holds the root node
         self.root_node = cp.deepcopy(root_node)
-
-    # set univariate snps
-    def set_uni_snps(self, uni_snps: uni_snps_t) -> None:
-        # check that internal uni_snps is empty
-        assert len(self.univariate_snps) == 0
-        # make sure that the uni_snps are not empty
-        assert len(uni_snps) > 0
-        # update
-        self.univariate_snps = cp.deepcopy(uni_snps)
-        return
 
     # set traits
     def set_traits(self, traits: traits_t) -> None:
@@ -58,8 +51,10 @@ class Pipeline:
         # make sure correct types
         assert isinstance(traits[0], r2_t)
         assert isinstance(traits[1], feature_cnt_t)
-        # print("Type of traits[2]:", type(traits[2]))
         assert isinstance(traits[2], feature_name_t)
+        # make sure they are the correct length
+        assert len(traits[2]) == traits[1]
+
         # make sure we have a non-negative number of features
         assert traits[1] >= 0
 
@@ -67,39 +62,33 @@ class Pipeline:
         self.traits = cp.deepcopy(traits)
         return
 
+    # get r2 from trait set
     def get_trait_r2(self) -> r2_t:
         assert len(self.traits) == 3
         return self.traits[0]
 
+    # get feature count from trait set
     def get_trait_feature_cnt(self) -> feature_cnt_t:
         assert len(self.traits) == 3
         assert self.traits[1] >= 0 # make sure we have a non-negative number of features
         return self.traits[1]
 
+    # get feature names that made it to regressor from trait set
     def get_trait_feature_names(self) -> feature_name_t:
         assert len(self.traits) == 3
-        assert self.traits[2] is not None
+        assert len(self.traits[2]) == self.traits[1]
+        assert len(self.traits[2]) > 0 # make sure we have at least one feature name
         return self.traits[2]
 
+    # get the traits from the pipeline
     def get_traits(self) -> traits_t:
+        assert len(self.traits) == 3
         return self.traits
 
+    # get the univariate snps from the pipeline
     def get_uni_snps(self) -> uni_snps_t:
+        assert len(self.univariate_snps) > 0
         return self.univariate_snps
-
-    # method to get the number of nodes in the pipeline
-    def get_uni_count(self):
-        return len(self.univariate_snps)
-
-    # method to get the number of features/SNPs in the pipeline
-    def get_feature_count(self):
-        return self.selector_node.get_feature_count()
-
-    def get_ld_snp_details_after_ld(self):
-        return self.ld_node.snp_details_after_ld
-
-    def get_ld_name_of_selected_feature(self):
-        return self.ld_node.name_of_selected_features
 
     # method to get the LD node
     def get_ld_node(self):
