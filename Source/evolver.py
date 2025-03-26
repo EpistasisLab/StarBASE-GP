@@ -912,7 +912,12 @@ class EA:
                 # skip this iteration if there are no good snps
                 continue
 
-            updated_pipelines.append(pipeline)
+            updated_pipelines.append(Pipeline(
+                uni_snps=good_snps,
+                selector_node=pipeline.get_selector_node(),
+                ld_node=pipeline.get_ld_node(),
+                root_node=pipeline.get_root_node(),
+            ))
         return updated_pipelines
 
     def get_unseen_univariates(self, pipelines: List[Pipeline]) -> Set[snp_name_t]:
