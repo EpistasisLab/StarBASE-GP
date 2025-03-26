@@ -454,7 +454,7 @@ class EA:
             # how many extra pipeline offspring are needed to reach 2*N potentially surviving solutions
             extra_offspring = self.pop_size - len(self.population)
             # get order of mutation/crossover to do with the extra offspring
-            var_order, parent_cnt = self.repoduction.variation_order(self.rng, np.uint16(extra_offspring + self.pop_size))
+            var_order, parent_cnt = self.repoduction.variation_order(self.rng, np.uint16(extra_offspring + self.pop_size + self.pop_size))
 
             # get the parent scores by position
             parent_ids = self.parent_selection(parent_cnt)
@@ -462,12 +462,12 @@ class EA:
             # generate offspring
             offspring = self.repoduction.produce_offspring(rng_ = self.rng,
                                                            hub = self.hubs,
-                                                           offspring_cnt=np.uint16(extra_offspring + self.pop_size),
+                                                           offspring_cnt=np.uint16(extra_offspring + self.pop_size + self.pop_size),
                                                            parent_ids=parent_ids,
                                                            population=self.population,
                                                            order=var_order)
             # make sure we have the correct number of competing solutions
-            assert len(offspring) + len(self.population) == 2 * self.pop_size
+            assert len(offspring) + len(self.population) == 3 * self.pop_size
 
             # process offspring: evaluation interactions and remove bad interactions
             offspring = self.process_offspring(offspring, snp_hub_gen_t(g))
@@ -476,14 +476,13 @@ class EA:
             offspring = self.evaluation(offspring, snp_hub_gen_t(g))
 
             # must be less than or equal bc of potential negative r2 offspring pipelines
-            assert (0 < len(offspring) + len(self.population) <= 2 * self.pop_size)
+            assert (0 < len(offspring) + len(self.population) <= 3 * self.pop_size)
 
             # will remove any bad pipeline from both the population and offspring
-            self.population = self.remove_bad_pipleines(self.population)
             offspring = self.remove_bad_pipleines(offspring)
 
             # survival selection
-            self.population = self.survival_selection(self.population, offspring)
+            self.population = self.survival_selection(offspring)
 
             # make sure we have the correct number of pipelines
             assert len(self.population) == self.pop_size
@@ -523,7 +522,7 @@ class EA:
         return scores
 
     # survival selection
-    def survival_selection(self, pop1: List[Pipeline], pop2: List[Pipeline]) -> List[Pipeline]:
+    def survival_selection(self, pop1: List[Pipeline]) -> List[Pipeline]:
         """
         Function to select the survivors from the current population and offspring.
 
@@ -539,10 +538,9 @@ class EA:
         """
         # make sure all population scores are positive
         assert all(pipeline.get_trait_r2() > 0.0 for pipeline in pop1)
-        assert all(pipeline.get_trait_r2() > 0.0 for pipeline in pop2)
 
         # combine both the population and offspring lists into one
-        pipelines_original = pop1 + pop2
+        pipelines_original = pop1
 
         # iterate through the combined pipelines and remove duplicates with the same get_trait_feature_names
         best_pipelines = {}
