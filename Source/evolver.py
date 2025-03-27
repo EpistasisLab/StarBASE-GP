@@ -1051,10 +1051,12 @@ class EA:
             # get permutation importance
             # get a random state using the self.rng to get a number between 1 to 100000
             random_state = self.rng.integers(low=1, high=100000)
-            perm_imp = permutation_importance(fitted_model, uni_features_test, self.y_val, n_repeats=100, random_state=random_state, n_jobs=-1)
+            perm_imp = permutation_importance(fitted_model, uni_features_test, self.y_val, n_repeats=100, random_state=random_state, n_jobs=-1, scoring='r2')
 
             # make a sorted dataframe
             perm_imp_df = pd.DataFrame({'Feature': new_column_names, 'PFI_importance': perm_imp['importances_mean']})
+            # if any PFI_importance is greater than 1 then set it to 0 to make sure garbage values are not present
+            perm_imp_df['PFI_importance'] = np.where(perm_imp_df['PFI_importance'] > 1, 0, perm_imp_df['PFI_importance'])
             perm_imp_df = perm_imp_df.sort_values(by='PFI_importance', ascending=False)
             perm_imp_df['Rank'] = range(1, len(perm_imp_df) + 1)
 
@@ -1072,7 +1074,7 @@ class EA:
         all_perm_imp_df = all_perm_imp_df.sort_values(by=['Pipeline_No', 'PFI_importance'], ascending=[True, False])
         # reset the index after sorting
         all_perm_imp_df = all_perm_imp_df.reset_index(drop=True)
-        all_perm_imp_df.to_csv(self.save_directory + "attri_all_pipelines_PFI_values.csv", index=False)
+        all_perm_imp_df.to_csv(self.save_directory + "all_pipelines_PFI_values.csv", index=False)
         print("All PFI values saved to all_pipelines_PFI_values.csv", flush=True)
 
         # create overall feature importance for all features seen in all_perm_imp_df by using the formula: 1/mean_rank * percentage of times appeared in a pipeline
@@ -1107,138 +1109,8 @@ class EA:
         plt.ylabel('Feature')
         plt.gca().invert_yaxis()
         plt.tight_layout()
-        plt.savefig(self.save_directory + 'attri_top_20_features.png')
+        plt.savefig(self.save_directory + 'top_20_features.png')
 
         plt.clf()
 
-    # save pareto plot and calculate permutation importance for each pipeline with all feature snps
-    def post_analysis_with_all_snps(self)  -> None:
-        """
-        Function to perform post analysis of the pipelines.
-        """
-
-        ###################### create the pareto front #######################
-
-        # get the fronts and rank
-        _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(r2_t(1.0), feature_cnt_t(-1))))
-
-        pareto_front = []
-        # get rank == 0 pipelines
-        for i, r in enumerate(rank):
-            if r == 0:
-                pareto_front.append(self.population[i])
-
-        print('Size of Pareto Front:', len(pareto_front), flush=True)
-
-        # sort the pareto front by feature count
-        pareto_front = sorted(pareto_front, key=lambda x: x.get_trait_feature_cnt())
-
-        # Initialize an empty DataFrame to save all shap_values_df
-        all_perm_imp_df = pd.DataFrame()
-
-        # calculate the permutation importance for each pipeline in the pareto front
-        for i, pipeline in enumerate(pareto_front):
-            # get the uni_nodes - has the SNP Name, SNP position and the best encoder type
-            uni_nodes = self.construct_uni_nodes(pipeline.get_uni_snps())
-
-            # make a uni_snps_df - which will have the feature and the best inheritence type
-            uni_snps_list = []
-            uni_snps = pipeline.get_uni_snps()
-
-            for snp_name in uni_snps:
-                best_lo = self.hubs.get_uni_encoding(snp_name)
-                uni_snps_list.append({'feature': snp_name, 'inheritence': best_lo})
-            uni_snps_df = pd.DataFrame(uni_snps_list)
-
-            # include all snps that made it to the regressor
-            features_final = [snp_name for snp_name in pipeline.get_trait_feature_names()]
-            uni_nodes = [uni_node for uni_node in uni_nodes if uni_node.get_snp_name() in features_final]
-            uni_snps_df = uni_snps_df[uni_snps_df['feature'].isin(features_final)]
-
-            # change the feature names to have the inheritance information - from the filtered uni_snps_df
-            new_column_names = [ f'{row["feature"]}_{row["inheritence"]}' for _, row in uni_snps_df.iterrows()]
-
-            # Construct the snp_union FeatureUnion - to transform the training and test datasets to have the encoded SNPs
-            snp_union = FeatureUnion([(uni_node.name, uni_node) for uni_node in uni_nodes])
-            steps = []
-            steps.append(('snp_union',snp_union))
-            pipe = SklearnPipeline(steps=steps)
-            pipe.fit(self.X_train, self.y_train)
-
-            # Transform the training and test datasets using snp_union
-            uni_features_train = pipe.transform(self.X_train)
-            uni_features_test = pipe.transform(self.X_val)
-
-            # Get R2 and Feature Count for this specific pipeline
-            pipeline_r2 = pipeline.get_trait_r2()
-            pipeline_feature_count = len(uni_nodes)
-
-            ############ FOR PERM IMP ############
-
-            # create the pipeline without refitting the regressor
-            model = pipeline.get_root_node().regressor
-            #pipeline_fitted = pipeline.fit(self.X_train, self.y_train)
-            fitted_model = model.fit(uni_features_train, self.y_train)
-
-            # get permutation importance
-            # get a random state using the self.rng to get a number between 1 to 100000
-            random_state = self.rng.integers(low=1, high=100000)
-            perm_imp = permutation_importance(fitted_model, uni_features_test, self.y_val, n_repeats=100, random_state=random_state, n_jobs=-1)
-
-            # make a sorted dataframe
-            perm_imp_df = pd.DataFrame({'Feature': new_column_names, 'PFI_importance': perm_imp['importances_mean']})
-            perm_imp_df = perm_imp_df.sort_values(by='PFI_importance', ascending=False)
-            perm_imp_df['Rank'] = range(1, len(perm_imp_df) + 1)
-
-            # Add pipeline details to the PFI DataFrame
-            perm_imp_df['Pipeline_No'] = i + 1
-            perm_imp_df['Pipeline_R2'] = pipeline_r2
-            perm_imp_df['Pipeline_Feature_Count'] = pipeline_feature_count
-            perm_imp_df['Pipeline_Selector'] = pipeline.get_selector_node().name
-            perm_imp_df['Pipeline_Root'] = pipeline.get_root_node().name
-
-            # adding the individual pipeline PFI to the all_perm_imp_df
-            all_perm_imp_df = pd.concat([all_perm_imp_df, perm_imp_df], ignore_index=True)
-
-        # sort the all_shap_values_df by Pipeline_No and then by shap_value
-        all_perm_imp_df = all_perm_imp_df.sort_values(by=['Pipeline_No', 'PFI_importance'], ascending=[True, False])
-        # reset the index after sorting
-        all_perm_imp_df = all_perm_imp_df.reset_index(drop=True)
-        all_perm_imp_df.to_csv(self.save_directory + "phil_all_pipelines_PFI_values.csv", index=False)
-        print("All PFI values saved to all_pipelines_PFI_values.csv", flush=True)
-
-        # create overall feature importance for all features seen in all_perm_imp_df by using the formula: 1/mean_rank * percentage of times appeared in a pipeline
-        # get the mean rank of each feature
-        mean_rank = all_perm_imp_df.groupby('Feature').agg({'Rank': 'mean'}).reset_index()
-        # get the count of each feature
-        feature_count = all_perm_imp_df.groupby('Feature').agg({'Rank': 'count'}).reset_index()
-        # Merge the mean_rank and feature_count dataframes
-        mean_rank = mean_rank.merge(feature_count, on='Feature', how='left')
-        mean_rank.rename(columns={'Rank_x': 'Mean_Rank', 'Rank_y': 'Feature_Count'}, inplace=True)
-        #print("Mean Rank and Feature Count: ", mean_rank, flush=True)
-
-        # Calculate the percentage of times each feature appeared in a pipeline
-        total_pipelines = all_perm_imp_df['Pipeline_No'].nunique()
-        mean_rank['Appearance_Percentage'] = mean_rank['Feature_Count'] / total_pipelines
-
-        # Calculate the Overall Feature Importance
-        mean_rank['Overall_Feature_Importance'] = (1 / mean_rank['Mean_Rank']) * mean_rank['Appearance_Percentage']
-
-        # Sort by Overall_Feature_Importance
-        mean_rank = mean_rank.sort_values(by='Overall_Feature_Importance', ascending=False)
-        # save the mean_rank to a csv file
-        mean_rank.to_csv(self.save_directory + "overall_feature_importance.csv", index=False)
-
-
-        # plot a bar graph of the top 20 features
-        top_20_features = mean_rank.head(20)
-        plt.figure(figsize=(10, 6))
-        plt.barh(top_20_features['Feature'], top_20_features['Overall_Feature_Importance'], color='skyblue')
-        plt.title('Top 20 Features by Overall FI')
-        plt.xlabel('Overall Feature Importance')
-        plt.ylabel('Feature')
-        plt.gca().invert_yaxis()
-        plt.tight_layout()
-        plt.savefig(self.save_directory + 'phil_top_20_features.png')
-
-        plt.clf()
+    

@@ -451,7 +451,7 @@ class FeatureEncodingFrequencySelector(ScikitNode, TransformerMixin):
         rng = np.random.default_rng(rng_)
 
         if params == {}:
-            self.params = {'threshold': np.float32(rng.uniform(low=0.0, high=0.3))} # increments of 0.05
+            self.params = {'threshold': np.float32(rng.uniform(low=0.01, high=0.3))} # increments of 0.05
         else:
             # make sure params is correct
             assert 'threshold' in params
@@ -507,10 +507,10 @@ class FeatureEncodingFrequencySelector(ScikitNode, TransformerMixin):
 
     def mutate(self, rng: rng_t):
         # shift is a rng from normal distribution with a change in 2nd decimal place
-        shift = np.float32(rng.normal(loc=0.0, scale=0.01))
+        shift = np.float32(rng.normal(loc=0.01, scale=0.01))
         # check if the threshold is going to be less than 0.0
-        if self.threshold + shift < np.float32(0.0):
-            self.threshold = np.float32(0.0)
+        if self.threshold + shift < np.float32(0.01):
+            self.threshold = np.float32(0.01)
         # check if the threshold is going to be greater than 0.3
         elif self.threshold + shift > np.float32(0.3):
             self.threshold = np.float32(0.3)
@@ -1214,7 +1214,7 @@ class LDSelector(ScikitNode, TransformerMixin):
 
             # if params is an empty dictionary, then we will initialize the params
             if params == {}:
-                self.params = {'threshold': np.float32(rng.uniform(low=0.6, high=0.95)), 'genomic_distance': int(1000000)}
+                self.params = {'threshold': np.float32(rng.uniform(low=0.5, high=0.95)), 'genomic_distance': int(1000000)}
             else:
                 # make sure params is correct
                 assert 'threshold' in params
@@ -1517,8 +1517,8 @@ class LDSelector(ScikitNode, TransformerMixin):
         shift = 0.05 * rng.choice([-1.0, 1.0])
 
         # check if the threshold is going to be less than 0.1
-        if self.threshold + shift < np.float32(0.6):
-            self.threshold = np.float32(0.6)
+        if self.threshold + shift < np.float32(0.5):
+            self.threshold = np.float32(0.5)
         # check if the threshold is going to be greater than 1
         elif self.threshold + shift > np.float32(0.95):
             self.threshold = np.float32(0.95)
