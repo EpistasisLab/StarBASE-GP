@@ -615,7 +615,7 @@ class EA:
 
                 # add a random number of snps to the set
                 # uni_cnt = int(self.rng.integers(low=self.uni_cnt_min, high=self.uni_cnt_max + 1))
-                uni_cnt = self.uni_cnt_max 
+                uni_cnt = int(self.uni_cnt_max)
 
                 while len(snps) <= uni_cnt:
                     # get random snp and add to snps
@@ -632,7 +632,8 @@ class EA:
             for _ in range(self.pop_size):
                 snps = set()
                 # add a random number of snps to the set
-                uni_cnt = int(self.rng.integers(low=self.uni_cnt_min, high=self.uni_cnt_max + 1))
+                # uni_cnt = int(self.rng.integers(low=self.uni_cnt_min, high=self.uni_cnt_max + 1))
+                uni_cnt = int(self.uni_cnt_max)
 
                 # get the num of chrom from snp hub dictionary
                 chroms = self.hubs.non_pruned.get_keys_with_snps()
