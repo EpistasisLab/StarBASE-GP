@@ -1128,3 +1128,16 @@ class SnpHub:
     def get_random_non_pruned_snp(self, rng_: rng_t) -> snp_t:
         rng = np.random.default_rng(rng_)
         return self.non_pruned.get_ran_snp(rng)
+    
+    # count number of unseen snps in the hub from non_pruned object
+    def count_unseen_snps(self) -> None:
+        count = 0
+        for chrm in self.non_pruned.non_pruned:
+            for pos in self.non_pruned.non_pruned[chrm]:
+                # count if the snp has been seen
+                if self.hub.has_been_seen(snp_t(f"{chrm}.{pos}")) == False:
+                    count += 1
+
+        # print proportion of unseen snps
+        print(f"Proportion of unseen SNPs: {count/len(self.hub.hub):.2%}", flush=True)
+        return

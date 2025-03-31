@@ -182,7 +182,7 @@ def ray_eval_pipeline(x_train,
         pipeline.fit(x_train_transformed_df, y_train)
     except Exception as e:
         logging.error(f"Exception while fitting pipeline after LD: {e}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, (), []
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, [snp_name_t(k) for k,v in ld_node.snp_details_after_ld.items() if v == True], []
 
     try:
         r2_score = pipeline.score(x_val_transformed_df, y_val)
@@ -193,7 +193,7 @@ def ray_eval_pipeline(x_train,
             features_final = features_final.tolist()
     except Exception as e:
         logging.error(f"Error while scoring or getting feature count: {e}")
-        return r2_t(-1.0), feature_cnt_t(0), pop_id, (), []
+        return r2_t(-1.0), feature_cnt_t(0), pop_id, [snp_name_t(k) for k,v in ld_node.snp_details_after_ld.items() if v == True], []
 
     # return the pipeline
     return r2_t(r2_score), feature_cnt_t(feature_count), pop_id, [snp_name_t(k) for k,v in ld_node.snp_details_after_ld.items() if v == True], features_final
@@ -487,7 +487,10 @@ class EA:
             # make sure we have the correct number of pipelines
             assert len(self.population) == self.pop_size
 
+            print('# of snps still consider (non_pruned + not_seen):' , self.hubs.pruned_hub_size(), flush=True)
+            self.hubs.count_unseen_snps()  # count the number of unseen snps after each generation
             print(f"Time to finish generation: {(time.time() - start_time) / 60} minutes", flush=True)
+            print('')
 
         # end the timer for generational time
         total_gp_run = time.time() - total_gp_run
@@ -611,7 +614,8 @@ class EA:
                 snps = set()
 
                 # add a random number of snps to the set
-                uni_cnt = int(self.rng.integers(low=self.uni_cnt_min, high=self.uni_cnt_max + 1))
+                # uni_cnt = int(self.rng.integers(low=self.uni_cnt_min, high=self.uni_cnt_max + 1))
+                uni_cnt = self.uni_cnt_max 
 
                 while len(snps) <= uni_cnt:
                     # get random snp and add to snps

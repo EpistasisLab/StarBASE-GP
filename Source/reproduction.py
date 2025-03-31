@@ -139,6 +139,9 @@ class Reproduction:
         assert len(population) > 0
         assert offspring_cnt > 0
 
+        # count number of mutations applied
+        mut_cnt = np.uint16(0)
+
         # set the random number generator
         rng = np.random.default_rng(rng_)
 
@@ -150,24 +153,30 @@ class Reproduction:
         for op in order:
             # mutation only
             if op == 'm':
-                offspring.append(self.mutate(rng, population[parent_ids[p_id]], hub))
+                off, cnt = self.mutate(rng, population[parent_ids[p_id]], hub)
+                offspring.append(off)
                 p_id += 1
+                mut_cnt += cnt
             # crossover only
             elif op == 'c':
                 off = self.crossover(rng, population[parent_ids[p_id]], population[parent_ids[p_id+1]], hub)
+                cnt = 0
 
                 # coin flip to decide if we should mutate the offspring
-                # todo: should we append snps to the offspring if it is less than uni_cnt_min?
                 if rng.choice([True, False], p=[self.mut_prob, 1.0-self.mut_prob]):
-                    off = self.mutate(rng, off, hub)
+                    off, cnt = self.mutate(rng, off, hub)
 
                 offspring.append(off)
                 p_id += 2
+                mut_cnt += cnt
             else:
                 raise ValueError(f"Unknown operator: {op}")
         # make sure we have the right number of offspring
         assert len(offspring) == offspring_cnt
         assert p_id == len(parent_ids)
+
+        # print the total number of mutations applied
+        print(f"Total mutations applied in reproduction: {mut_cnt}")
 
         # return the offspring
         return offspring
@@ -176,7 +185,10 @@ class Reproduction:
     def mutate(self,
                rng_: rng_t,
                parent: Pipeline,
-               hub: SnpHub) -> Pipeline:
+               hub: SnpHub) -> Tuple[Pipeline, np.uint16]:
+
+        # number of snps added to the offspring
+        mut_cnt = np.uint16(0)
 
         # set the random number generator
         rng = np.random.default_rng(rng_)
@@ -196,6 +208,8 @@ class Reproduction:
 
         # go through mutated_snps, mutate them, and append them to parent_uni_snps
         for uni_snp in mutated_snps:
+            # increment the mutation count
+            mut_cnt += np.uint16(1)
             parent_uni_snps.add(self.get_ran_snp_mut(rng, uni_snp, hub))
 
         offspring = Pipeline(uni_snps=parent_uni_snps, selector_node=parent.get_selector_node(),
@@ -213,7 +227,7 @@ class Reproduction:
         if rng.choice([True, False], p=[self.mut_regressor_p, 1.0-self.mut_regressor_p]):
             offspring.mutate_root_node(rng)
 
-        return offspring
+        return offspring, mut_cnt
 
     # add a set of snps: smart or random addition depends on the probabilities
     def num_snps_to_add(self,
