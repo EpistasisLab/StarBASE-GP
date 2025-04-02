@@ -1025,6 +1025,8 @@ class EA:
 
             # filter uni_nodes to only include good snps that are not prunned
             features_final = [snp_name for snp_name in pipeline.get_trait_feature_names() if self.hubs.has_been_prunned(np.str_(snp_name)) == False]
+            if len(features_final) == 0:
+                continue
             uni_nodes = [uni_node for uni_node in uni_nodes if uni_node.get_snp_name() in features_final]
             uni_snps_df = uni_snps_df[uni_snps_df['feature'].isin(features_final)]
 
