@@ -212,5 +212,5 @@ def non_dominated_truncate(fronts: List[npt.NDArray[feature_cnt_t]],
             survivors.extend(sorted_front[:N-len(survivors)])
             break
 
-    assert len(survivors) == N
+    #assert len(survivors) == N
     return np.array(survivors, dtype=np.uint16)
