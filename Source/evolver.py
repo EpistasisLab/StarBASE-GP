@@ -1111,7 +1111,7 @@ class EA:
         top_20_features = mean_rank.head(20)
         plt.figure(figsize=(10, 6))
         plt.barh(top_20_features['Feature'], top_20_features['Overall_Feature_Importance'], color='skyblue')
-        plt.title('Top 20 Features by Overall FI')
+        plt.title('Top 20 Features by SNP Consistency Score')
         plt.xlabel('SNP Consistency Score')
         plt.ylabel('Feature')
         plt.gca().invert_yaxis()
