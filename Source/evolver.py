@@ -460,7 +460,7 @@ class EA:
             # generate offspring
             offspring = self.repoduction.produce_offspring(rng_ = self.rng,
                                                            hub = self.hubs,
-                                                           offspring_cnt=2*self.pop_size,
+                                                           offspring_cnt=np.uint16(2*self.pop_size),
                                                            parent_ids=parent_ids,
                                                            population=self.population,
                                                            order=var_order)
