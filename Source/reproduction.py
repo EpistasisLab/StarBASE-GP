@@ -193,7 +193,7 @@ class Reproduction:
         # set the random number generator
         rng = np.random.default_rng(rng_)
 
-        assert(len(parent.get_trait_feature_names()()) > 0)
+        assert(len(parent.get_trait_feature_names()) > 0)
 
         # get parent uni snps and remove any bad snps
         parent_uni_snps = cp.deepcopy(self.remove_bad_snps(parent.get_trait_feature_names(), hub))
