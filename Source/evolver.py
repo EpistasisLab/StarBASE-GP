@@ -1112,9 +1112,10 @@ class EA:
         plt.figure(figsize=(10, 6))
         plt.barh(top_20_features['Feature'], top_20_features['Overall_Feature_Importance'], color='skyblue')
         plt.title('Top 20 Features by Overall FI')
-        plt.xlabel('Overall Feature Importance')
+        plt.xlabel('SNP Consistency Score')
         plt.ylabel('Feature')
         plt.gca().invert_yaxis()
+        plt.xlim(0,1.0) # set xlim to 0 to 1.0
         plt.tight_layout()
         plt.savefig(self.save_directory + 'top_20_features.png')
 
