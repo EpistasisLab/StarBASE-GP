@@ -1130,7 +1130,7 @@ class SnpHub:
         return self.non_pruned.get_ran_snp(rng)
     
     # count number of unseen snps in the hub from non_pruned object
-    def count_unseen_snps(self) -> None:
+    def seen_snps_proportion(self) -> None:
         count = 0
         for chrm in self.non_pruned.non_pruned:
             for pos in self.non_pruned.non_pruned[chrm]:
@@ -1139,5 +1139,5 @@ class SnpHub:
                     count += 1
 
         # print proportion of unseen snps
-        print(f"Proportion of unseen SNPs: {count/len(self.hub.hub):.2%}", flush=True)
+        print(f"Proportion of seen SNPs: {1.0 - (count/len(self.hub.hub)):.2%}", flush=True)
         return

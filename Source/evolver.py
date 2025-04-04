@@ -451,10 +451,8 @@ class EA:
             print('Generation:', g, flush=True)
             start_time = time.time()
 
-            # how many extra pipeline offspring are needed to reach 2*N potentially surviving solutions
-            extra_offspring = self.pop_size - len(self.population)
             # get order of mutation/crossover to do with the extra offspring
-            var_order, parent_cnt = self.repoduction.variation_order(self.rng, np.uint16(extra_offspring + self.pop_size + self.pop_size))
+            var_order, parent_cnt = self.repoduction.variation_order(self.rng, 2*self.pop_size)
 
             # get the parent scores by position
             parent_ids = self.parent_selection(parent_cnt)
@@ -462,12 +460,12 @@ class EA:
             # generate offspring
             offspring = self.repoduction.produce_offspring(rng_ = self.rng,
                                                            hub = self.hubs,
-                                                           offspring_cnt=np.uint16(extra_offspring + self.pop_size + self.pop_size),
+                                                           offspring_cnt=2*self.pop_size,
                                                            parent_ids=parent_ids,
                                                            population=self.population,
                                                            order=var_order)
             # make sure we have the correct number of competing solutions
-            assert len(offspring) + len(self.population) == 3 * self.pop_size
+            assert len(offspring) + len(self.population) <= 3 * self.pop_size
 
             # process offspring: evaluation interactions and remove bad interactions
             offspring = self.process_offspring(offspring, snp_hub_gen_t(g))
@@ -488,7 +486,7 @@ class EA:
             assert len(self.population) == self.pop_size
 
             print('# of snps still consider (non_pruned + not_seen):' , self.hubs.pruned_hub_size(), flush=True)
-            self.hubs.count_unseen_snps()  # count the number of unseen snps after each generation
+            self.hubs.seen_snps_proportion()  # count the number of unseen snps after each generation
             print(f"Time to finish generation: {(time.time() - start_time) / 60} minutes", flush=True)
             print('')
 
@@ -690,7 +688,7 @@ class EA:
     def remove_bad_pipleines(self, pipelines: List[Pipeline]) -> List[Pipeline]:
         good_pipelines = []
         for pipeline in pipelines:
-            if self.hubs.all_snps_prunned(pipeline.get_uni_snps()) == False:
+            if self.hubs.all_snps_prunned(pipeline.get_trait_feature_names()) == False:
                 good_pipelines.append(pipeline)
         return good_pipelines
 
@@ -809,7 +807,7 @@ class EA:
             finished, ray_jobs = ray.wait(ray_jobs)
             r2, feature_count, pop_id, pruned, feature_names = ray.get(finished)[0]
             # update the pipeline
-            pop[pop_id].set_traits([r2, feature_count, set(feature_names)])
+            pop[pop_id].set_traits([r2, feature_count, set(np.str_(s) for s in feature_names)])
 
             prunned_snps.update(set(snp for snp in pruned if not self.hubs.has_been_prunned(snp)))
 
@@ -820,7 +818,7 @@ class EA:
         new_pop = []
 
         for pipeline in pop:
-            if self.hubs.all_snps_prunned(pipeline.get_uni_snps()) == False and pipeline.get_trait_r2() > 0.0:
+            if pipeline.get_trait_r2() > 0.0 and self.hubs.all_snps_prunned(pipeline.get_trait_feature_names()) == False:
                 new_pop.append(pipeline)
 
         print('# of snps still consider (non_pruned + not_seen):' , self.hubs.pruned_hub_size(), flush=True)
@@ -894,7 +892,10 @@ class EA:
 
         # get parent_cnt number of parents
         for _ in range(parent_cnt):
-            parent_ids.append(nsga.non_dominated_binary_tournament(rng_=self.rng, ranks=ranks, distances=crowding_distance))
+            parent = nsga.non_dominated_binary_tournament(rng_=self.rng, ranks=ranks, distances=crowding_distance)
+            # make sure we are within the bounds of the candidates
+            assert 0 <= parent < len(self.population)
+            parent_ids.append(parent)
         # make sure that the number of parents is correct
         assert len(parent_ids) == parent_cnt
 

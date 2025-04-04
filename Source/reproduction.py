@@ -164,7 +164,7 @@ class Reproduction:
 
                 # coin flip to decide if we should mutate the offspring
                 if rng.choice([True, False], p=[self.mut_prob, 1.0-self.mut_prob]):
-                    off, cnt = self.mutate(rng, off, hub)
+                    off, cnt = self.mutate_post_crossover(rng, off, hub)
 
                 offspring.append(off)
                 p_id += 2
@@ -193,10 +193,10 @@ class Reproduction:
         # set the random number generator
         rng = np.random.default_rng(rng_)
 
-        assert(len(parent.get_uni_snps()) > 0)
+        assert(len(parent.get_trait_feature_names()()) > 0)
 
         # get parent uni snps and remove any bad snps
-        parent_uni_snps = cp.deepcopy(self.remove_bad_snps(parent.get_uni_snps(), hub))
+        parent_uni_snps = cp.deepcopy(self.remove_bad_snps(parent.get_trait_feature_names(), hub))
 
         assert(len(parent_uni_snps) > 0)
 
@@ -228,6 +228,55 @@ class Reproduction:
             offspring.mutate_root_node(rng)
 
         return offspring, mut_cnt
+    
+    # what mutation are we applying to the pipeline - mutation function for offspring after crossover
+    def mutate_post_crossover(self,
+                rng_: rng_t,
+                offspring: Pipeline,
+                hub: SnpHub) -> Tuple[Pipeline, np.uint16]:
+ 
+         # number of snps added to the offspring
+         mut_cnt = np.uint16(0)
+ 
+         # set the random number generator
+         rng = np.random.default_rng(rng_)
+ 
+         # make sure the parent has more than 0 unprunned snps that made it to the regressor
+         assert(len(offspring.get_uni_snps()) > 0)
+ 
+         # get parent uni snps and remove any bad snps
+         offspring_uni_snps = cp.deepcopy(self.remove_bad_snps(offspring.get_uni_snps(), hub))
+ 
+         assert(len(offspring_uni_snps) > 0)
+ 
+         # get the number of snps to add
+         snps_to_add = self.num_snps_to_add(rng, offspring_uni_snps)
+ 
+         # sample a set of snps from parent_uni_snps with replacement to append to the offspring
+         mutated_snps = rng.choice(list(offspring_uni_snps), snps_to_add, replace=True)
+ 
+         # go through mutated_snps, mutate them, and append them to parent_uni_snps
+         for uni_snp in mutated_snps:
+             # increment the mutation count
+             mut_cnt += np.uint16(1)
+             offspring_uni_snps.add(self.get_ran_snp_mut(rng, uni_snp, hub))
+ 
+         new_offspring = Pipeline(uni_snps=offspring_uni_snps, selector_node=offspring.get_selector_node(),
+                              ld_node=offspring.get_ld_node(), root_node=offspring.get_root_node())
+ 
+         # mutate the selector node
+         if rng.choice([True, False], p=[self.mut_selector_p, 1.0-self.mut_selector_p]):
+             new_offspring.mutate_selector_node(rng)
+ 
+         # mutate the ld node
+         if rng.choice([True, False], p=[self.mut_ld_p, 1.0-self.mut_ld_p]):
+             new_offspring.mutate_ld_node(rng)
+ 
+         # mutate the regressor node
+         if rng.choice([True, False], p=[self.mut_regressor_p, 1.0-self.mut_regressor_p]):
+             new_offspring.mutate_root_node(rng)
+ 
+         return new_offspring, mut_cnt
 
     # add a set of snps: smart or random addition depends on the probabilities
     def num_snps_to_add(self,
@@ -293,12 +342,12 @@ class Reproduction:
         rng = np.random.default_rng(rng_)
 
         # make sure the parents have more than 0 univariate snps
-        assert len(parent1.get_uni_snps()) > 0
-        assert len(parent2.get_uni_snps()) > 0
+        assert len(parent1.get_trait_feature_names()) > 0
+        assert len(parent2.get_trait_feature_names()) > 0
 
         # combine the univariate snps from both parents but remove any bad snps first
-        p1_snps = cp.deepcopy(self.remove_bad_snps(parent1.get_uni_snps(), hub))
-        p2_snps = cp.deepcopy(self.remove_bad_snps(parent2.get_uni_snps(), hub))
+        p1_snps = cp.deepcopy(self.remove_bad_snps(parent1.get_trait_feature_names(), hub))
+        p2_snps = cp.deepcopy(self.remove_bad_snps(parent2.get_trait_feature_names(), hub))
 
         # combine the snps from both parents and make sure we have at least one
         combined_snps = p1_snps.union(p2_snps)

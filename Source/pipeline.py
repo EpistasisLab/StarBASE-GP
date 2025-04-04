@@ -59,7 +59,9 @@ class Pipeline:
         assert traits[1] >= 0
 
         # update the traits
-        self.traits = cp.deepcopy(traits)
+        self.traits = [cp.deepcopy(traits[0]),
+                        cp.deepcopy(traits[1]),
+                        cp.deepcopy(traits[2])]
         return
 
     # get r2 from trait set
@@ -105,7 +107,8 @@ class Pipeline:
     # print the pipeline
     def print_pipeline(self) -> None:
         print("Pipeline:")
-        print("UnivariateNodes:")
+        print('Traits:', self.traits)
+        print("SNP set:")
         print('len(self.univariate_snps):', len(self.univariate_snps))
         for uni_node in self.univariate_snps:
             print(uni_node)
