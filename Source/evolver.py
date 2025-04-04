@@ -452,7 +452,7 @@ class EA:
             start_time = time.time()
 
             # get order of mutation/crossover to do with the extra offspring
-            var_order, parent_cnt = self.repoduction.variation_order(self.rng, 2*self.pop_size)
+            var_order, parent_cnt = self.repoduction.variation_order(self.rng, np.uint16(2*self.pop_size))
 
             # get the parent scores by position
             parent_ids = self.parent_selection(parent_cnt)
