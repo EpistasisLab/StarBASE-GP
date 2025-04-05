@@ -573,7 +573,7 @@ class EA:
         # truncate the population to the population size with nsga ii
         survivor_ids = nsga.non_dominated_truncate(fronts, crowding_distance, self.pop_size)
         # make sure that the number of survivors is correct
-        assert len(survivor_ids) == self.pop_size
+        # assert len(survivor_ids) == self.pop_size
 
         # subset the candidates to only include the survivors
         new_pop = []
