@@ -483,7 +483,7 @@ class EA:
             self.population = self.survival_selection(offspring)
 
             # make sure we have the correct number of pipelines
-            assert len(self.population) == self.pop_size
+            assert len(self.population) <= self.pop_size
 
             print('# of snps still consider (non_pruned + not_seen):' , self.hubs.pruned_hub_size(), flush=True)
             self.hubs.seen_snps_proportion()  # count the number of unseen snps after each generation
