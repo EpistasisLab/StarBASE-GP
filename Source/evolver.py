@@ -442,6 +442,12 @@ class EA:
         print(f"Population initialized in {(time.time() - start_time) / 60 / 60} hours", flush=True)
         print('Entering evolutionary proccess.\n', flush=True)
 
+        # dataframe to store the details of the generations
+        # will hold the size of the pareto front after each generation
+        # will hold the generation number
+        # will hold the number of pruned snps in each generation
+        generation_details = []
+
         # run the algorithm for the specified number of generations
         for g in range(gens):
             # make sure we have the correct number of pipelines
@@ -450,6 +456,10 @@ class EA:
 
             print('Generation:', g, flush=True)
             start_time = time.time()
+
+            # no of pruned snps in the start of the generation
+            pruned_hub_size_start = self.hubs.pruned_hub_size()
+            print("# of pruned snps in the start of the generation:", pruned_hub_size_start, flush=True)
 
             # get order of mutation/crossover to do with the extra offspring
             var_order, parent_cnt = self.repoduction.variation_order(self.rng, np.uint16(2*self.pop_size))
@@ -485,11 +495,36 @@ class EA:
             # make sure we have the correct number of pipelines
             assert len(self.population) <= self.pop_size
 
+            # get the size of the front 0 after each generation 
+            _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(r2_t(1.0), feature_cnt_t(-1))))
+
+            count = 0
+            for i, r in enumerate(rank):
+                if r == 0:
+                    count += 1
+            print('Size of Pareto Front after generation ', g, ':', count, flush=True)
+
+            # get the number of pruned snps in the end of the generation
+            pruned_hub_size_end = self.hubs.pruned_hub_size()
+            # number of snps pruned in the generation
+            number_of_snps_pruned = pruned_hub_size_start - pruned_hub_size_end
+            print("# of pruned snps in the end of the generation:", pruned_hub_size_end, flush=True)
+            print("# of snps pruned in the generation:", number_of_snps_pruned, flush=True)
+
+            # add the generation details to the list
+            generation_details.append({'generation': g,
+                                        'pareto_front_size': count,
+                                        'pruned_hub_size': pruned_hub_size_end,
+                                        'number_of_snps_pruned': number_of_snps_pruned})
+
             print('# of snps still consider (non_pruned + not_seen):' , self.hubs.pruned_hub_size(), flush=True)
             self.hubs.seen_snps_proportion()  # count the number of unseen snps after each generation
             print(f"Time to finish generation: {(time.time() - start_time) / 60} minutes", flush=True)
             print('')
-
+        
+        # change the generation details to a pandas dataframe
+        generation_details = pd.DataFrame(generation_details)
+  
         # end the timer for generational time
         total_gp_run = time.time() - total_gp_run
         print(f"Time to finish {gens} generations: {(total_gp_run) / 60} minutes", flush=True)
@@ -498,6 +533,8 @@ class EA:
         self.plot_pareto_front(self.population) # calling the plotting function at the end to get the final pareto plot
         self.hubs.save_hubs(self.save_directory)
         self.save_total_runtime(total_gp_run/60)
+        # save the generation details to a csv file
+        generation_details.to_csv(os.path.join(self.save_directory, 'generation_details.csv'), index=False)
 
     def save_total_runtime(self, total_runtime: float) -> None:
         """
