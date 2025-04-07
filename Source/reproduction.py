@@ -286,7 +286,7 @@ class Reproduction:
         assert len(uni_snps) <= self.uni_cnt_max
         assert self.uni_cnt_max - len(uni_snps) >= 0
 
-        # get a number of interactions to add based on self.epi_cnt_max and self.epi_cnt_min
+        # get a number of interactions to add based on self.uni_cnt_max and self.uni_cnt_min
         if len(uni_snps) < self.uni_cnt_min:
             return np.uint16(rng.integers(self.uni_cnt_min - len(uni_snps), self.uni_cnt_max - len(uni_snps), endpoint=False))
         else:
@@ -378,7 +378,7 @@ class Reproduction:
                         ld_node=cp.deepcopy(parent1.get_ld_node()) if rng.choice([True, False]) else cp.deepcopy(parent2.get_ld_node()),
                         root_node=cp.deepcopy(parent1.get_root_node()) if rng.choice([True, False]) else cp.deepcopy(parent2.get_root_node()))
 
-    # remove bad snps: r2 < 0 and snp has been prunned
+    # remove bad snps: r2 < 0 and snp has been pruned
     def remove_bad_snps(self, snps: Set, hub: SnpHub) -> Set:
         """
         Function to remove bad snps with r2<0 for a given set of snps
@@ -389,7 +389,7 @@ class Reproduction:
         good_snps = set()
         for snp_name in snps:
             # check if r2 is positive
-            if hub.get_uni_res(snp_name) > np.float32(0.0) and hub.has_been_prunned(snp_name) == False:
+            if hub.get_uni_res(snp_name) > np.float32(0.0) and hub.has_been_pruned(snp_name) == False:
                 # add to good snps
                 good_snps.add(snp_name)
         # return the good snps

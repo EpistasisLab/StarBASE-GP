@@ -1,4 +1,4 @@
-# Will contain the definition of Pipeline class which will be used by both the Epistatic branch and the univariate branch.
+# Will contain the definition of Pipeline class which will be used by univariate branch.
 
 from typing import List, Set
 from .scikit_node import ScikitNode, LDSelector

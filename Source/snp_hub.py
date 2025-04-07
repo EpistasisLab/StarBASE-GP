@@ -261,19 +261,19 @@ class SnpHub:
             # return the type
             return self.hub[snp][5]
 
-        # has this snp been prunned
-        def has_been_prunned(self, snp: snp_t) -> bool:
+        # has this snp been pruned
+        def has_been_pruned(self, snp: snp_t) -> bool:
             # check snp exists in the hub
             assert snp in self.hub
             # return the type
             return self.hub[snp][6]
 
-        # flip the prunned flag
+        # flip the pruned flag
         def flip_prunned(self, snp: snp_t, gen_pruned: snp_hub_gen_t) -> None:
             # check snp exists in the hub
             assert snp in self.hub
             # make sure we have not seen this snp before
-            assert self.has_been_prunned(snp) == False
+            assert self.has_been_pruned(snp) == False
 
             # flip the flag
             self.hub[snp][6] = True
@@ -428,8 +428,6 @@ class SnpHub:
             for chrom, bins in self.bins.items():
                 self.bins[chrom] = [np.array(b, dtype=gen_chrom_pos_t) for b in bins]
 
-            # print("Length of snps: ", len(snps), flush=True)
-            # print("Result from count_bin_objs: ", self.count_bin_objs(), flush=True)
             # make sure all SNPs are accounted for
             assert len(snps) == self.count_bin_objs()
             # make sure snp_bins is the correct size
@@ -786,7 +784,7 @@ class SnpHub:
         for p in bin:
             s = snp_t(f"{chrom}.{p}")
 
-            if self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_prunned(s) == False and s != snp:
+            if self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_pruned(s) == False and s != snp:
                 snps.append(s)
                 r2.append(self.hub.get_uni_res(s))
 
@@ -824,20 +822,20 @@ class SnpHub:
         # get actual bin from Bin class
         bin = self.bins.get_bin(chrom, bin_id)
 
-        # collect all snps that have (not prunned and seen) or (r2 > 0.0 and seen)
+        # collect all snps that have (not pruned and seen) or (r2 > 0.0 and seen)
         snps = []
         for p in bin:
             s = snp_t(f"{chrom}.{p}")
 
             # not seen
             not_seen = self.hub.has_been_seen(s) == False
-            # r2 > 0.0 and seen and not prunned
-            seen_r2_np = self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_seen(s) and self.hub.has_been_prunned(s) == False
+            # r2 > 0.0 and seen and not pruned
+            seen_r2_np = self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_seen(s) and self.hub.has_been_pruned(s) == False
 
             if (not_seen or seen_r2_np) and s != snp:
                 snps.append(s)
 
-        # if no snps were collected, return a random snp from non prunned
+        # if no snps were collected, return a random snp from non pruned
         if len(snps) == 0:
             return self.get_random_non_pruned_snp(rng)
 
@@ -863,11 +861,11 @@ class SnpHub:
         # get bin id for the snp
         bin_id = self.hub.get_snp_bin(snp)
 
-        # collect all snps that have not been prunned and have r2 > 0.0
+        # collect all snps that have not been pruned and have r2 > 0.0
         snps = []
         r2 = []
 
-        # loop through all non prunned snps and collect the ones with r2 > 0.0 and not prunned
+        # loop through all non prunned snps and collect the ones with r2 > 0.0 and not pruned
         for pos in self.non_pruned.non_pruned[chrom]:
             s = snp_t(f"{chrom}.{pos}")
 
@@ -907,22 +905,22 @@ class SnpHub:
         # get bin id for the snp
         bin_id = self.hub.get_snp_bin(snp)
 
-        # collect all snps that have not been prunned and have r2 > 0.0
+        # collect all snps that have not been pruned and have r2 > 0.0
         snps = []
 
-        # loop through all non prunned snps and collect the ones with r2 > 0.0 and not prunned
+        # loop through all non prunned snps and collect the ones with r2 > 0.0 and not pruned
         for pos in self.non_pruned.non_pruned[chrom]:
             # make snps
             s = snp_t(f"{chrom}.{pos}")
             # not seen
             not_seen = self.hub.has_been_seen(s) == False
-            # r2 > 0.0 and seen and not prunned
-            seen_r2_np = self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_seen(s) and self.hub.has_been_prunned(s) == False
+            # r2 > 0.0 and seen and not pruned
+            seen_r2_np = self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_seen(s) and self.hub.has_been_pruned(s) == False
 
             if (not_seen or seen_r2_np) and self.hub.get_snp_bin(s) != bin_id:
                 snps.append(s)
 
-        # if no snps were collected, return a random snp from non prunned
+        # if no snps were collected, return a random snp from non pruned
         if len(snps) == 0:
             return self.get_random_non_pruned_snp(rng)
 
@@ -958,11 +956,11 @@ class SnpHub:
         # randomly select a chromosome
         c_pic = rng.choice(chrom_keys)
 
-        # collect all snps that have not been prunned and have r2 > 0.0
+        # collect all snps that have not been pruned and have r2 > 0.0
         snps = []
         r2 = []
 
-        # loop through all non prunned snps and collect the ones with r2 > 0.0 and not prunned
+        # loop through all non pruned snps and collect the ones with r2 > 0.0 and not pruned
         for pos in self.non_pruned.non_pruned[c_pic]:
             s = snp_t(f"{c_pic}.{pos}")
 
@@ -1009,22 +1007,22 @@ class SnpHub:
         # randomly select a chromosome
         c_pic = rng.choice(chrom_keys)
 
-        # collect all snps that have not been prunned and have r2 > 0.0
+        # collect all snps that have not been pruned and have r2 > 0.0
         snps = []
 
-        # loop through all non prunned snps and collect them
+        # loop through all non pruned snps and collect them
         for pos in self.non_pruned.non_pruned[c_pic]:
             # make snps
             s = snp_t(f"{c_pic}.{pos}")
             # not seen
             not_seen = self.hub.has_been_seen(s) == False
-            # r2 > 0.0 and seen and not prunned
-            seen_r2_np = self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_seen(s) and self.hub.has_been_prunned(s) == False
+            # r2 > 0.0 and seen and not pruned
+            seen_r2_np = self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_seen(s) and self.hub.has_been_pruned(s) == False
 
             if (not_seen or seen_r2_np):
                 snps.append(s)
 
-        # if no snps were collected, return a random snp from non prunned
+        # if no snps were collected, return a random snp from non pruned
         if len(snps) == 0:
             return self.get_random_non_pruned_snp(rng)
 
@@ -1085,18 +1083,18 @@ class SnpHub:
     def does_snp_exist(self, snp: snp_t) -> bool:
         return snp in self.hub.hub
 
-    # has snp been prunned?
-    def has_been_prunned(self, snp: snp_t) -> bool:
-        return self.hub.has_been_prunned(snp)
+    # has snp been pruned?
+    def has_been_pruned(self, snp: snp_t) -> bool:
+        return self.hub.has_been_pruned(snp)
 
     # process the prunned snps
-    def process_prunned_snps(self, snps: Set[snp_t], gen_pruned: snp_hub_gen_t) -> None:
+    def process_pruned_snps(self, snps: Set[snp_t], gen_pruned: snp_hub_gen_t) -> None:
         # go through each snp and update the hub
         for snp in snps:
             # check to make sure we have not prunned this snp before
-            assert self.hub.has_been_prunned(snp) == False
+            assert self.hub.has_been_pruned(snp) == False
 
-            # flip snp to prunned
+            # flip snp to pruned
             self.hub.flip_prunned(snp, gen_pruned)
 
             # delete snp from non pruned
@@ -1109,15 +1107,15 @@ class SnpHub:
 
         return [(snp, self.get_uni_res(snp)) for snp in snps]
 
-    # check if all snps have been prunned
-    def all_snps_prunned(self, snps: Set[snp_t]) -> bool:
+    # check if all snps have been pruned
+    def all_snps_pruned(self, snps: Set[snp_t]) -> bool:
 
         # if any snps has not been prunned return False
         for snp in snps:
-            if self.hub.has_been_prunned(snp) == False:
+            if self.hub.has_been_pruned(snp) == False:
                 return False
 
-        # return true if all snps have been prunned
+        # return true if all snps have been pruned
         return True
 
     # print size of non pruned hub

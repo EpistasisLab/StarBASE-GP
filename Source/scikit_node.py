@@ -40,21 +40,15 @@ class ScikitNode(BaseEstimator, ABC):
         pass
 
     def get_feature_names(self, feature_names):
-        # Ensure feature_names is a NumPy array
+        # ensure feature_names is a NumPy array
         feature_names = np.array(feature_names)
 
-        # Ensure the length of feature_names matches the number of features in the data
+        # ensure the length of feature_names matches the number of features in the data
         support_mask = self.selector.get_support()
         if len(feature_names) != len(support_mask):
             raise ValueError("Length of feature_names does not match the number of features in the data.")
 
-        # Print debug information
-        # print("Length of feature names: ", len(feature_names))
-        # print("Mask: ", support_mask)
-        # print("Mask type: ", type(support_mask))
-        # print("Length of mask: ", len(support_mask))
-
-        # Use the Boolean mask to filter feature names
+        # use the Boolean mask to filter feature names
         return feature_names[support_mask]
 
 ##########################################################################################
@@ -73,7 +67,7 @@ class VarianceThresholdNode(ScikitNode, TransformerMixin):
 
         # if params is an empty dictionary, then we will initialize the params
         if params == {}:
-            self.params = {'threshold': np.float32(rng.uniform(low=0.0001, high=0.05))} # high is set low to allow models to have a chance to learn
+            self.params = {'threshold': np.float32(rng.uniform(low=0.0001, high=0.05))} 
         else:
             # make sure params is correct
             assert 'threshold' in params
@@ -110,20 +104,6 @@ class VarianceThresholdNode(ScikitNode, TransformerMixin):
     def get_feature_count(self):
         return self.selector.get_support().sum()
 
-    # def get_feature_names(self, feature_names):
-    #     # # Ensure feature_names is a NumPy array
-    #     # feature_names = np.array(feature_names)
-    #     # # Ensure the length matches the number of features in the original input
-    #     # if len(feature_names) != len(self.selector.get_support()):
-    #     #     raise ValueError("Length of feature_names does not match the number of features in the data.")
-
-    #     # print the length of the feature names
-    #     print("Length of feature names: ", len(feature_names))
-    #     # print the lenth of filtered feature names
-    #     print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
-
-    #     # Use the Boolean mask to filter feature names
-    #     return feature_names[self.selector.get_support()]
 
 # select percentile
 class SelectPercentileNode(ScikitNode, TransformerMixin):
@@ -152,14 +132,12 @@ class SelectPercentileNode(ScikitNode, TransformerMixin):
         self.selector.fit(X, y)
 
     def transform(self, X):
-        # self.selector.transform(X)
-        # self.features = self.selector.get_support()
         return self.selector.transform(X)
 
     def mutate(self, rng_: rng_t):
         rng = np.random.default_rng(rng_)
 
-        # maginitude we are shfiting the percentile
+        # maginitude by which we are shfiting the percentile
         shift = np.int8(rng.integers(low=-5, high=5, endpoint=True))
 
         # check if the percentile is going to be less than 1
@@ -176,21 +154,6 @@ class SelectPercentileNode(ScikitNode, TransformerMixin):
 
     def get_feature_count(self):
         return self.selector.get_support().sum()
-
-    # def get_feature_names(self, feature_names):
-    #     # # Ensure feature_names is a NumPy array
-    #     # feature_names = np.array(feature_names)
-    #     # # Ensure the length matches the number of features in the original input
-    #     # if len(feature_names) != len(self.selector.get_support()):
-    #     #     raise ValueError("Length of feature_names does not match the number of features in the data.")
-
-    #     # print the length of the feature names
-    #     print("Length of feature names: ", len(feature_names))
-    #     # print the lenth of filtered feature names
-    #     print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
-
-    #     # Use the Boolean mask to filter feature names
-    #     return feature_names[self.selector.get_support()]
 
 # select fwe
 class SelectFweNode(ScikitNode, TransformerMixin):
@@ -243,20 +206,6 @@ class SelectFweNode(ScikitNode, TransformerMixin):
     def get_feature_count(self):
         return self.selector.get_support().sum()
 
-    # def get_feature_names(self, feature_names):
-    #     # Ensure feature_names is a NumPy array
-    #     feature_names = np.array(feature_names)
-    #     # Ensure the length matches the number of features in the original input
-    #     if len(feature_names) != len(self.selector.get_support()):
-    #         raise ValueError("Length of feature_names does not match the number of features in the data.")
-
-    #     # print the length of the feature names
-    #     print("Length of feature names: ", len(feature_names))
-    #     # print the lenth of filtered feature names
-    #     print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
-
-    #     # Use the Boolean mask to filter feature names
-    #     return feature_names[self.selector.get_support()]
 
 # select from model using L1-based feature selection (model is lasso regression)
 class SelectFromModelLasso(ScikitNode, TransformerMixin):
@@ -299,20 +248,6 @@ class SelectFromModelLasso(ScikitNode, TransformerMixin):
     def get_feature_count(self,):
         return self.selector.get_support().sum()
 
-    # def get_feature_names(self, feature_names):
-    #     # Ensure feature_names is a NumPy array
-    #     feature_names = np.array(feature_names)
-    #     # Ensure the length matches the number of features in the original input
-    #     if len(feature_names) != len(self.selector.get_support()):
-    #         raise ValueError("Length of feature_names does not match the number of features in the data.")
-
-    #     # print the length of the feature names
-    #     print("Length of feature names: ", len(feature_names))
-    #     # print the lenth of filtered feature names
-    #     print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
-
-    #     # Use the Boolean mask to filter feature names
-    #     return feature_names[self.selector.get_support()]
 
 # select from model using tree-based feature selection (model is ExtraTreesRegressor)
 class SelectFromModelTree(ScikitNode, TransformerMixin):
@@ -353,21 +288,6 @@ class SelectFromModelTree(ScikitNode, TransformerMixin):
 
     def get_feature_count(self):
         return self.selector.get_support().sum()
-
-    # def get_feature_names(self, feature_names):
-    #     # Ensure feature_names is a NumPy array
-    #     feature_names = np.array(feature_names)
-    #     # Ensure the length matches the number of features in the original input
-    #     if len(feature_names) != len(self.selector.get_support()):
-    #         raise ValueError("Length of feature_names does not match the number of features in the data.")
-
-    #     # print the length of the feature names
-    #     print("Length of feature names: ", len(feature_names))
-    #     # print the lenth of filtered feature names
-    #     print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
-
-    #     # Use the Boolean mask to filter feature names
-    #     return feature_names[self.selector.get_support()]
 
 # sequential feature selector, model = RandomForestRegressor
 class SequentialFeatureSelectorNode(ScikitNode, TransformerMixin):
@@ -419,21 +339,6 @@ class SequentialFeatureSelectorNode(ScikitNode, TransformerMixin):
 
     def get_feature_count(self):
         return self.selector.get_support().sum()
-
-    # def get_feature_names(self, feature_names):
-    #     # Ensure feature_names is a NumPy array
-    #     feature_names = np.array(feature_names)
-    #     # Ensure the length matches the number of features in the original input
-    #     if len(feature_names) != len(self.selector.get_support()):
-    #         raise ValueError("Length of feature_names does not match the number of features in the data.")
-
-    #     # print the length of the feature names
-    #     print("Length of feature names: ", len(feature_names))
-    #     # print the lenth of filtered feature names
-    #     print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
-
-    #     # Use the Boolean mask to filter feature names
-    #     return feature_names[self.selector.get_support()]
 
 # custom feature selector based on feature encoding frequency
 class FeatureEncodingFrequencySelector(ScikitNode, TransformerMixin):
@@ -537,18 +442,6 @@ class FeatureEncodingFrequencySelector(ScikitNode, TransformerMixin):
         """
         if self.selected_features_ is None:
             raise RuntimeError("FeatureEncodingFrequencySelector has not been fitted yet.")
-        # # Ensure feature_names is a NumPy array
-        # feature_names = np.array(feature_names)
-        # # Ensure the length matches the number of features in the original input
-        # if len(feature_names) != len(self.boolean_mask):
-        #     raise ValueError("Length of feature_names does not match the number of features in the data.")
-
-        # # print the length of the feature names
-        # print("Length of feature names: ", len(feature_names))
-        # print('Type of feature names: ', type(feature_names))
-        # print('Type of boolean mask: ', type(self.boolean_mask))
-        # print the lenth of filtered feature names
-        #print("Length of filtered feature names: ", len(feature_names[self.selector.get_support()]))
 
         # Use the Boolean mask to filter feature names
         final_features = []
@@ -589,7 +482,7 @@ class LinearRegressionNode(ScikitNode, RegressorMixin):
         return self.regressor.predict(X)
 
     def transform(self, X):
-        # For consistency with the abstract class, we use the regressor's prediction as the transform output
+        # for consistency with the abstract class, we use the regressor's prediction as the transform output
         return self.predict(X)
 
     def mutate(self, rng_: rng_t):
@@ -637,7 +530,7 @@ class ElasticNetNode(ScikitNode, RegressorMixin):
         return self.regressor.predict(X)
 
     def transform(self, X):
-        # For consistency with the abstract class, we use the regressor's prediction as the transform output
+        # for consistency with the abstract class, we use the regressor's prediction as the transform output
         return self.predict(X)
 
     def mutate(self, rng):
@@ -718,7 +611,7 @@ class SGDRegressorNode(ScikitNode, RegressorMixin):
         return self.regressor.predict(X)
 
     def transform(self, X):
-        # For consistency with the abstract class, we use the regressor's prediction as the transform output
+        #for consistency with the abstract class, we use the regressor's prediction as the transform output
         return self.predict(X)
 
     def mutate(self, rng_):
@@ -824,7 +717,7 @@ class SVRNode(ScikitNode, RegressorMixin):
         return self.regressor.predict(X)
 
     def transform(self, X):
-        # For consistency with the abstract class, we use the regressor's prediction as the transform output
+        # for consistency with the abstract class, we use the regressor's prediction as the transform output
         return self.predict(X)
 
     def mutate(self, rng_):
@@ -918,7 +811,7 @@ class DecisionTreeRegressorNode(ScikitNode, RegressorMixin):
         return self.regressor.predict(X)
 
     def transform(self, X):
-        # For consistency with the abstract class, we use the regressor's prediction as the transform output
+        # for consistency with the abstract class, we use the regressor's prediction as the transform output
         return self.predict(X)
 
     def mutate(self, rng):
@@ -1010,7 +903,7 @@ class RandomForestRegressorNode(ScikitNode, RegressorMixin):
     def predict(self, X):
         return self.regressor.predict(X)
     def transform(self, X):
-        # For consistency with the abstract class, we use the regressor's prediction as the transform output
+        # for consistency with the abstract class, we use the regressor's prediction as the transform output
         return self.predict(X)
 
     def mutate(self, rng_):
@@ -1118,7 +1011,7 @@ class GradientBoostingRegressorNode(ScikitNode, RegressorMixin):
         return self.regressor.predict(X)
 
     def transform(self, X):
-        # For consistency with the abstract class, we use the regressor's prediction as the transform output
+        # for consistency with the abstract class, we use the regressor's prediction as the transform output
         return self.predict(X)
 
     def mutate(self, rng_):
@@ -1227,13 +1120,9 @@ class LDSelector(ScikitNode, TransformerMixin):
             self.genomic_distance = self.params['genomic_distance']
             self.seed = seed
             self.params = params
-            #self.selector = LDSelector(x_original=x_original, header_snps_dict=header_snps_dict, filtered_feature_names=filtered_feature_names, rng_=rng, **self.params)
             self.selector = 'LDSelector'
             self.selected_features_ = None
             self.bool_mask = None
-
-            # newly added attributes for ld selector feature selection
-            # if only one returned, get snp_name (np.str_). Or else will be None
             self.name_of_selected_features = None
 
             # dictionary to store true or false to see if it was ld pruned or not
@@ -1260,7 +1149,7 @@ class LDSelector(ScikitNode, TransformerMixin):
         max_distance = self.genomic_distance # Maximum genomic distance in between SNPs to be considered for LD pruning
         final_selected_snps = [] # List to store the final selected SNPs after LD pruning and conditional analysis
 
-        if X_original.empty: # If the selector before the LD operator didn't select any features
+        if X_original.empty: # If empty list is passed to the LD operator
             # set self.selected_features_ to None and return self
             self.selected_features_ = None
             return self
@@ -1292,9 +1181,7 @@ class LDSelector(ScikitNode, TransformerMixin):
 
             # Compute R² value
             r_squared = correlation ** 2
-            # # print the r_squared value
-            # print(f"R² value between {snp1} and {snp2} is {r_squared}", flush=True)
-
+        
             return r_squared
 
         # get the column names of the original data which are in numpy array format
@@ -1331,7 +1218,7 @@ class LDSelector(ScikitNode, TransformerMixin):
         for chrom in chromosomes:
             # list of snps to check for conditional analysis in the current chromosome
             snps_to_check_for_ca_in_chr = []
-            # Get SNPs and their positions for the current chromosome
+            # get SNPs and their positions for the current chromosome
             chr_snps_df = genotype_df_columns[genotype_df_columns['chrom'] == chrom]
             chr_snps = chr_snps_df['snp'].tolist()
             # ----------------------
@@ -1388,32 +1275,27 @@ class LDSelector(ScikitNode, TransformerMixin):
 
             # If no SNPs remain in this chromosome, skip
             snps_to_check_for_ca_in_chr = list(set(snps_to_check_for_ca_in_chr))
-            # print("Number of SNPs to check for conditional analysis in chromosome : ", f'{chrom}', " is ", len(snps_to_check_for_ca_in_chr), flush=True)
             if len(snps_to_check_for_ca_in_chr) == 0:
-                # print("Entering the if condition for 0 snps in chromosome to check for CA", flush=True)
                 continue
 
             if len(snps_to_check_for_ca_in_chr) == 1:
-                # print("Entering the if condition for 1 snp in chromosome to check for CA", flush=True)
-                #final_chr_snps.extend(snps_to_check_for_ca_in_chr)
                 final_selected_snps.extend(snps_to_check_for_ca_in_chr)
                 continue
             # --------------------------------------
             # Iterative (stepwise) conditional analysis
             # --------------------------------------
             snps_remaining = snps_to_check_for_ca_in_chr[:]
-            # print("Number of SNPs to check for conditional analysis in chromosome : ", f'{chrom}', " is ", len(snps_remaining), flush=True)
             final_chr_snps = []
-            # We loop until we can't prune any more SNPs
+            # we loop until we can't prune any more SNPs
             while True:
                 if len(snps_remaining) < 2:
                     # Either 0 or 1 SNP left, just add them all and break
                     final_chr_snps.extend(snps_remaining)
                     break
-                # Find the next peak SNP (highest marginal R² among snps_remaining)
+                # find the next peak SNP (highest marginal R² among snps_remaining)
                 candidate_r2 = [(snp, marginal_r2[snp]) for snp in snps_remaining]
                 peak_snp = max(candidate_r2, key=lambda x: x[1])[0]
-                # Perform conditional analysis using ONLY the peak SNP as covariate
+                # perform conditional analysis using ONLY the peak SNP as covariate
                 X_peak = genotype_df_encoded[[peak_snp]]
                 y = y.reshape(-1, 1)
                 p_values = []
@@ -1432,66 +1314,62 @@ class LDSelector(ScikitNode, TransformerMixin):
                     p_val = 2 * (1 - stats.norm.cdf(abs(wald_stat)))
                     p_values.append(p_val)
                     tested_snps.append(snp)
-                # Correct for multiple testing
-                # print("Length of p_values: ", len(p_values), flush=True)
+                # correct for multiple testing
                 alpha = 0.05
-                # Ensure p_values is a 1-dimensional array
+                # ensure p_values is a 1-dimensional array
                 if len(p_values) == 0:
-                    # print("No p-values to process. Skipping.")
                     continue  # or handle this case differently if needed
 
-                # Convert to 1D array
+                # convert to 1D array
                 p_values = np.array(p_values).flatten()
 
-                # Handle single p-value explicitly
+                # handle single p-value explicitly
                 if len(p_values) == 1:
                     # print("Only one p-value provided. Skipping multiple testing correction.")
-                    # Decide on how to handle this case
+                    # decide on how to handle this case
                     if p_values[0] < alpha:
                         rejected = [True]
                     else:
                         rejected = [False]
                     pvals_corr = p_values  # No correction needed
                 else:
-                    # Perform multiple testing correction
+                    # perform multiple testing correction
                     rejected, pvals_corr, _, _ = multipletests(p_values, alpha=alpha, method='fdr_bh')
-                # Decide which SNPs to remove
+                # decide which SNPs to remove
                 to_remove = {s for s, r in zip(tested_snps, rejected) if not r}
-                # If we didn't prune anything this round, we're done
+                # if we didn't prune anything this round, we're done
                 if not to_remove:
-                    # Add the peak SNP to final list if not already present
+                    # add the peak SNP to final list if not already present
                     if peak_snp not in final_chr_snps:
                         final_chr_snps.append(peak_snp)
                     break
-                # Otherwise, remove the pruned SNPs
+                # otherwise, remove the pruned SNPs
                 snps_remaining = [s for s in snps_remaining if s not in to_remove]
-                # Add the peak SNP to final list (it is an independent peak)
+                # add the peak SNP to final list (it is an independent peak)
                 if peak_snp not in final_chr_snps:
                     final_chr_snps.append(peak_snp)
-                # Remove the peak SNP from further consideration so the next iteration
+                # remove the peak SNP from further consideration so the next iteration
                 # can find the next peak ignoring this one
                 snps_remaining.remove(peak_snp)
-                # Loop continues with the updated snps_remaining
-            # Add the final chromosome SNPs to the overall final selection
+                # loop continues with the updated snps_remaining
+            # add the final chromosome SNPs to the overall final selection
             final_selected_snps.extend(list(set(final_chr_snps)))
-        # Print the final list of selected SNPs
-        # print("Final list of independent SNPs selected: ", list(set(final_selected_snps)) )
+    
 
         assert len(final_selected_snps) > 0, "No SNPs were selected by the LDSelector"
 
         # setting the name of the selected feature to be used during evolution
         if len(final_selected_snps) == 1:
             self.name_of_selected_features = final_selected_snps[0]
-            # print(f"Selected SNP name: {self.name_of_selected_features}", flush=True)
 
         # change the details in snp_details_after_ld to False for the selected snps
         for snp in final_selected_snps:
             snp_details_after_ld[snp] = False
 
-        # print("Snp details after LD: ", snp_details_after_ld, flush=True)
+        
         self.snp_details_after_ld = snp_details_after_ld
 
-        # Create a boolean mask for the selected SNPs
+        # create a boolean mask for the selected SNPs
         boolean_mask = np.isin(column_names, final_selected_snps)
         self.bool_mask = boolean_mask
 
@@ -1553,6 +1431,5 @@ class LDSelector(ScikitNode, TransformerMixin):
     """
         if self.selected_features_ is None:
             raise RuntimeError("LDSelector has not been fitted yet.")
-        # print"No of selected features: ", len(self.selected_features_), flush=True)
-        # return length of selected features as no of true values in boolean mask
+        
         return len(self.selected_features_)

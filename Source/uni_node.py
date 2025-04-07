@@ -49,7 +49,7 @@ class UniNode(BaseEstimator, TransformerMixin, ABC):
 
 class UniAdditiveNode(UniNode):
     def fit(self, X, y=None):
-        # Get the snp columns from the input data
+        # get the snp columns from the input data
         if isinstance(X, pd.DataFrame):
             snp = X.iloc[:, self.snp_pos]
         else:
@@ -60,16 +60,16 @@ class UniAdditiveNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
-        # Mark the node as fitted
+        # mark the node as fitted
         self.fit_flag = True
 
         return self
 
     def transform(self, X):
-        # Always recompute the epistatic feature, regardless of train or validation data
+        # always recompute the encoded univariate feature, regardless of train or validation data
         if isinstance(X, pd.DataFrame):
             snp = X.iloc[:, self.snp_pos]
         else:
@@ -77,10 +77,10 @@ class UniAdditiveNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
-        # Return the computed feature for this dataset
+        # return the computed feature for this dataset
         return np.array(snp.astype(np.float32), dtype=np.float32).reshape(-1, 1)
 
     def predict(self, X):
@@ -96,7 +96,7 @@ class UniAdditiveNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        #store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
         return self.encoded_feature.reshape(-1, 1)
@@ -106,7 +106,7 @@ class UniAdditiveNode(UniNode):
 
 class UniDominantNode(UniNode):
     def fit(self, X, y=None):
-        # Get the snp columns from the input data
+        # get the snp columns from the input data
         if isinstance(X, pd.DataFrame):
             snp = X.iloc[:, self.snp_pos]
         else:
@@ -117,16 +117,16 @@ class UniDominantNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
-        # Mark the node as fitted
+        # mark the node as fitted
         self.fit_flag = True
 
         return self
 
     def transform(self, X):
-        # Always recompute the epistatic feature, regardless of train or validation data
+        # always recompute the encoded univariate feature, regardless of train or validation data
         if isinstance(X, pd.DataFrame):
             snp = X.iloc[:, self.snp_pos]
         else:
@@ -134,10 +134,10 @@ class UniDominantNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
-        # Return the computed feature for this dataset
+        # return the computed feature for this dataset
         return np.array(snp.astype(np.float32), dtype=np.float32).reshape(-1, 1)
 
     def predict(self, X):
@@ -153,7 +153,7 @@ class UniDominantNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
         return self.encoded_feature.reshape(-1, 1)
@@ -163,7 +163,7 @@ class UniDominantNode(UniNode):
 
 class UniRecessiveNode(UniNode):
     def fit(self, X, y=None):
-        # Get the snp columns from the input data
+        # get the snp columns from the input data
         if isinstance(X, pd.DataFrame):
             snp = X.iloc[:, self.snp_pos]
         else:
@@ -183,7 +183,7 @@ class UniRecessiveNode(UniNode):
         return self
 
     def transform(self, X):
-        # Always recompute the epistatic feature, regardless of train or validation data
+        # always recompute the encoded univariate feature, regardless of train or validation data
         if isinstance(X, pd.DataFrame):
             snp = X.iloc[:, self.snp_pos]
         else:
@@ -191,10 +191,10 @@ class UniRecessiveNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
-        # Return the computed feature for this dataset
+        # return the computed feature for this dataset
         return np.array(snp.astype(np.float32), dtype=np.float32).reshape(-1, 1)
 
     def predict(self, X):
@@ -209,7 +209,7 @@ class UniRecessiveNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
         return self.encoded_feature.reshape(-1, 1)
@@ -219,7 +219,7 @@ class UniRecessiveNode(UniNode):
 
 class UniHeterosisNode(UniNode):
     def fit(self, X, y=None):
-        # Get the snp columns from the input data
+        # get the snp columns from the input data
         if isinstance(X, pd.DataFrame):
             snp = X.iloc[:, self.snp_pos]
         else:
@@ -230,16 +230,16 @@ class UniHeterosisNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
-        # Mark the node as fitted
+        # mark the node as fitted
         self.fit_flag = True
 
         return self
 
     def transform(self, X):
-        # Always recompute the epistatic feature, regardless of train or validation data
+        # always recompute the encoded univariate feature, regardless of train or validation data
         if isinstance(X, pd.DataFrame):
             snp = X.iloc[:, self.snp_pos]
         else:
@@ -247,10 +247,10 @@ class UniHeterosisNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
-        # Return the computed feature for this dataset
+        # return the computed feature for this dataset
         return np.array(snp.astype(np.float32), dtype=np.float32).reshape(-1, 1)
 
     def predict(self, X):
@@ -266,7 +266,7 @@ class UniHeterosisNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
         return self.encoded_feature.reshape(-1, 1)
@@ -276,7 +276,7 @@ class UniHeterosisNode(UniNode):
 
 class UniUnderDominantNode(UniNode):
     def fit(self, X, y=None):
-        # Get the snp columns from the input data
+        # get the snp columns from the input data
         if isinstance(X, pd.DataFrame):
             snp = X.iloc[:, self.snp_pos]
         else:
@@ -287,16 +287,16 @@ class UniUnderDominantNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
-        # Mark the node as fitted
+        # mark the node as fitted
         self.fit_flag = True
 
         return self
 
     def transform(self, X):
-        # Always recompute the epistatic feature, regardless of train or validation data
+        # always recompute the encoded univariate feature, regardless of train or validation data
         if isinstance(X, pd.DataFrame):
             snp = X.iloc[:, self.snp_pos]
         else:
@@ -304,10 +304,10 @@ class UniUnderDominantNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
-        # Return the computed feature for this dataset
+        # return the computed feature for this dataset
         return np.array(snp.astype(np.float32), dtype=np.float32).reshape(-1, 1)
 
     def predict(self, X):
@@ -323,7 +323,7 @@ class UniUnderDominantNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
         return self.encoded_feature.reshape(-1, 1)
@@ -333,7 +333,7 @@ class UniUnderDominantNode(UniNode):
     
 class UniOverDominantNode(UniNode):
     def fit(self, X, y=None):
-        # Get the snp columns from the input data
+        # get the snp columns from the input data
         if isinstance(X, pd.DataFrame):
             snp = X.iloc[:, self.snp_pos]
         else:
@@ -344,16 +344,16 @@ class UniOverDominantNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
-        # Mark the node as fitted
+        # mark the node as fitted
         self.fit_flag = True
 
         return self
 
     def transform(self, X):
-        # Always recompute the epistatic feature, regardless of train or validation data
+        # always recompute the encoded univariate feature, regardless of train or validation data
         if isinstance(X, pd.DataFrame):
             snp = X.iloc[:, self.snp_pos]
         else:
@@ -361,10 +361,10 @@ class UniOverDominantNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
-        # Return the computed feature for this dataset
+        # return the computed feature for this dataset
         return np.array(snp.astype(np.float32), dtype=np.float32).reshape(-1, 1)
 
     def predict(self, X):
@@ -380,7 +380,7 @@ class UniOverDominantNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
         return self.encoded_feature.reshape(-1, 1)
@@ -390,7 +390,7 @@ class UniOverDominantNode(UniNode):
 
 class UniSubAdditiveNode(UniNode):
     def fit(self, X, y=None):
-        # Get the snp columns from the input data
+        # get the snp columns from the input data
         if isinstance(X, pd.DataFrame):
             snp = X.iloc[:, self.snp_pos]
         else:
@@ -401,16 +401,16 @@ class UniSubAdditiveNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
-        # Mark the node as fitted
+        # mark the node as fitted
         self.fit_flag = True
 
         return self
 
     def transform(self, X):
-        # Always recompute the epistatic feature, regardless of train or validation data
+        # always recompute the encoded univariate feature, regardless of train or validation data
         if isinstance(X, pd.DataFrame):
             snp = X.iloc[:, self.snp_pos]
         else:
@@ -419,10 +419,10 @@ class UniSubAdditiveNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
-        # Return the computed feature for this dataset
+        # return the computed feature for this dataset
         return np.array(snp.astype(np.float32), dtype=np.float32).reshape(-1, 1)
 
     def predict(self, X):
@@ -438,7 +438,7 @@ class UniSubAdditiveNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
         return self.encoded_feature.reshape(-1, 1)
@@ -448,7 +448,7 @@ class UniSubAdditiveNode(UniNode):
 
 class UniSuperAdditiveNode(UniNode):
     def fit(self, X, y=None):
-        # Get the snp columns from the input data
+        # get the snp columns from the input data
         if isinstance(X, pd.DataFrame):
             snp = X.iloc[:, self.snp_pos]
         else:
@@ -459,7 +459,7 @@ class UniSuperAdditiveNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
         # Mark the node as fitted
@@ -468,7 +468,7 @@ class UniSuperAdditiveNode(UniNode):
         return self
 
     def transform(self, X):
-        # Always recompute the epistatic feature, regardless of train or validation data
+        # always recompute the encoded univariate feature, regardless of train or validation data
         if isinstance(X, pd.DataFrame):
             snp = X.iloc[:, self.snp_pos]
         else:
@@ -476,10 +476,10 @@ class UniSuperAdditiveNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
-        # Return the computed feature for this dataset
+        # return the computed feature for this dataset
         return np.array(snp.astype(np.float32), dtype=np.float32).reshape(-1, 1)
 
     def predict(self, X):
@@ -494,7 +494,7 @@ class UniSuperAdditiveNode(UniNode):
 
         snp = snp.replace(self.mapping)
 
-        # Store the result in self.encoded_feature for training data
+        # store the result in self.encoded_feature for training data
         self.encoded_feature = np.array(snp.astype(np.float32), dtype=np.float32)
 
         return self.encoded_feature.reshape(-1, 1)

@@ -114,7 +114,7 @@ def crowding_distance(obj_scores: npt.NDArray, count: np.int32) -> npt.NDArray[r
         sorted_indices = np.argsort([ind[m] for ind in obj_scores], kind='mergesort')
         sorted_population = obj_scores[sorted_indices]
 
-        # Calculate the range of the m-th objective
+        # calculate the range of the m-th objective
         min_obj = sorted_population[0][m]
         max_obj = sorted_population[-1][m]
 
@@ -122,11 +122,11 @@ def crowding_distance(obj_scores: npt.NDArray, count: np.int32) -> npt.NDArray[r
         if max_obj == min_obj:
             continue
 
-        # Set the crowding distance of boundary points to infinity
+        # set the crowding distance of boundary points to infinity
         crowding_distances[sorted_indices[0]] = np.inf
         crowding_distances[sorted_indices[-1]] = np.inf
 
-        # Calculate crowding distances for intermediate points
+        # calculate crowding distances for intermediate points
         for i in range(1, population_size - 1):
             next_obj = sorted_population[i + 1][m]
             prev_obj = sorted_population[i - 1][m]
