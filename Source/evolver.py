@@ -34,7 +34,6 @@ import logging
 import warnings
 from sklearn.exceptions import NotFittedError, ConvergenceWarning
 import matplotlib.pyplot as plt
-from .poster import Poster
 import time
 import warnings
 
