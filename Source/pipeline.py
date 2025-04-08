@@ -1,23 +1,31 @@
-# Will contain the definition of Pipeline class which will be used by univariate branch.
+#####################################################################################################
+#
+# Class definition of Pipeline that will hold all relevant information within a pipeline instance:
+# - set of snps that a pipeline will use.
+# - set of traits that a pipeline  is given after evaluation.
+# - the LD node that a pipeline  will use.
+# - the selector node that a pipeline  will use.
+# - the root node that a pipeline  will use.
+# - the methods to get and mutate the LD node.
+# - the methods to get and mutate the selector node.
+# - the methods to get and mutate the root node.
+#
+#####################################################################################################
+
 
 from typing import List, Set
 from .scikit_node import ScikitNode, LDSelector
 import numpy as np
 from typeguard import typechecked
-import numpy.typing as npt
 import copy as cp
 
 # numpy random number generator type
 gen_rng_t = np.random.Generator
-gen_snp_arr_t = npt.NDArray[np.str_]
 uni_snps_t = Set
-uniq_chrombin_t = Set
 traits_t = List
 r2_t = np.float32
 feature_cnt_t = np.int16
 feature_name_t = Set
-div_score_t = np.float32
-
 
 @typechecked
 class Pipeline:
@@ -81,11 +89,6 @@ class Pipeline:
         assert len(self.traits[2]) == self.traits[1]
         assert len(self.traits[2]) > 0 # make sure we have at least one feature name
         return self.traits[2]
-
-    # get the traits from the pipeline
-    def get_traits(self) -> traits_t:
-        assert len(self.traits) == 3
-        return self.traits
 
     # get the univariate snps from the pipeline
     def get_uni_snps(self) -> uni_snps_t:

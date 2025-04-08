@@ -1,5 +1,10 @@
-# This class is a wrapper for the scikit-learn library. It provides a set of nodes (regressors and feature selectors) that can be used in the pipeline.
+#####################################################################################################
+#
+# This class is a wrapper for the scikit-learn library.
+# It provides a set of nodes (regressors and feature selectors) that can be used in the pipeline.
 # Will contain a abstract class and then the various regressors and feature selectors will be implemented as subclasses of this abstract class.
+#
+#####################################################################################################
 
 from abc import ABC, abstractmethod
 from sklearn.base import BaseEstimator, TransformerMixin, RegressorMixin
@@ -10,7 +15,7 @@ from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, ExtraTreesRegressor
 from sklearn.svm import SVR
 from typeguard import typechecked
-from typing import Dict, List
+from typing import Dict
 import pandas as pd
 from scipy import stats
 from statsmodels.stats.multitest import multipletests
@@ -18,6 +23,7 @@ from statsmodels.stats.multitest import multipletests
 rng_t = np.random.Generator
 name_t = np.str_
 
+# base class for all scikit-learn nodes
 class ScikitNode(BaseEstimator, ABC):
     def __init__(self, name, features=None):
         self.name = name
@@ -67,7 +73,7 @@ class VarianceThresholdNode(ScikitNode, TransformerMixin):
 
         # if params is an empty dictionary, then we will initialize the params
         if params == {}:
-            self.params = {'threshold': np.float32(rng.uniform(low=0.0001, high=0.05))} 
+            self.params = {'threshold': np.float32(rng.uniform(low=0.0001, high=0.05))}
         else:
             # make sure params is correct
             assert 'threshold' in params
@@ -103,7 +109,6 @@ class VarianceThresholdNode(ScikitNode, TransformerMixin):
 
     def get_feature_count(self):
         return self.selector.get_support().sum()
-
 
 # select percentile
 class SelectPercentileNode(ScikitNode, TransformerMixin):
@@ -206,7 +211,6 @@ class SelectFweNode(ScikitNode, TransformerMixin):
     def get_feature_count(self):
         return self.selector.get_support().sum()
 
-
 # select from model using L1-based feature selection (model is lasso regression)
 class SelectFromModelLasso(ScikitNode, TransformerMixin):
     def __init__(self,
@@ -247,7 +251,6 @@ class SelectFromModelLasso(ScikitNode, TransformerMixin):
 
     def get_feature_count(self,):
         return self.selector.get_support().sum()
-
 
 # select from model using tree-based feature selection (model is ExtraTreesRegressor)
 class SelectFromModelTree(ScikitNode, TransformerMixin):
@@ -1181,7 +1184,7 @@ class LDSelector(ScikitNode, TransformerMixin):
 
             # Compute R² value
             r_squared = correlation ** 2
-        
+
             return r_squared
 
         # get the column names of the original data which are in numpy array format
@@ -1354,7 +1357,7 @@ class LDSelector(ScikitNode, TransformerMixin):
                 # loop continues with the updated snps_remaining
             # add the final chromosome SNPs to the overall final selection
             final_selected_snps.extend(list(set(final_chr_snps)))
-    
+
 
         assert len(final_selected_snps) > 0, "No SNPs were selected by the LDSelector"
 
@@ -1366,7 +1369,7 @@ class LDSelector(ScikitNode, TransformerMixin):
         for snp in final_selected_snps:
             snp_details_after_ld[snp] = False
 
-        
+
         self.snp_details_after_ld = snp_details_after_ld
 
         # create a boolean mask for the selected SNPs
@@ -1431,5 +1434,5 @@ class LDSelector(ScikitNode, TransformerMixin):
     """
         if self.selected_features_ is None:
             raise RuntimeError("LDSelector has not been fitted yet.")
-        
+
         return len(self.selected_features_)

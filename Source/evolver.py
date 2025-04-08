@@ -256,7 +256,7 @@ class EA:
         self.seed = seed
         self.pop_size = pop_size
         self.rng = np.random.default_rng(seed) # random number generator to be passed to all other stochastic functions
-        self.uni_cnt_max = uni_cnt_max 
+        self.uni_cnt_max = uni_cnt_max
         self.uni_cnt_min = uni_cnt_min
         self.mut_ran_p = mut_ran_p
         self.mut_smt_p = mut_smt_p
@@ -445,15 +445,28 @@ class EA:
 
         # run the algorithm for the specified number of generations
         for g in range(gens):
-            # make sure we have the correct number of pipelines
+            print('Generation:', g, flush=True)
+
+            # how many pipelines are in the population
             print('Population size:', len(self.population), flush=True)
             assert(0 < len(self.population) <= self.pop_size)
 
-            print('Generation:', g, flush=True)
-            start_time = time.time()
+            # get the size of the front 0 after each generation
+            _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(r2_t(1.0), feature_cnt_t(-1))))
+            count = 0
+            for r in rank:
+                if r == 0:
+                    count += 1
+            print('Size of Pareto Front:', count, flush=True)
+            print('# of snps still considered (non_pruned + not_seen):' , self.hubs.consideration_hub_size(), flush=True)
+            self.hubs.seen_snps_proportion()  # count the number of unseen snps after each generation
 
-            # no of pruned snps in the start of the generation
-            pruned_hub_size_start = self.hubs.pruned_hub_size()
+            # record all the generation details
+            generation_details.append({'generation': g,
+                                        'front_zero_size': count,
+                                        'consideration_set_size': self.hubs.consideration_hub_size()})
+
+            start_time = time.time()
 
             # get order of mutation/crossover to do with the extra offspring
             var_order, parent_cnt = self.repoduction.variation_order(self.rng, np.uint16(2*self.pop_size))
@@ -489,40 +502,36 @@ class EA:
             # make sure we have the correct number of pipelines
             assert len(self.population) <= self.pop_size
 
-            # get the size of the front 0 after each generation 
-            _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(r2_t(1.0), feature_cnt_t(-1))))
-
-            count = 0
-            for i, r in enumerate(rank):
-                if r == 0:
-                    count += 1
-            print('Size of Pareto Front after generation ', g, ':', count, flush=True)
-
-            # get the number of pruned snps in the end of the generation
-            pruned_hub_size_end = self.hubs.pruned_hub_size()
-            # number of snps pruned in the generation
-            number_of_snps_pruned = pruned_hub_size_start - pruned_hub_size_end
-            print("# of snps pruned in the generation:", number_of_snps_pruned, flush=True)
-
-            # add the generation details to the list
-            generation_details.append({'generation': g,
-                                        'front_zero_size': count,
-                                        'still_consider_snp_set_size': pruned_hub_size_end,
-                                        'number_of_snps_pruned': number_of_snps_pruned})
-
-            print('# of snps still consider (non_pruned + not_seen):' , self.hubs.pruned_hub_size(), flush=True)
-            self.hubs.seen_snps_proportion()  # count the number of unseen snps after each generation
             print(f"Time to finish generation: {(time.time() - start_time) / 60} minutes", flush=True)
             print('')
-        
+
+        # prints for the end of a run and the final population
+        print('Final run/population details')
+        print('Final population size:', len(self.population), flush=True)
+        # get the size of the front 0 after each generation
+        _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(r2_t(1.0), feature_cnt_t(-1))))
+        count = 0
+        for r in rank:
+            if r == 0:
+                count += 1
+        print('Size of Final Pareto Front:', count, flush=True)
+        print('# of snps still considered (non_pruned + not_seen):' , self.hubs.consideration_hub_size(), flush=True)
+        self.hubs.seen_snps_proportion()  # count the number of unseen snps after each generation
+
+        # record all the final details
+        generation_details.append({'generation': gens,
+                                    'front_zero_size': count,
+                                    'consideration_set_size': self.hubs.consideration_hub_size()})
+
+
         # change the generation details to a pandas dataframe
         generation_details = pd.DataFrame(generation_details)
-  
+
         # end the timer for generational time
         total_gp_run = time.time() - total_gp_run
         print(f"Time to finish {gens} generations: {(total_gp_run) / 60} minutes", flush=True)
 
-     
+
         self.plot_pareto_front(self.population) # calling the plotting function at the end to get the final pareto plot
         self.hubs.save_hubs(self.save_directory) # save the snp_hub to a csv file in the save directory
         self.save_total_runtime(total_gp_run/60) # save the total runtime in minutes of the algorithm to a file
@@ -661,7 +670,7 @@ class EA:
                 uni_cnt = int(self.uni_cnt_max)
 
                 # get the num of chrom from snp hub dictionary
-                chroms = self.hubs.non_pruned.get_keys_with_snps()
+                chroms = self.hubs.get_keys_with_snps()
                 chrom_num = len(chroms)
                 # generate the sampling list based on the uni_cnt and number of chromosomes
                 sampling_list = self.get_sampling(cnt = uni_cnt, chrom_num = chrom_num)
@@ -847,8 +856,6 @@ class EA:
         for pipeline in pop:
             if pipeline.get_trait_r2() > 0.0 and self.hubs.all_snps_pruned(pipeline.get_trait_feature_names()) == False:
                 new_pop.append(pipeline)
-
-        print('# of snps still consider (non_pruned + not_seen):' , self.hubs.pruned_hub_size(), flush=True)
 
         return new_pop
 
@@ -1146,5 +1153,3 @@ class EA:
         plt.savefig(self.save_directory + 'top_20_features.png')
 
         plt.clf()
-
-    

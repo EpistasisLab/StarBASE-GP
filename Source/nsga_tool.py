@@ -4,7 +4,6 @@
 # Note that we are alwasy assuming objectives are to be maximized.
 # As such, we expect that the values are converted to negative if they are to be minimized.
 #
-# Python 3.12.4: conda activate star-epi-pre
 #####################################################################################################
 
 import numpy as np
@@ -23,6 +22,7 @@ rng_t = np.random.Generator
 # population id type
 pop_id_t = np.uint16
 
+# calculate the front each individual solution is in
 @typechecked
 def non_dominated_sorting(obj_scores: npt.NDArray) -> Tuple[List[npt.NDArray[np.uint16]],npt.NDArray[np.uint16]]:
     """
@@ -83,6 +83,7 @@ def non_dominated_sorting(obj_scores: npt.NDArray) -> Tuple[List[npt.NDArray[np.
     fronts = [np.array(front, dtype=np.uint16) for front in fronts]
     return fronts, rank
 
+# calculate the crowding distance for all individuals within the population
 @typechecked
 def crowding_distance(obj_scores: npt.NDArray, count: np.int32) -> npt.NDArray[r2_t]:
     """
@@ -134,6 +135,7 @@ def crowding_distance(obj_scores: npt.NDArray, count: np.int32) -> npt.NDArray[r
 
     return crowding_distances
 
+# check if solution1 dominates solution2
 @typechecked
 def dominates(solution1: traits_t, solution2: traits_t) -> bool:
     """
@@ -162,6 +164,7 @@ def dominates(solution1: traits_t, solution2: traits_t) -> bool:
 
     return bool(greater_or_equal and better_in_at_least_one)
 
+# perform a binary tournament selection between two individuals
 @typechecked
 def non_dominated_binary_tournament(ranks: npt.NDArray[feature_cnt_t], distances: npt.NDArray[r2_t], rng_: rng_t) -> pop_id_t:
 
@@ -186,6 +189,7 @@ def non_dominated_binary_tournament(ranks: npt.NDArray[feature_cnt_t], distances
     else:
         return pop_id_t(t1) if ranks[t1] < ranks[t2] else pop_id_t(t2)
 
+# perform a non-dominated truncation of the population
 @typechecked
 def non_dominated_truncate(fronts: List[npt.NDArray[feature_cnt_t]],
                            distances: npt.NDArray[r2_t],

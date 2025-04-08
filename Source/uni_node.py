@@ -1,10 +1,15 @@
-# This script has the implementation of univariate encoders
+#####################################################################################################
+#
+# This script has the implementation of univariate encoders.
+#
+#####################################################################################################
 from abc import ABC, abstractmethod
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import MinMaxScaler
 
+# base class for all univariate nodes
 class UniNode(BaseEstimator, TransformerMixin, ABC):
     def __init__(self, name: np.str_, snp_name: np.str_, snp_pos: np.uint32):
         self.name = name
@@ -47,6 +52,7 @@ class UniNode(BaseEstimator, TransformerMixin, ABC):
         self.fit(X, y)
         return self.transform(X)
 
+# univariate node for additive encoding
 class UniAdditiveNode(UniNode):
     def fit(self, X, y=None):
         # get the snp columns from the input data
@@ -104,6 +110,7 @@ class UniAdditiveNode(UniNode):
     def get_encoder(self) -> np.str_:
         return np.str_("additive")
 
+# univariate node for dominant encoding
 class UniDominantNode(UniNode):
     def fit(self, X, y=None):
         # get the snp columns from the input data
@@ -161,6 +168,7 @@ class UniDominantNode(UniNode):
     def get_encoder(self) -> np.str_:
         return np.str_("dominant")
 
+# univariate node for recessive encoding
 class UniRecessiveNode(UniNode):
     def fit(self, X, y=None):
         # get the snp columns from the input data
@@ -217,6 +225,7 @@ class UniRecessiveNode(UniNode):
     def get_encoder(self) -> np.str_:
         return np.str_("recessive")
 
+# univariate node for heterosis encoding
 class UniHeterosisNode(UniNode):
     def fit(self, X, y=None):
         # get the snp columns from the input data
@@ -274,6 +283,7 @@ class UniHeterosisNode(UniNode):
     def get_encoder(self) -> np.str_:
         return np.str_("heterosis")
 
+# univariate node for underdominant encoding
 class UniUnderDominantNode(UniNode):
     def fit(self, X, y=None):
         # get the snp columns from the input data
@@ -330,7 +340,8 @@ class UniUnderDominantNode(UniNode):
 
     def get_encoder(self) -> np.str_:
         return np.str_("underdominant")
-    
+
+# univariate node for overdominant encoding
 class UniOverDominantNode(UniNode):
     def fit(self, X, y=None):
         # get the snp columns from the input data
@@ -388,6 +399,7 @@ class UniOverDominantNode(UniNode):
     def get_encoder(self) -> np.str_:
         return np.str_("overdominant")
 
+# univariate node for subadditive encoding
 class UniSubAdditiveNode(UniNode):
     def fit(self, X, y=None):
         # get the snp columns from the input data
@@ -446,6 +458,7 @@ class UniSubAdditiveNode(UniNode):
     def get_encoder(self) -> np.str_:
         return np.str_("subadditive")
 
+# univariate node for super additive encoding
 class UniSuperAdditiveNode(UniNode):
     def fit(self, X, y=None):
         # get the snp columns from the input data
@@ -502,7 +515,7 @@ class UniSuperAdditiveNode(UniNode):
     def get_encoder(self) -> np.str_:
         return np.str_("superadditive")
 
-# Need to change the PAGER implementation due to training/testing data
+# univariate node for PAGER encoding
 class UniPAGERNode(UniNode):
     def fit(self, X, y=None):
         # get the snp columns from the input data

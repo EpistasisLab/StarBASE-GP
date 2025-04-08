@@ -1,16 +1,16 @@
 #####################################################################################################
 #
-# Interface for communicating with both EPI and SNP hubs.
+# Interface for communicating with Snp, Bin, and Consideration hubs.
 #
 #####################################################################################################
 
 import numpy as np
 from typing import List, Tuple, Set
-
 from typeguard import typechecked
 import numpy.typing as npt
-from typing import List, Dict
+from typing import List
 
+# SortedList is a sorted list implementation in Python for fast insertion and deletion
 # https://grantjenks.com/docs/sortedcontainers/sortedlist.html
 from sortedcontainers import SortedList
 
@@ -36,8 +36,6 @@ r2_t = np.float32
 
 # bin id position type
 snp_hub_bin_t = np.uint16
-# count type
-snp_hub_cnt_t = np.uint32
 # header position
 snp_hub_pos_t = np.uint32
 
@@ -66,9 +64,9 @@ class SnpHub:
     Treat as a private class.
     """
 
-    class Non_Pruned_Hub:
+    class Consideration_Hub:
         """
-        Structure to keep track of snps that have not been pruned.
+        Container to maintain snps that have not been pruned by an LD node and have postive marginal r^2.
         """
 
         def __init__(self, snps: gen_header_snps_t) -> None:
@@ -79,41 +77,41 @@ class SnpHub:
             """
 
             # create a dictionary to hold all snps
-            self.non_pruned = {}
+            self.consideration_hub = {}
 
             for snp in snps:
                 # split snp up by chromosome and position
                 chrom, pos = self.snp_chrm_pos(snp)
 
                 # check if key exists
-                if chrom not in self.non_pruned:
-                    self.non_pruned[chrom] = [pos]
+                if chrom not in self.consideration_hub:
+                    self.consideration_hub[chrom] = [pos]
                 else:
-                    self.non_pruned[chrom].append(pos)
+                    self.consideration_hub[chrom].append(pos)
 
             # sort all lists within dictionary
-            for chrom, pos_l in self.non_pruned.items():
+            for chrom, pos_l in self.consideration_hub.items():
                 # sort the list and store in SortedList and update the dictionary
                 pos_l.sort()
-                self.non_pruned[chrom] = SortedList(pos_l)
+                self.consideration_hub[chrom] = SortedList(pos_l)
             return
 
-        # remove snp from the non_pruned dictionary
+        # remove snp from the consideration_hub dictionary
         def remove_snp(self, snp: snp_t) -> None:
             # get chromosome and position
             chrom, pos = self.snp_chrm_pos(snp)
 
             # make sure the chromosome exists
-            assert chrom in self.non_pruned
+            assert chrom in self.consideration_hub
 
             # remove snp from the list
-            self.non_pruned[chrom].remove(pos)
+            self.consideration_hub[chrom].remove(pos)
 
             return
 
-        # print all snps in the non_pruned dictionary
+        # print all snps in the consideration_hub dictionary
         def print_hub(self) -> None:
-            for chrom, pos_l in self.non_pruned.items():
+            for chrom, pos_l in self.consideration_hub.items():
                 print(f"Chromosome: {chrom}")
                 print(f"Positions: {pos_l}")
             return
@@ -133,8 +131,8 @@ class SnpHub:
             rng = np.random.default_rng(rng_)
             chrom = []
 
-            for chrm in list(self.non_pruned.keys()):
-                if len(self.non_pruned[chrm]) > 0:
+            for chrm in list(self.consideration_hub.keys()):
+                if len(self.consideration_hub[chrm]) > 0:
                     chrom.append(chrm)
 
 
@@ -142,21 +140,21 @@ class SnpHub:
             chrom = rng.choice(chrom)
 
             # get a random bin index from the chromosome
-            position = rng.choice(self.non_pruned[chrom])
+            position = rng.choice(self.consideration_hub[chrom])
 
             return snp_t(f"{chrom}.{position}")
 
-        # get total number of items in the non_pruned dictionary
+        # get total number of items in the consideration_hub dictionary
         def get_total(self) -> np.uint32:
             sum = 0
-            for _, pos_l in self.non_pruned.items():
+            for _, pos_l in self.consideration_hub.items():
                 sum += len(pos_l)
             return np.uint32(sum)
 
         # get list of keys with at least one snp
         def get_keys_with_snps(self) -> List[gen_chrom_num_t]:
             keys = []
-            for k, v in self.non_pruned.items():
+            for k, v in self.consideration_hub.items():
                 if len(v) > 0:
                     keys.append(k)
             return keys
@@ -646,7 +644,7 @@ class SnpHub:
 
         # initialize non pruned hub
         print('Initializing Non Pruned Hub')
-        self.non_pruned = self.Non_Pruned_Hub(snps)
+        self.consideration_hub = self.Consideration_Hub(snps)
         print('Non Pruned Hub Initialized\n')
 
         # bin hub stuff
@@ -735,7 +733,7 @@ class SnpHub:
 
         # save csv with both seen and not prunned snps
         # Write snp hub to file
-        with open(save_dir+"non_pruned_and_seen.csv", 'w') as f:
+        with open(save_dir+"consideration_hub.csv", 'w') as f:
             # Write the headers for the snp_file
             f.write("snp,r2,encoding\n")
             for row in snp_data:
@@ -747,9 +745,9 @@ class SnpHub:
     def update_snp_hub(self, snp:snp_t, result:snp_hub_res_t, type: snp_hub_enc_t, gen_seen: snp_hub_gen_t) -> None:
         # update Hub object: if r2 is negative, flip prunned flag
         self.hub.update_snp(snp, result, type, gen_seen)
-        # update Non_Pruned_Hub object: if r2 is negative, remove snp from non prunned
+        # update Consideration_Hub object: if r2 is negative, remove snp from non prunned
         if result < r2_t(0.0):
-            self.non_pruned.remove_snp(snp)
+            self.consideration_hub.remove_snp(snp)
         return
 
     # check if snp has encoder type recorded in the snp hub
@@ -866,7 +864,7 @@ class SnpHub:
         r2 = []
 
         # loop through all non prunned snps and collect the ones with r2 > 0.0 and not pruned
-        for pos in self.non_pruned.non_pruned[chrom]:
+        for pos in self.consideration_hub.consideration_hub[chrom]:
             s = snp_t(f"{chrom}.{pos}")
 
             if self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_seen(s) and self.hub.get_snp_bin(s) != bin_id:
@@ -909,7 +907,7 @@ class SnpHub:
         snps = []
 
         # loop through all non prunned snps and collect the ones with r2 > 0.0 and not pruned
-        for pos in self.non_pruned.non_pruned[chrom]:
+        for pos in self.consideration_hub.consideration_hub[chrom]:
             # make snps
             s = snp_t(f"{chrom}.{pos}")
             # not seen
@@ -947,7 +945,7 @@ class SnpHub:
         chrom, pos = self.bins.snp_chrm_pos(snp)
 
         # get keys for non pruned snps
-        chrom_keys = self.non_pruned.get_keys_with_snps()
+        chrom_keys = self.consideration_hub.get_keys_with_snps()
 
         # remove the current chromosome from the list
         if chrom in chrom_keys:
@@ -961,7 +959,7 @@ class SnpHub:
         r2 = []
 
         # loop through all non pruned snps and collect the ones with r2 > 0.0 and not pruned
-        for pos in self.non_pruned.non_pruned[c_pic]:
+        for pos in self.consideration_hub.consideration_hub[c_pic]:
             s = snp_t(f"{c_pic}.{pos}")
 
             if self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_seen(s):
@@ -998,7 +996,7 @@ class SnpHub:
         chrom, _ = self.bins.snp_chrm_pos(snp)
 
         # get keys for non pruned snps
-        chrom_keys = self.non_pruned.get_keys_with_snps()
+        chrom_keys = self.consideration_hub.get_keys_with_snps()
 
         # remove the current chromosome from the list
         if chrom in chrom_keys:
@@ -1011,7 +1009,7 @@ class SnpHub:
         snps = []
 
         # loop through all non pruned snps and collect them
-        for pos in self.non_pruned.non_pruned[c_pic]:
+        for pos in self.consideration_hub.consideration_hub[c_pic]:
             # make snps
             s = snp_t(f"{c_pic}.{pos}")
             # not seen
@@ -1044,18 +1042,18 @@ class SnpHub:
         # if snp is None, return a random snp
         # None means we don't need to check if the snp is the same as the input snp
         if snp is None:
-            return self.non_pruned.get_ran_snp(rng)
+            return self.consideration_hub.get_ran_snp(rng)
             # return self.bins.get_ran_snp(rng)
 
         # if snp is provided, return a random one that is not the same as the input snp
-        choice = self.non_pruned.get_ran_snp(rng)
+        choice = self.consideration_hub.get_ran_snp(rng)
         # choice = self.bins.get_ran_snp(rng)
 
         # try to get a random snp that is not the same as the input snp
         for _ in range(mutation_tries):
             if choice != snp:
                 return choice
-            choice = self.non_pruned.get_ran_snp(rng)
+            choice = self.consideration_hub.get_ran_snp(rng)
             # choice = self.bins.get_ran_snp(rng)
 
         return choice
@@ -1098,7 +1096,7 @@ class SnpHub:
             self.hub.flip_prunned(snp, gen_pruned)
 
             # delete snp from non pruned
-            self.non_pruned.remove_snp(snp)
+            self.consideration_hub.remove_snp(snp)
 
     # function to take in a list of snps and generate a dictionary of snps and their corresponding r2 values
     def generate_r2_dict(self, snps: Set[snp_t]) -> List:
@@ -1119,19 +1117,22 @@ class SnpHub:
         return True
 
     # print size of non pruned hub
-    def pruned_hub_size(self) -> np.uint32:
-        return self.non_pruned.get_total()
+    def consideration_hub_size(self) -> np.uint32:
+        return self.consideration_hub.get_total()
 
     # return a random snp from the non pruned hub
     def get_random_non_pruned_snp(self, rng_: rng_t) -> snp_t:
         rng = np.random.default_rng(rng_)
-        return self.non_pruned.get_ran_snp(rng)
-    
+        return self.consideration_hub.get_ran_snp(rng)
+
+    def get_keys_with_snps(self) -> List[gen_chrom_num_t]:
+        return self.consideration_hub.get_keys_with_snps()
+
     # count number of unseen snps in the hub from non_pruned object
     def seen_snps_proportion(self) -> None:
         count = 0
-        for chrm in self.non_pruned.non_pruned:
-            for pos in self.non_pruned.non_pruned[chrm]:
+        for chrm in self.consideration_hub.consideration_hub:
+            for pos in self.consideration_hub.consideration_hub[chrm]:
                 # count if the snp has been seen
                 if self.hub.has_been_seen(snp_t(f"{chrm}.{pos}")) == False:
                     count += 1
