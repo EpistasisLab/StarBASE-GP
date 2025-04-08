@@ -41,6 +41,9 @@ snp_hub_cnt_t = np.uint32
 # header position
 snp_hub_pos_t = np.uint32
 
+# generation found/pruned type
+snp_hub_gen_t = np.int32
+
 # best individual r2 value type
 snp_hub_res_t = np.float32
 # best encoder type (in str)
@@ -123,11 +126,20 @@ class SnpHub:
 
         # get a random snp from the hub
         def get_ran_snp(self, rng_: rng_t) -> snp_t:
+            # make sure we have at least one snp
+            assert self.get_total() > 0
+
             # initialize rng
             rng = np.random.default_rng(rng_)
+            chrom = []
+
+            for chrm in list(self.non_pruned.keys()):
+                if len(self.non_pruned[chrm]) > 0:
+                    chrom.append(chrm)
+
 
             # get a random chromosome key
-            chrom = rng.choice(list(self.non_pruned.keys()))
+            chrom = rng.choice(chrom)
 
             # get a random bin index from the chromosome
             position = rng.choice(self.non_pruned[chrom])
@@ -141,6 +153,14 @@ class SnpHub:
                 sum += len(pos_l)
             return np.uint32(sum)
 
+        # get list of keys with at least one snp
+        def get_keys_with_snps(self) -> List[gen_chrom_num_t]:
+            keys = []
+            for k, v in self.non_pruned.items():
+                if len(v) > 0:
+                    keys.append(k)
+            return keys
+
     class Hub:
         """
         Hub to keep track of snp weights.
@@ -151,19 +171,23 @@ class SnpHub:
             assuming that all snps are already in the hub
             if we get a snp that is not in the hub, we throw an error in debug mode
 
-               res_pos = 0 # position for r2 recived from evaluation
-               bin_pos = 1 # id for bin assigned to
-               idx_pos = 2 # position for bin number in hub value list
-               pos_pos = 3 # position for header position in hub value list
-               enc_pos = 4 # position for the corresponding encoder types in hub value list
-              seen_pos = 5 # position for the seen flag in hub value list
-            pruned_pos = 6 # position for the pruned flag in hub value list
+                   res_pos = 0 # position for r2 recived from evaluation
+                   bin_pos = 1 # id for bin assigned to
+                   idx_pos = 2 # position for bin number in hub value list
+                   pos_pos = 3 # position for header position in hub value list
+                   enc_pos = 4 # position for the corresponding encoder types in hub value list
+                  seen_pos = 5 # position for the seen flag in hub value list
+                pruned_pos = 6 # position for the pruned flag in hub value list
+              gen_seen_pos = 7 # position for the general seen flag in hub value list
+            gen_pruned_pos = 8 # position for the general pruned flag in hub value list
             """
 
-            # {snp: [res(np.float32),bin(np.uint32),idx(np.uint32),pos(np.uint32),enc(np.str_),seen(bool)],...}
+            # {snp: [res(np.float32),bin(np.uint32),idx(np.uint32),
+            # pos(np.uint32),enc(np.str_),seen(bool)], prunned(bool),
+            # gen_seen(np.unit32), gen_prunned(np.unit32)}
             self.hub = {}
 
-        # will add snp, sum, bin, pos， idx, res, typ to the hub #YF
+        # will add snp, sum, bin, pos， idx, res, typ to the hub
         def add_to_hub(self,
                        snp: snp_t,
                        res: snp_hub_res_t,
@@ -171,7 +195,10 @@ class SnpHub:
                        idx: snp_hub_idx_t,
                        pos: snp_hub_pos_t,
                        enc: snp_hub_enc_t,
-                       seen=False, prunned=False) -> None:
+                       seen=False,
+                       prunned=False,
+                       gen_seen: snp_hub_gen_t=snp_hub_gen_t(-1),
+                       gen_pruned:snp_hub_gen_t=snp_hub_gen_t(-1)) -> None:
             """
             will take in a snp, sum, cnt, bin, and pos and add it to the hub
 
@@ -183,10 +210,13 @@ class SnpHub:
                 pos (snp_hub_pos_t): position of the snp in the csv header
                 enc (snp_hub_enc_t): best encoder type placeholder, default = ''
                 seen (bool): has this snp been seen before, default = False
+                prunned (bool): has this snp been prunned, default = False
+                gen_seen (snp_hub_gen_t): generation seen, default = -1
+                gen_prunned (snp_hub_gen_t): generation prunned, default = -1
             """
 
             # add to hub
-            self.hub[snp] = [res,bin,idx,pos,enc,seen,prunned]
+            self.hub[snp] = [res,bin,idx,pos,enc,seen,prunned,gen_seen,gen_pruned]
             return
 
         # get snp result r^2
@@ -231,22 +261,25 @@ class SnpHub:
             # return the type
             return self.hub[snp][5]
 
-        # has this snp been prunned
-        def has_been_prunned(self, snp: snp_t) -> bool:
+        # has this snp been pruned
+        def has_been_pruned(self, snp: snp_t) -> bool:
             # check snp exists in the hub
             assert snp in self.hub
             # return the type
             return self.hub[snp][6]
 
-        # flip the prunned flag
-        def flip_prunned(self, snp: snp_t) -> None:
+        # flip the pruned flag
+        def flip_prunned(self, snp: snp_t, gen_pruned: snp_hub_gen_t) -> None:
             # check snp exists in the hub
             assert snp in self.hub
             # make sure we have not seen this snp before
-            assert self.has_been_prunned(snp) == False
+            assert self.has_been_pruned(snp) == False
 
             # flip the flag
             self.hub[snp][6] = True
+            # record the generation prunned
+            self.hub[snp][8] = gen_pruned
+
             return
 
         # flip the seen flag
@@ -262,7 +295,7 @@ class SnpHub:
 
         # update snp hub with the r2 and encoding type
         # assuming that this only gets called once per snp
-        def update_snp(self, snp: snp_t, value: np.float32, encoding:np.str_) -> None:
+        def update_snp(self, snp: snp_t, value: np.float32, encoding:np.str_, gen_seen: snp_hub_gen_t) -> None:
             # assert that snp is in hub
             assert snp in self.hub
             # make sure we have not seen this snp before
@@ -274,6 +307,12 @@ class SnpHub:
             self.hub[snp][0] = value
             # update the encoder type
             self.hub[snp][4] = encoding
+            # update the generation seen
+            self.hub[snp][7] = gen_seen
+
+            # if value is negative, set as prunned
+            if value < 0.0:
+                self.flip_prunned(snp, gen_seen)
 
             return
 
@@ -389,8 +428,6 @@ class SnpHub:
             for chrom, bins in self.bins.items():
                 self.bins[chrom] = [np.array(b, dtype=gen_chrom_pos_t) for b in bins]
 
-            # print("Length of snps: ", len(snps), flush=True)
-            # print("Result from count_bin_objs: ", self.count_bin_objs(), flush=True)
             # make sure all SNPs are accounted for
             assert len(snps) == self.count_bin_objs()
             # make sure snp_bins is the correct size
@@ -603,18 +640,6 @@ class SnpHub:
             # return a random snp
             return snp_t(f"{c}.{pos}")
 
-        # get a random snp from the hub
-        # def get_ran_snp(self, rng_: rng_t) -> snp_t:
-        #     # initialize rng
-        #     rng = np.random.default_rng(rng_)
-
-        #     # get a random chromosome key
-        #     c = rng.choice(list(self.bins.keys()))
-
-        #     # get a random bin index from the chromosome
-        #     i = rng.integers(0, len(self.bins[c]), dtype=np.uint16)
-
-        #     return snp_t(f"{c}.{rng.choice(self.bins[c][i])}")
 
     # initialize all hubs
     def __init__(self, snps: gen_header_snps_t, bin_size: bin_hub_size_t) -> None:
@@ -653,7 +678,9 @@ class SnpHub:
                                 pos=h_pos,
                                 enc=snp_hub_enc_t(''),
                                 seen=False,
-                                prunned=False)
+                                prunned=False,
+                                gen_seen=snp_hub_gen_t(-1),
+                                gen_pruned=snp_hub_gen_t(-1))
         print('SNP Hub Initialized')
         return
 
@@ -668,19 +695,31 @@ class SnpHub:
     # save the epi_hub and snp_hub to a file
     def save_hubs(self, save_dir: str) -> None:
         """
-           res_pos = 0 # position for r2 recived from evaluation
-           bin_pos = 1 # id for bin assigned to
-           idx_pos = 2 # position for bin number in hub value list
-           pos_pos = 3 # position for header position in hub value list
-           enc_pos = 4 # position for the corresponding encoder types in hub value list
-          seen_pos = 5 # position for the seen flag in hub value list
-        pruned_pos = 6 # position for the pruned flag in hub value list
+               res_pos = 0 # position for r2 recived from evaluation
+               bin_pos = 1 # id for bin assigned to
+               idx_pos = 2 # position for bin number in hub value list
+               pos_pos = 3 # position for header position in hub value list
+               enc_pos = 4 # position for the corresponding encoder types in hub value list
+              seen_pos = 5 # position for the seen flag in hub value list
+            pruned_pos = 6 # position for the pruned flag in hub value list
+          gen_seen_pos = 7 # position for the seen flag in hub value list
+        gen_pruned_pos = 8 # position for the pruned flag in hub value list
         """
 
         # Save snp hub with headers
         snp_data = []
         for k, v in self.hub.hub.items():
-            snp_data.append([k, v[0], v[1], v[2], v[3], v[4], v[5], v[6]])
+            # k: snp (row[0])
+            # v[0]: r2 (row[1])
+            # v[1]: bin (row[2])
+            # v[2]: idx (row[3])
+            # v[3]: pos (row[4])
+            # v[4]: enc (row[5])
+            # v[5]: seen (row[6])
+            # v[6]: prunned (row[7])
+            # v[7]: gen_seen (row[8])
+            # v[8]: gen_prunned (row[9])
+            snp_data.append([k, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]])
 
         # Sort snp_data by the second column (AVG_R2)
         snp_data.sort(key=lambda x: x[1], reverse=True)  # reverse=True for descending order
@@ -688,24 +727,29 @@ class SnpHub:
         # Write snp hub to file
         with open(save_dir+"snp_hub.csv", 'w') as f:
             # Write the headers for the snp_file
-            f.write("snp,r2,bin_num,bin_idx,encoding,seen,pruned\n")
+            f.write("snp,chr,bp,r2,bin_num,bin_idx,encoding,seen,pruned,gen_seen,gen_pruned\n")
             for row in snp_data:
-                f.write(f"{row[0]},{row[1]},{row[2]},{row[4]},{row[5]},{row[6]},{row[7]}\n")
+                # split snp into chromosome and position
+                chrom, pos = row[0].split('.')
+                f.write(f"{row[0]},{chrom},{pos},{row[1]},{row[2]},{row[4]},{row[5]},{row[6]},{row[7]},{row[8]},{row[9]}\n")
 
         # save csv with both seen and not prunned snps
         # Write snp hub to file
-        with open(save_dir+"non_pruned.csv", 'w') as f:
+        with open(save_dir+"non_pruned_and_seen.csv", 'w') as f:
             # Write the headers for the snp_file
             f.write("snp,r2,encoding\n")
             for row in snp_data:
-                if row[6] == True and row[7] == False and row[1] > np.float32(0.0):
+                if row[6] == True and row[7] == False:
                     f.write(f"{row[0]},{row[1]},{row[5]}\n")
-
         return
 
     # update snp hub with best univariate r2 result and corresponding encoder type
-    def update_snp_hub(self, snp:snp_t, result:snp_hub_res_t, type: snp_hub_enc_t) -> None:
-        self.hub.update_snp(snp, result, type)
+    def update_snp_hub(self, snp:snp_t, result:snp_hub_res_t, type: snp_hub_enc_t, gen_seen: snp_hub_gen_t) -> None:
+        # update Hub object: if r2 is negative, flip prunned flag
+        self.hub.update_snp(snp, result, type, gen_seen)
+        # update Non_Pruned_Hub object: if r2 is negative, remove snp from non prunned
+        if result < r2_t(0.0):
+            self.non_pruned.remove_snp(snp)
         return
 
     # check if snp has encoder type recorded in the snp hub
@@ -725,7 +769,7 @@ class SnpHub:
         rng = np.random.default_rng(rng_)
 
         # break snp into chromosome and position
-        chrom, pos = self.bins.snp_chrm_pos(snp)
+        chrom, _ = self.bins.snp_chrm_pos(snp)
 
         # get the bin number for the snp
         bin_id = self.hub.get_snp_bin(snp)
@@ -740,13 +784,9 @@ class SnpHub:
         for p in bin:
             s = snp_t(f"{chrom}.{p}")
 
-            if self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_prunned(s) == False and s != snp:
+            if self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_pruned(s) == False and s != snp:
                 snps.append(s)
                 r2.append(self.hub.get_uni_res(s))
-
-        # get all snps and r2 scores for a given snp within the same chorosome and bin
-        # snps, r2 = self.bins.get_snps_r2_in_bin(snp, self.hub)
-        # assert(len(snps) == len(r2))
 
         # if no snps were returned, return a random one
         if len(snps) == 0:
@@ -763,7 +803,7 @@ class SnpHub:
             choice = rng.choice(snps, p=r2)
 
         # get a random snp based on r2 scores as weights
-        return choice
+        return snp
 
     # get a random snp from the same chromosome and bin
     def get_ran_snp_in_bin(self, snp: snp_t, rng_: rng_t) -> snp_t:
@@ -774,23 +814,41 @@ class SnpHub:
         rng = np.random.default_rng(rng_)
 
         # break snp into chromosome and position
-        chrom, pos = self.bins.snp_chrm_pos(snp)
+        chrom, _ = self.bins.snp_chrm_pos(snp)
 
         # get the bin number for the snp
         bin_id = self.hub.get_snp_bin(snp)
 
+        # get actual bin from Bin class
+        bin = self.bins.get_bin(chrom, bin_id)
+
+        # collect all snps that have (not pruned and seen) or (r2 > 0.0 and seen)
+        snps = []
+        for p in bin:
+            s = snp_t(f"{chrom}.{p}")
+
+            # not seen
+            not_seen = self.hub.has_been_seen(s) == False
+            # r2 > 0.0 and seen and not pruned
+            seen_r2_np = self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_seen(s) and self.hub.has_been_pruned(s) == False
+
+            if (not_seen or seen_r2_np) and s != snp:
+                snps.append(s)
+
+        # if no snps were collected, return a random snp from non pruned
+        if len(snps) == 0:
+            return self.get_random_non_pruned_snp(rng)
+
         # try to get a random snp position that is not the same as the input snp
-        choice = rng.choice(self.bins.get_bin(chrom, bin_id))
-        s = snp_t(f"{chrom}.{choice}")
+        choice = rng.choice(snps)
 
         for _ in range(mutation_tries):
-            if s != snp:
+            if choice != snp:
                 return s
-            choice = rng.choice(self.bins.get_bin(chrom, bin_id))
-            s = snp_t(f"{chrom}.{choice}")
+            choice = rng.choice(snps)
 
         # get a random snp based
-        return choice
+        return snp
 
     # geta snp from the same chromosome but different bin
     def get_smt_snp_in_chrm(self, snp: snp_t, rng_: rng_t) -> snp_t:
@@ -798,16 +856,16 @@ class SnpHub:
         rng = np.random.default_rng(rng_)
 
         # break snp into chromosome and position
-        chrom, pos = self.bins.snp_chrm_pos(snp)
+        chrom, _ = self.bins.snp_chrm_pos(snp)
 
         # get bin id for the snp
         bin_id = self.hub.get_snp_bin(snp)
 
-        # collect all snps that have not been prunned and have r2 > 0.0
+        # collect all snps that have not been pruned and have r2 > 0.0
         snps = []
         r2 = []
 
-        # loop through all non prunned snps and collect the ones with r2 > 0.0 and not prunned
+        # loop through all non prunned snps and collect the ones with r2 > 0.0 and not pruned
         for pos in self.non_pruned.non_pruned[chrom]:
             s = snp_t(f"{chrom}.{pos}")
 
@@ -816,10 +874,6 @@ class SnpHub:
                 r2.append(self.hub.get_uni_res(s))
 
         r2 = r2 / np.sum(r2, dtype=np.float32)
-
-        # # get all snps and r2 scores for a given snp within the same chorosome and bin
-        # snps, r2 = self.bins.get_snps_r2_in_chrom(snp, self.hub)
-        # assert(len(snps) == len(r2))
 
         # if no snps were returned, return a random one
         if len(snps) == 0:
@@ -835,7 +889,7 @@ class SnpHub:
             choice = rng.choice(snps, p=r2)
 
         # get a random snp based on r2 scores as weights
-        return choice
+        return snp
 
     # get a random snp from the same chromosome but different bin
     def get_ran_snp_in_chrm(self, snp: snp_t, rng_: rng_t) -> snp_t:
@@ -846,33 +900,40 @@ class SnpHub:
         rng = np.random.default_rng(rng_)
 
         # break snp into chromosome and position
-        chrom, pos = self.bins.snp_chrm_pos(snp)
+        chrom, _ = self.bins.snp_chrm_pos(snp)
 
         # get bin id for the snp
         bin_id = self.hub.get_snp_bin(snp)
 
-        # collect all snps that have not been prunned and have r2 > 0.0
+        # collect all snps that have not been pruned and have r2 > 0.0
         snps = []
 
-        # loop through all non prunned snps and collect the ones with r2 > 0.0 and not prunned
+        # loop through all non prunned snps and collect the ones with r2 > 0.0 and not pruned
         for pos in self.non_pruned.non_pruned[chrom]:
+            # make snps
             s = snp_t(f"{chrom}.{pos}")
+            # not seen
+            not_seen = self.hub.has_been_seen(s) == False
+            # r2 > 0.0 and seen and not pruned
+            seen_r2_np = self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_seen(s) and self.hub.has_been_pruned(s) == False
 
-            if self.hub.get_snp_bin(s) != bin_id:
-            # if self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_seen(s) and self.hub.get_snp_bin(s) != bin_id:
+            if (not_seen or seen_r2_np) and self.hub.get_snp_bin(s) != bin_id:
                 snps.append(s)
+
+        # if no snps were collected, return a random snp from non pruned
+        if len(snps) == 0:
+            return self.get_random_non_pruned_snp(rng)
 
         # try to get a random snp that is not the same as the input snp
         choice = rng.choice(snps)
-        # choice = self.bins.get_ran_snp_in_chrom(snp, rng, self.hub)
 
         for _ in range(mutation_tries):
             if choice != snp:
                 return choice
             choice = rng.choice(snps)
 
-        # get a random snp based
-        return choice
+        # return same snp
+        return snp
 
     # get a snp from outside the chromosome with r2 > 0.0 based on r2 weight
     def get_smt_snp_out_chrm(self, snp: snp_t, rng_: rng_t) -> snp_t:
@@ -886,19 +947,20 @@ class SnpHub:
         chrom, pos = self.bins.snp_chrm_pos(snp)
 
         # get keys for non pruned snps
-        chrom_keys = list(self.non_pruned.non_pruned.keys())
+        chrom_keys = self.non_pruned.get_keys_with_snps()
 
         # remove the current chromosome from the list
-        chrom_keys.remove(chrom)
+        if chrom in chrom_keys:
+            chrom_keys.remove(chrom)
 
         # randomly select a chromosome
         c_pic = rng.choice(chrom_keys)
 
-        # collect all snps that have not been prunned and have r2 > 0.0
+        # collect all snps that have not been pruned and have r2 > 0.0
         snps = []
         r2 = []
 
-        # loop through all non prunned snps and collect the ones with r2 > 0.0 and not prunned
+        # loop through all non pruned snps and collect the ones with r2 > 0.0 and not pruned
         for pos in self.non_pruned.non_pruned[c_pic]:
             s = snp_t(f"{c_pic}.{pos}")
 
@@ -907,10 +969,6 @@ class SnpHub:
                 r2.append(self.hub.get_uni_res(s))
 
         r2 = r2 / np.sum(r2, dtype=np.float32)
-
-        # get all snps and r2 scores for a given snp within the same chorosome and bin
-        # snps, r2 = self.bins.get_snps_r2_out_chrom(snp, self.hub)
-        # assert(len(snps) == len(r2))
 
         # if no snps were returned, return a random one
         if len(snps) == 0:
@@ -926,7 +984,7 @@ class SnpHub:
             choice = rng.choice(snps, p=r2)
 
         # get a random snp based on r2 scores as weights
-        return choice
+        return snp
 
     # get random snp from outside the chromosome
     def get_ran_snp_out_chrm(self, snp: snp_t, rng_: rng_t) -> snp_t:
@@ -937,27 +995,36 @@ class SnpHub:
         rng = np.random.default_rng(rng_)
 
         # split up the snp into chromosome and position
-        chrom, pos = self.bins.snp_chrm_pos(snp)
+        chrom, _ = self.bins.snp_chrm_pos(snp)
 
         # get keys for non pruned snps
-        chrom_keys = list(self.non_pruned.non_pruned.keys())
+        chrom_keys = self.non_pruned.get_keys_with_snps()
 
         # remove the current chromosome from the list
-        chrom_keys.remove(chrom)
+        if chrom in chrom_keys:
+            chrom_keys.remove(chrom)
 
         # randomly select a chromosome
         c_pic = rng.choice(chrom_keys)
 
-        # collect all snps that have not been prunned and have r2 > 0.0
+        # collect all snps that have not been pruned and have r2 > 0.0
         snps = []
 
-        # loop through all non prunned snps and collect them
+        # loop through all non pruned snps and collect them
         for pos in self.non_pruned.non_pruned[c_pic]:
+            # make snps
             s = snp_t(f"{c_pic}.{pos}")
-            snps.append(s)
+            # not seen
+            not_seen = self.hub.has_been_seen(s) == False
+            # r2 > 0.0 and seen and not pruned
+            seen_r2_np = self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_seen(s) and self.hub.has_been_pruned(s) == False
 
-            # if self.hub.get_uni_res(s) > r2_t(0.0) and self.hub.has_been_seen(s):
-                # snps.append(s)
+            if (not_seen or seen_r2_np):
+                snps.append(s)
+
+        # if no snps were collected, return a random snp from non pruned
+        if len(snps) == 0:
+            return self.get_random_non_pruned_snp(rng)
 
         # try to get a random snp that is not the same as the input snp
         choice = rng.choice(snps)
@@ -966,7 +1033,8 @@ class SnpHub:
             if choice != snp:
                 return choice
             choice = rng.choice(snps)
-        return choice
+
+        return snp
 
     # get a random snp from all possible snps
     def get_ran_snp(self, rng_: rng_t, snp = None) -> snp_t:
@@ -992,160 +1060,42 @@ class SnpHub:
 
         return choice
 
-    # get snp from hub based on r2 weight
-    # this is only called for to get the first snp -- no need to check if snp is the same
-    def get_smt_snp(self, rng:rng_t):
-        # call snp hub to get snps and r2 scores based on r2 weight > 0 and count > 0
-        # snps, r2 = self.hub.get_snp_r2_weighted()
+    def get_k_snps_from_chrom(self, rng_:rng_t, chrom:gen_chrom_num_t, k:int) -> Set[snp_t]:
+        # initialize rng and set
+        rng_ = np.random.default_rng(rng_)
+        k_snps = set()
 
-        # collect all snps with r2 > 0.0 from the non pruned hub
-        snps = []
-        r2 = []
-
-        # go through snps from the non pruned hub and collect the ones with r2 > 0.0
-        for chrom in self.non_pruned.non_pruned.keys():
-            for pos in self.non_pruned.non_pruned[chrom]:
-                s = snp_t(f"{chrom}.{pos}")
-
-                if self.hub.get_uni_res(s) > np.float32(0.0) and self.hub.has_been_seen(s):
-                    snps.append(s)
-                    r2.append(self.hub.get_uni_res(s))
-
-        # if no snps were returned, return a random one
-        if len(snps) == 0:
-            return self.get_ran_snp(rng, None)
-        # else return a random snp based on r2 scores as weights
-        return rng.choice(snps, p=r2 / np.sum(r2, dtype=np.float32))
+        # make sure the chrom is not out of bound
+        assert chrom in self.bins.bins
+        # get random k snps from the chromosome
+        bins = [i for i in range(len(self.bins.bins[chrom]))]
+        while len(k_snps) < k: # to make sure there are no replicates
+            # get a random bin
+            bin = rng_.choice(bins)
+            # sample a random snp from the bin
+            sample = rng_.integers(0, len(self.bins.bins[chrom][bin]), dtype=np.uint16)
+            # get random snp from the bin
+            pos = self.bins.bins[chrom][bin][sample]
+            k_snps.add(snp_t(f"{chrom}.{pos}"))
+        # return the snp set
+        return k_snps
 
     def does_snp_exist(self, snp: snp_t) -> bool:
         return snp in self.hub.hub
 
-    # get a snp from the same chromosome and bin within the wiggle range with r2 > 0.0 based on r2 weight
-    def get_smt_snp_in_bin_wiggle(self, snp: snp_t, rng_: rng_t, step: np.uint16) -> snp_t:
-        rng = np.random.default_rng(rng_)
-
-        # make sure there is a '.' inside the snp string
-        assert '.' in snp
-
-        # get a random snp based
-        wiggle_snps = self.get_wiggle_range(snp, step)
-
-        # collect all snps with a positive r2 score only
-        snps, r2 = [], []
-        for s in wiggle_snps:
-            # make sure this snp is in the hub
-            assert s in self.hub.hub
-
-            # check if r2 is greater than 0.0
-            if self.hub.get_uni_res(s) > np.float32(0.0):
-                snps.append(s)
-                r2.append(self.hub.get_uni_res(s))
-
-        # if no snps have positve r2, return a random one from the wiggle range
-        if len(snps) == 0:
-            return self.get_ran_snp_in_bin_wiggle(snp, rng, step)
-
-        # normalize r2 scores
-        r2 = np.array(r2, dtype=np.float32) / np.sum(r2, dtype=np.float32)
-        # get a snp based on r2 scores as weights
-        choice = rng.choice(snps, p=r2)
-
-        # try to get a random snp that is not the same as the input snp
-        for _ in range(mutation_tries):
-            if choice != snp:
-                return choice
-            choice = rng.choice(snps, p=r2)
-
-        # get a random snp based on r2 scores as weights
-        return self.get_ran_snp_in_bin_wiggle(snp, rng, step)
-
-    # get a random snp from the same chromosome and bin that also considers neighboring bins within wiggle range
-    def get_ran_snp_in_bin_wiggle(self, snp: snp_t, rng: rng_t, step: np.uint16) -> snp_t:
-        # make sure there is a '.' inside the snp string
-        assert '.' in snp
-
-        # get a random snp based
-        wiggle_snps = self.get_wiggle_range(snp, step)
-        choice = rng.choice(wiggle_snps)
-
-        # try to get a random snp that is not the same as the input snp
-        for _ in range(mutation_tries):
-            if choice != snp:
-                return choice
-            choice = rng.choice(wiggle_snps)
-
-        # get a random snp based on r2 scores as weights
-        return choice
-
-    # get all snps from a given range that cross multiple bins if necessary
-    def get_wiggle_range(self, snp: snp_t, step: np.uint16) -> npt.NDArray[snp_t]:
-        # get chromosome and position from snp
-        snp_chrom, _ = self.bins.snp_chrm_pos(snp)
-
-        # wiggle snp holders
-        right_wiggle_range = []
-        left_wiggle_range = []
-
-        # get the right wiggle range
-        right_start = self.hub.get_snp_idx(snp) + 1
-        original_bin_size = self.bins.get_bin_size(snp_chrom, self.hub.get_snp_bin(snp))
-
-        # get all snps from the current bin within the right wiggle step range
-        while len(right_wiggle_range) <= step and right_start < original_bin_size:
-            right_wiggle_range.append(self.bins.get_pos_in_bin(snp_chrom, self.hub.get_snp_bin(snp), right_start))
-            right_start += 1
-
-        # get total number of bins in the chromosome
-        chrm_num_of_bins = self.bins.get_chrom_number_of_bins(snp_chrom)
-        # cross into the right neighboring bins if necessary to get the rest ÷of the snps
-        right_snp_bin_num = self.hub.get_snp_bin(snp) + 1
-
-        while len(right_wiggle_range) <= step and right_snp_bin_num < chrm_num_of_bins:
-            # collect snps from the next bin until the wiggle range is full
-            bin_start = 0
-            while len(right_wiggle_range) <= step and bin_start < self.bins.get_bin_size(snp_chrom, right_snp_bin_num):
-                right_wiggle_range.append(self.bins.get_pos_in_bin(snp_chrom, right_snp_bin_num, bin_start))
-                bin_start += 1
-
-            # move to the next bin to keep collecting snps
-            right_snp_bin_num += 1
-
-        # get all snps from the current bin within the left wiggle step range
-        left_start = self.hub.get_snp_idx(snp) - 1
-        while len(left_wiggle_range) <= step and 0 <= left_start:
-            left_wiggle_range.append(self.bins.get_pos_in_bin(snp_chrom, self.hub.get_snp_bin(snp), left_start))
-            left_start -= 1
-
-        # cross into the left neighboring bins if necessary to get the rest of the snps
-        left_snp_bin_num = self.hub.get_snp_bin(snp) - 1
-        while len(left_wiggle_range) <= step and 0 <= left_snp_bin_num:
-            # collect snps from the previous bin until the wiggle range is full
-            bin_start = self.bins.get_bin_size(snp_chrom, left_snp_bin_num) - 1
-            while len(left_wiggle_range) <= step and 0 <= bin_start:
-                left_wiggle_range.append(self.bins.get_pos_in_bin(snp_chrom, left_snp_bin_num, bin_start))
-                bin_start -= 1
-
-            # move to previous bin to keep collecting snps
-            left_snp_bin_num -= 1
-
-        # combine the wiggle range and return new snps
-        wiggle_range = left_wiggle_range + right_wiggle_range
-        return np.array([f"{snp_chrom}.{pos}" for pos in wiggle_range], dtype=snp_t)
-
-
-    # has snp been prunned?
-    def has_been_prunned(self, snp: snp_t) -> bool:
-        return self.hub.has_been_prunned(snp)
+    # has snp been pruned?
+    def has_been_pruned(self, snp: snp_t) -> bool:
+        return self.hub.has_been_pruned(snp)
 
     # process the prunned snps
-    def process_prunned_snps(self, snps: Set[snp_t]) -> None:
+    def process_pruned_snps(self, snps: Set[snp_t], gen_pruned: snp_hub_gen_t) -> None:
         # go through each snp and update the hub
         for snp in snps:
             # check to make sure we have not prunned this snp before
-            assert self.hub.has_been_prunned(snp) == False
+            assert self.hub.has_been_pruned(snp) == False
 
-            # flip snp to prunned
-            self.hub.flip_prunned(snp)
+            # flip snp to pruned
+            self.hub.flip_prunned(snp, gen_pruned)
 
             # delete snp from non pruned
             self.non_pruned.remove_snp(snp)
@@ -1157,6 +1107,35 @@ class SnpHub:
 
         return [(snp, self.get_uni_res(snp)) for snp in snps]
 
+    # check if all snps have been pruned
+    def all_snps_pruned(self, snps: Set[snp_t]) -> bool:
+
+        # if any snps has not been prunned return False
+        for snp in snps:
+            if self.hub.has_been_pruned(snp) == False:
+                return False
+
+        # return true if all snps have been pruned
+        return True
+
     # print size of non pruned hub
     def pruned_hub_size(self) -> np.uint32:
         return self.non_pruned.get_total()
+
+    # return a random snp from the non pruned hub
+    def get_random_non_pruned_snp(self, rng_: rng_t) -> snp_t:
+        rng = np.random.default_rng(rng_)
+        return self.non_pruned.get_ran_snp(rng)
+    
+    # count number of unseen snps in the hub from non_pruned object
+    def seen_snps_proportion(self) -> None:
+        count = 0
+        for chrm in self.non_pruned.non_pruned:
+            for pos in self.non_pruned.non_pruned[chrm]:
+                # count if the snp has been seen
+                if self.hub.has_been_seen(snp_t(f"{chrm}.{pos}")) == False:
+                    count += 1
+
+        # print proportion of unseen snps
+        print(f"Proportion of seen SNPs: {1.0 - (count/len(self.hub.hub)):.2%}", flush=True)
+        return
