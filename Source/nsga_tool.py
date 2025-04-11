@@ -85,7 +85,7 @@ def non_dominated_sorting(obj_scores: npt.NDArray) -> Tuple[List[npt.NDArray[np.
 
 # calculate the crowding distance for all individuals within the population
 @typechecked
-def crowding_distance(obj_scores: npt.NDArray, count: np.int32) -> npt.NDArray[r2_t]:
+def crowding_distance(obj_scores: npt.NDArray, count: np.int32, front_map) -> npt.NDArray[r2_t]:
     """
     Calculate the crowding distance for each individual in the population.
 
@@ -107,31 +107,38 @@ def crowding_distance(obj_scores: npt.NDArray, count: np.int32) -> npt.NDArray[r
     assert all(x[0] > 0.0 for x in obj_scores)
     assert all(x[1] > 0 for x in obj_scores)
 
-    population_size = len(obj_scores)
-    crowding_distances = np.zeros(population_size, dtype=np.float32)
+    # initialize the crowding distances to negative for guards
+    crowding_distances = np.full(len(obj_scores), np.float32(-1.0), dtype=np.float32)
 
-    for m in range(count):
-        # Sort the population based on the m-th objective
-        sorted_indices = np.argsort([ind[m] for ind in obj_scores], kind='mergesort')
-        sorted_population = obj_scores[sorted_indices]
+    for front in front_map:
+        # set inital front crowding distances to zero for addition
+        crowding_distances[front] = np.float32(0.0)
 
-        # calculate the range of the m-th objective
-        min_obj = sorted_population[0][m]
-        max_obj = sorted_population[-1][m]
+        for m in range(count):
+            # Sort the front scores based on the m-th objective
+            sorted_indices = np.argsort([ind[m] for ind in obj_scores[front]], kind='mergesort')
+            sorted_front = obj_scores[front[sorted_indices]]
 
-        # skip if both max and min are the same
-        if max_obj == min_obj:
-            continue
+            # calculate the range of the m-th objective
+            min_obj = sorted_front[0][m]
+            max_obj = sorted_front[-1][m]
 
-        # set the crowding distance of boundary points to infinity
-        crowding_distances[sorted_indices[0]] = np.inf
-        crowding_distances[sorted_indices[-1]] = np.inf
+            # skip if both max and min are the same
+            if max_obj == min_obj:
+                continue
 
-        # calculate crowding distances for intermediate points
-        for i in range(1, population_size - 1):
-            next_obj = sorted_population[i + 1][m]
-            prev_obj = sorted_population[i - 1][m]
-            crowding_distances[sorted_indices[i]] += (next_obj - prev_obj) / (max_obj - min_obj)
+            # set the crowding distance of boundary points to infinity
+            crowding_distances[front[sorted_indices[0]]] = np.inf
+            crowding_distances[front[sorted_indices[-1]]] = np.inf
+
+            # calculate crowding distances for intermediate points
+            for i in range(1, len(front) - 1):
+                next_obj = sorted_front[i + 1][m]
+                prev_obj = sorted_front[i - 1][m]
+                crowding_distances[front[sorted_indices[i]]] += (next_obj - prev_obj) / (max_obj - min_obj)
+
+    # make sure all crowding distances are non-negative
+    assert np.all(crowding_distances >= 0.0)
 
     return crowding_distances
 
