@@ -606,7 +606,7 @@ class EA:
         fronts, _ = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(non_dup_pipelines, (r2_t(1.0), feature_cnt_t(-1))))
 
         # get crowding distance for each solution
-        crowding_distance = nsga.crowding_distance(self.get_pipeline_scores(non_dup_pipelines, (r2_t(1.0), feature_cnt_t(1))), np.int32(2))
+        crowding_distance = nsga.crowding_distance(self.get_pipeline_scores(non_dup_pipelines, (r2_t(1.0), feature_cnt_t(1))), np.int32(2), fronts)
 
         # truncate the population to the population size with nsga ii
         survivor_ids = nsga.non_dominated_truncate(fronts, crowding_distance, self.pop_size)
@@ -922,7 +922,7 @@ class EA:
         assert sum([len(f) for f in fronts]) == len(ranks)
 
         # get crowding distance for each solution
-        crowding_distance = nsga.crowding_distance(self.get_pipeline_scores(self.population, weights=(r2_t(1.0), feature_cnt_t(1))), np.int32(2))
+        crowding_distance = nsga.crowding_distance(self.get_pipeline_scores(self.population, weights=(r2_t(1.0), feature_cnt_t(1))), np.int32(2), fronts)
 
         # get parent_cnt number of parents
         for _ in range(parent_cnt):
