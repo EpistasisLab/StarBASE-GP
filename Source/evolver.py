@@ -531,7 +531,7 @@ class EA:
         total_gp_run = time.time() - total_gp_run
         print(f"Time to finish {gens} generations: {(total_gp_run) / 60} minutes", flush=True)
 
-
+        self.record_final_pareto_front(self.population) # save the final pareto front to a file
         self.plot_pareto_front(self.population) # calling the plotting function at the end to get the final pareto plot
         self.hubs.save_hubs(self.save_directory) # save the snp_hub to a csv file in the save directory
         self.save_total_runtime(total_gp_run/60) # save the total runtime in minutes of the algorithm to a file
@@ -974,6 +974,29 @@ class EA:
                 if not self.hubs.is_encoder_in_hub(snp_name):
                     unseen_univariates.add(snp_name)
         return unseen_univariates
+
+    # record the pipeline r2 and complexity scores for the pareto front from the final population
+    def record_final_pareto_front(self, pop: List[Pipeline]) -> None:
+        """
+        Function to record the final pareto front from the population with complexity and r2 scores.
+        """
+
+        # get all scores from the current population
+        pop_scores = self.get_pipeline_scores(pop, weights=(r2_t(1.0), feature_cnt_t(1)))
+
+        # get the fronts and rank
+        _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(pop, weights=(r2_t(1.0), feature_cnt_t(-1))))
+
+        # remove scores that are not of rank 0
+        pareto_front = pop_scores[rank == 0]
+
+        # sort front by feature count
+        pareto_front = sorted(pareto_front, key=lambda x: x[1])
+
+        # save the pareto front to a csv file and enumerate the pipelines
+        pareto_front_df = pd.DataFrame(pareto_front, columns=['R2', 'Feature Count'])
+        pareto_front_df.to_csv(self.save_directory + 'final_pareto_front.csv', index=False)
+        return
 
     # plot the current pareto front from the population with complexity and r2 scores
     def plot_pareto_front(self, pop: List[Pipeline]) -> None:
