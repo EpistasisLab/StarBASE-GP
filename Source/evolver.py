@@ -64,9 +64,9 @@ div_t = np.float32
 # snp hub generation type
 snp_hub_gen_t = np.int32
 # chromosome number
-gen_chrom_num_t = np.uint8
+gen_chrom_num_t = np.int8
 # chromosome snp position
-gen_chrom_pos_t = np.uint32
+gen_chrom_pos_t = np.int32
 
 # evaluate unseen snps
 @ray.remote
