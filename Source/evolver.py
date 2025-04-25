@@ -40,6 +40,7 @@ import warnings
 # to not show runtime warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
+snp_t = np.str_
 # snp name type
 snp_name_t = np.str_
 # snp hub position type
@@ -62,6 +63,10 @@ pop_id_t = np.uint16
 div_t = np.float32
 # snp hub generation type
 snp_hub_gen_t = np.int32
+# chromosome number
+gen_chrom_num_t = np.uint8
+# chromosome snp position
+gen_chrom_pos_t = np.uint32
 
 # evaluate unseen snps
 @ray.remote
@@ -218,7 +223,9 @@ class EA:
                  smt_in_in_p: prob_t = prob_t(.1),
                  smt_in_out_p: prob_t = prob_t(.45),
                  smt_out_out_p: prob_t = prob_t(.45),
-                 save_directory: str = ""
+                 save_directory: str = "",
+                 ground_truth: List[str] = [],
+                 truth_distance: int = 0,
                  ) -> None:
         """
         Main class for the evolutionary algorithm.
@@ -281,6 +288,8 @@ class EA:
         self.save_directory = save_directory
         self.rand_init = rand_init
 
+        self.ground_truth = [np.str_(snp) for snp in ground_truth] # convert to numpy string
+        self.truth_distance = truth_distance
 
         # initialize ray
         ray.init(num_cpus=cores, include_dashboard=True)
@@ -536,6 +545,9 @@ class EA:
         self.hubs.save_hubs(self.save_directory) # save the snp_hub to a csv file in the save directory
         self.save_total_runtime(total_gp_run/60) # save the total runtime in minutes of the algorithm to a file
         generation_details.to_csv(os.path.join(self.save_directory, 'generation_details.csv'), index=False) # save the generation details to a csv file
+
+        if len(self.ground_truth) > 0:
+            self.check_ground_truth()
 
     def save_total_runtime(self, total_runtime: float) -> None:
         """
@@ -1041,6 +1053,34 @@ class EA:
         # save the plot
         plt.savefig(self.save_directory + 'pareto_front.png')
         plt.clf()
+
+    # check if ground truth is found in the Pareto front
+    def check_ground_truth(self) -> bool:
+        # get the pareto front from the population
+        _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(r2_t(1.0), feature_cnt_t(-1))))
+        pareto_front = self.population[rank == 0]
+
+        # get snps from the pareto front that are not prunned
+        good_snps = set()
+
+        for pipeline in pareto_front:
+            good_snps.update(set(snp for snp in pipeline.get_trait_feature_names() if self.hubs.has_been_pruned(snp) == False))
+
+        for true_snp in self.ground_truth:
+            true_chrom, true_pos = self.snp_chrm_pos(true_snp)
+
+            for snp in good_snps:
+                chrom, pos = self.snp_chrm_pos(snp)
+                if true_chrom == chrom and np.abs(true_pos - pos) <= self.truth_distance:
+                    print('Found ground truth SNP:', true_snp, flush=True)
+
+        return
+
+    # helper to generate chromosome number and snp position
+    def snp_chrm_pos(self, snp: snp_t) -> Tuple[gen_chrom_num_t, gen_chrom_pos_t]:
+        chrom, pos = snp.split('.')
+        chrom, pos = gen_chrom_num_t(chrom), gen_chrom_pos_t(pos)
+        return chrom, pos
 
     # save pareto plot and calculate permutation importance for each pipeline with only good snps
     def post_analysis_with_good_snps(self) -> None:
