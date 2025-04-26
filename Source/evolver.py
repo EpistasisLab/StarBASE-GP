@@ -1058,7 +1058,11 @@ class EA:
     def check_ground_truth(self) -> bool:
         # get the pareto front from the population
         _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(r2_t(1.0), feature_cnt_t(-1))))
-        pareto_front = self.population[rank == 0]
+        pareto_front = []
+        # get rank == 0 pipelines
+        for i, r in enumerate(rank):
+            if r == 0:
+                pareto_front.append(self.population[i])
 
         # get snps from the pareto front that are not prunned
         good_snps = set()
