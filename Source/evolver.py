@@ -1077,8 +1077,7 @@ class EA:
                 chrom, pos = self.snp_chrm_pos(snp)
                 if true_chrom == chrom and np.abs(true_pos - pos) <= self.truth_distance:
                     print('Found ground truth SNP:', true_snp, flush=True)
-
-        return
+ 
 
     # helper to generate chromosome number and snp position
     def snp_chrm_pos(self, snp: snp_t) -> Tuple[gen_chrom_num_t, gen_chrom_pos_t]:
