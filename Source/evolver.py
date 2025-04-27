@@ -1055,7 +1055,7 @@ class EA:
         plt.clf()
 
     # check if ground truth is found in the Pareto front
-    def check_ground_truth(self) -> bool:
+    def check_ground_truth(self) -> None:
         # get the pareto front from the population
         _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(r2_t(1.0), feature_cnt_t(-1))))
         pareto_front = []
