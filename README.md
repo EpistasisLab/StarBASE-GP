@@ -1,7 +1,7 @@
 # StarBASE-GP
 
 <div align="center">
-  <img src="./docs/StarBASE_logo_small.png" alt="Logo">
+  <img src="./docs/starbase-gp-logo.png" alt="Logo">
 </div>
 
 StarBASE-GP : Star-Based Automated Single-locus and Epistasis analysis tool - Genetic Programming
