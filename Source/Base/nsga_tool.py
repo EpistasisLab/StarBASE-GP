@@ -10,21 +10,11 @@ import numpy as np
 from typeguard import typechecked
 from typing import List, Tuple
 import numpy.typing as npt
-
-# r2 score type
-r2_t = np.float32
-# feature count type
-feature_cnt_t = np.int16
-# traits type
-traits_t = Tuple[r2_t, feature_cnt_t]
-# numpy random number generator type
-rng_t = np.random.Generator
-# population id type
-pop_id_t = np.uint16
+from .types import (float32_t, int16_t, rng_t, uint16_t, int32_t)
 
 # calculate the front each individual solution is in
 @typechecked
-def non_dominated_sorting(obj_scores: npt.NDArray) -> Tuple[List[npt.NDArray[np.uint16]],npt.NDArray[np.uint16]]:
+def non_dominated_sorting(obj_scores: npt.NDArray) -> Tuple[List[npt.NDArray[int32_t]],npt.NDArray[int32_t]]:
     """
     Perform non-dominated sorting for a maximization problem using NumPy arrays of type float32.
 
@@ -33,25 +23,27 @@ def non_dominated_sorting(obj_scores: npt.NDArray) -> Tuple[List[npt.NDArray[np.
 
     Returns:
     Tuple(fronts, rank):
-    fronts (list of numpy array of uint16): Each sublist contains the indices of solutions in the corresponding Pareto front.
+    fronts (list of numpy array): Each sublist contains the indices of solutions in the corresponding Pareto front.
     rank (numpy array of uint16): The front rank of each solution in the population.
     """
-    # quick check to make sure that elements in scores are numpy arrays with np.float32
+
+    # quick check to make sure that elements in scores are numpy arrays with float32_t
     assert all(isinstance(x, tuple) for x in obj_scores)
     # make sure all elements are of the correct type
-    assert all(isinstance(x[0], r2_t) for x in obj_scores)
-    assert all(isinstance(x[1], feature_cnt_t) for x in obj_scores)
-    # make sure all [0] elements are non-negative
+    assert all(isinstance(x[0], float32_t) for x in obj_scores)
+    assert all(isinstance(x[1], int32_t) for x in obj_scores)
+    # make sure all [0] elements are non-negative (maximization)
     assert all(x[0] > 0.0 for x in obj_scores)
+    # make sure all [1] elements are negative (minimization)
     assert all(x[1] < 0 for x in obj_scores)
 
     pop_size = obj_scores.shape[0]
     # final fronts returned
     fronts = [[]]
     # what front is solutions 'p' in
-    rank = np.zeros(pop_size, dtype=np.uint16)
+    rank = np.zeros(pop_size, dtype=int16_t)
     # what 'q' solutions dominate 'p' solution
-    domination_count = np.zeros(pop_size, dtype=np.uint16)
+    domination_count = np.zeros(pop_size, dtype=int16_t)
     # what 'q' solutions are dominated by 'p' solution
     dominated_solutions = [[] for _ in range(pop_size)]
 
@@ -80,12 +72,56 @@ def non_dominated_sorting(obj_scores: npt.NDArray) -> Tuple[List[npt.NDArray[np.
         fronts.append(next_front)
     fronts.pop()
 
-    fronts = [np.array(front, dtype=np.uint16) for front in fronts]
+    fronts = [np.array(front, dtype=int32_t) for front in fronts]
     return fronts, rank
+
+# return individuals belonging only to the first front
+@typechecked
+def front_zero(obj_scores: npt.NDArray) -> List[int32_t]:
+    """
+    Perform non-dominated sorting for a maximization problem using NumPy arrays of type float32.
+
+    Parameters:
+    obj_scores (np.ndarray): A 2D array where each row represents the objective values for a solution.
+
+    Returns:
+    Tuple(fronts, rank):
+    fronts (list of numpy array of uint16): Each sublist contains the indices of solutions in the corresponding Pareto front.
+    rank (numpy array of uint16): The front rank of each solution in the population.
+    """
+    # quick check to make sure that elements in scores are numpy arrays with float32_t
+    assert all(isinstance(x, tuple) for x in obj_scores)
+    # make sure all elements are of the correct type
+    assert all(isinstance(x[0], float32_t) for x in obj_scores)
+    assert all(isinstance(x[1], int32_t) for x in obj_scores)
+    # make sure all [0] elements are non-negative
+    assert all(x[0] > 0.0 for x in obj_scores)
+    assert all(x[1] < 0 for x in obj_scores)
+
+    pop_size = obj_scores.shape[0]
+    # final fronts returned
+    front_zero = []
+    # what 'q' solutions dominate 'p' solution
+    domination_count = np.zeros(pop_size, dtype=int32_t)
+
+    for p in range(pop_size):
+        # check if p belongs in front zero
+        for q in range(pop_size):
+            # if q dominates p we can continue
+            if dominates(obj_scores[q], obj_scores[p]):
+                domination_count[p] += 1
+                break
+
+        # if break happens will be greater than 0 anyways
+        if domination_count[p] == 0:
+            front_zero.append(int32_t(p))
+
+    assert len(front_zero) > 0, "No individuals in front zero, check your objective scores."
+    return front_zero
 
 # calculate the crowding distance for all individuals within the population
 @typechecked
-def crowding_distance(obj_scores: npt.NDArray, count: np.int32, front_map) -> npt.NDArray[r2_t]:
+def crowding_distance(obj_scores: npt.NDArray, front_map, count = int16_t(2)) -> npt.NDArray[float32_t]:
     """
     Calculate the crowding distance for each individual in the population.
 
@@ -98,21 +134,21 @@ def crowding_distance(obj_scores: npt.NDArray, count: np.int32, front_map) -> np
     - crowding_distances: List of crowding distances corresponding to each individual.
     """
 
-    # quick check to make sure that elements in scores are numpy arrays with np.float32
+    # quick check to make sure that elements in scores are numpy arrays with float32_t
     assert all(isinstance(x, tuple) for x in obj_scores)
     # make sure all elements are of the correct type
-    assert all(isinstance(x[0], r2_t) for x in obj_scores)
-    assert all(isinstance(x[1], feature_cnt_t) for x in obj_scores)
+    assert all(isinstance(x[0], float32_t) for x in obj_scores)
+    assert all(isinstance(x[1], int32_t) for x in obj_scores)
     # make sure all [0] elements are non-negative
     assert all(x[0] > 0.0 for x in obj_scores)
     assert all(x[1] > 0 for x in obj_scores)
 
     # initialize the crowding distances to negative for guards
-    crowding_distances = np.full(len(obj_scores), np.float32(-1.0), dtype=np.float32)
+    crowding_distances = np.full(len(obj_scores), float32_t(-1.0), dtype=float32_t)
 
     for front in front_map:
         # set inital front crowding distances to zero for addition
-        crowding_distances[front] = np.float32(0.0)
+        crowding_distances[front] = float32_t(0.0)
 
         for m in range(count):
             # Sort the front scores based on the m-th objective
@@ -135,7 +171,7 @@ def crowding_distance(obj_scores: npt.NDArray, count: np.int32, front_map) -> np
             for i in range(1, len(front) - 1):
                 next_obj = sorted_front[i + 1][m]
                 prev_obj = sorted_front[i - 1][m]
-                crowding_distances[front[sorted_indices[i]]] += (next_obj - prev_obj) / (max_obj - min_obj)
+                crowding_distances[front[sorted_indices[i]]] += float32_t(next_obj - prev_obj) / float32_t(max_obj - min_obj)
 
     # make sure all crowding distances are non-negative
     assert np.all(crowding_distances >= 0.0)
@@ -144,13 +180,13 @@ def crowding_distance(obj_scores: npt.NDArray, count: np.int32, front_map) -> np
 
 # check if solution1 dominates solution2
 @typechecked
-def dominates(solution1: traits_t, solution2: traits_t) -> bool:
+def dominates(solution1: Tuple[float32_t, int32_t], solution2: Tuple[float32_t, int32_t]) -> bool:
     """
     Check if solution1 dominates solution2.
 
     Parameters:
-    solution1 (numpy array of np.float32): The first solution's objective values.
-    solution2 (numpy array of np.float32): The second solution's objective values.
+    solution1 (Tuple[float32_t, int16_t]): The first solution's objective values.
+    solution2 (Tuple[float32_t, int16_t]): The second solution's objective values.
 
     Returns:
     bool: True if solution1 dominates solution2, False otherwise.
@@ -163,8 +199,8 @@ def dominates(solution1: traits_t, solution2: traits_t) -> bool:
     # make sure feature counts are negative
     assert solution1[1] < 0 and solution2[1] < 0
     # make sure they are the correct type
-    assert isinstance(solution1[0], r2_t) and isinstance(solution2[0], r2_t)
-    assert isinstance(solution1[1], feature_cnt_t) and isinstance(solution2[1], feature_cnt_t)
+    assert isinstance(solution1[0], float32_t) and isinstance(solution2[0], float32_t)
+    assert isinstance(solution1[1], int32_t) and isinstance(solution2[1], int32_t)
 
     greater_or_equal = solution1[0] >= solution2[0] and solution1[1] >= solution2[1]
     better_in_at_least_one = solution1[0] > solution2[0] or solution1[1] > solution2[1]
@@ -173,15 +209,14 @@ def dominates(solution1: traits_t, solution2: traits_t) -> bool:
 
 # perform a binary tournament selection between two individuals
 @typechecked
-def non_dominated_binary_tournament(ranks: npt.NDArray[feature_cnt_t], distances: npt.NDArray[r2_t], rng_: rng_t) -> pop_id_t:
+def non_dominated_binary_tournament(ranks: npt.NDArray[int16_t], distances: npt.NDArray[float32_t], rng: rng_t) -> uint16_t:
 
     # make sure that ranks and distances are the same size
     assert ranks.shape == distances.shape
-    # initialize the random number generator
-    rng = np.random.default_rng(rng_)
 
     # get two random number between 0 and the population size
     t1,t2 = rng.choice(len(ranks), size=2, replace=False)
+    t1, t2 = uint16_t(t1), uint16_t(t2)
 
     assert t1 != t2
     assert 0 <= t1 < len(ranks)
@@ -190,28 +225,30 @@ def non_dominated_binary_tournament(ranks: npt.NDArray[feature_cnt_t], distances
     # check if the two solutions are in the same front
     if ranks[t1] == ranks[t2]:
         # the one with the greatest crowding distance wins
-        return pop_id_t(t1) if distances[t1] > distances[t2] else pop_id_t(t2)
+        return t1 if distances[t1] > distances[t2] else t2
 
     # if they are in different fronts, the lower rank one wins
     else:
-        return pop_id_t(t1) if ranks[t1] < ranks[t2] else pop_id_t(t2)
+        return t1 if ranks[t1] < ranks[t2] else t2
 
 # perform a non-dominated truncation of the population
 @typechecked
-def non_dominated_truncate(fronts: List[npt.NDArray[feature_cnt_t]],
-                           distances: npt.NDArray[r2_t],
-                           N: pop_id_t) -> npt.NDArray[feature_cnt_t]:
-    # make sure that fronts and distances are the nonempty
-    assert sum([len(x) for x in fronts]) > 0 and len(distances) > 0
+def non_dominated_truncate(fronts: List[npt.NDArray[int16_t]], distances: npt.NDArray[float32_t], N: int16_t) -> npt.NDArray[int16_t]:
     # make sure that fronts and distances are the same size
     assert sum([len(x) for x in fronts]) == len(distances)
+    # make sure each front in the list are within the correct range
+    assert all(all(0 <= ind < len(distances) for ind in front) for front in fronts)
+    # make sure that distances is non-empty
+    assert len(distances) > 0
+    # make sure that distances are non-negative
+    assert np.all(distances >= 0.0)
     # check that first object in fronts is a numpy array
     assert isinstance(fronts[0], np.ndarray)
-
-    # surviving solutions
-    survivors = []
+    # make sure that N is positive and less than the population size
+    assert 0 < N <= len(distances)
 
     # go through each front and add the solutions to the survivors
+    survivors = []
     for front in fronts:
         # add solutions without ordering based on distance (as is)
         if len(survivors) + len(front) <= N:
@@ -223,5 +260,6 @@ def non_dominated_truncate(fronts: List[npt.NDArray[feature_cnt_t]],
             survivors.extend(sorted_front[:N-len(survivors)])
             break
 
-    #assert len(survivors) == N
-    return np.array(survivors, dtype=np.uint16)
+    # make sure all survivor ids are within the correct range
+    assert all(0 <= s < len(distances) for s in survivors)
+    return np.array(survivors, dtype=int16_t)

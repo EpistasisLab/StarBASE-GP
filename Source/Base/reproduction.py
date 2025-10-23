@@ -1,0 +1,201 @@
+#####################################################################################################
+#
+# Reproduction base class for generating offspring pipelines.
+# A combination of mutation and crossover are used to generate pipelines (both user specified).
+# Users must provide their own implementation of this class as each branch requires different data.
+# Users must provide their own implementation of the HUB class as each branch requires different data.
+#
+#####################################################################################################
+
+from typeguard import typechecked
+from typing import List, Tuple, Set
+from .pipeline import Pipeline
+from .types import (rng_t, prob_t, int32_t, uint16_t, snp_t)
+from abc import ABC, abstractmethod
+from .hub import Hub
+
+@typechecked
+class Reproduction(ABC):
+    def __init__(self,
+                 branch_max: uint16_t,
+                 branch_min: uint16_t,
+                 mut_prob: prob_t = prob_t(.5),
+                 cross_prob: prob_t = prob_t(.5),
+                 mut_selector_p: prob_t = prob_t(.5),
+                 mut_ld_p: prob_t = prob_t(.5),
+                 mut_regressor_p: prob_t = prob_t(.5),
+                 mut_ran_p: prob_t = prob_t(.45),
+                 mut_smt_p: prob_t = prob_t(.45),
+                 m_in_win_p: prob_t = prob_t(.1),
+                 m_out_win_p: prob_t = prob_t(.45),
+                 m_out_chr_p: prob_t = prob_t(.45),
+                 window_distance: int32_t = int32_t(1000000)) -> None:
+
+        # save all the variables
+        self.branch_max = branch_max
+        self.branch_min = branch_min
+        self.mut_prob = mut_prob
+        self.cross_prob = cross_prob
+        self.mut_selector_p = mut_selector_p
+        self.mut_ld_p = mut_ld_p
+        self.mut_regressor_p = mut_regressor_p
+        self.mut_ran_p = mut_ran_p
+        self.mut_smt_p = mut_smt_p
+        self.m_in_win_p = m_in_win_p
+        self.m_out_win_p = m_out_win_p
+        self.m_out_chr_p = m_out_chr_p
+        self.window_distance = window_distance
+
+        return
+
+    @abstractmethod
+    def generate_random_pipeline(self, rng: rng_t, branches: Set, seed: int) -> Pipeline:
+        """
+        Function to generate a random pipeline during the initialization of the population.
+        Parameters:
+        rng (rng_t): A numpy random number generator from the evolver
+        branches (Set): A set of branches to add to the pipeline (univariate snps or interactions (K2, K3, ...))
+        seed (int): A seed to use for random_states within pipeline selector/ld nodes (if needed)
+        """
+        pass
+
+    # method to generate the order of variation operators
+    def variation_order(self, rng: rng_t, offspring_cnt: uint16_t) -> Tuple[List[snp_t], uint16_t]:
+        """
+        Function to generate the order of variation operators to be applied to generate offspring.
+        The order is determined by the probabilities of mutation and crossover.
+        We return a list with the names of the operators in the order they should be applied.
+        E.g.: ['m', 'c', 'm', 'c', ...]
+
+        Crossover means two parents are required
+        Mutation means one parent is required
+
+        Parameters:
+        rng (rng_t): A numpy random number generator from the evolver
+        offpring_cnt (pop_size_t): The number of offspring to generate
+
+        Returns:
+        List[snp_t]: A list of strings representing the order of variation operators to be applied
+        pop_size_t: The number of parents needed to generate the offspring
+        """
+        # parents needed by variantion operators
+        parent_count = {'m': 1, 'c': 2}
+
+        # generate the order of variation operations
+        order = rng.choice(['m', 'c'], offspring_cnt, p=[self.mut_prob, self.cross_prob])
+        order = [snp_t(op) for op in order]
+
+        # make sure we have the right number of offspring
+        assert len(order) == offspring_cnt
+
+        # return the order and number of parents needed
+        return order, uint16_t(sum(parent_count[op] for op in order))
+
+    # method to iterate though variation operations and generate offspring
+    def produce_offspring(self,
+                          rng: rng_t,
+                          hub: Hub,
+                          offspring_cnt: uint16_t,
+                          population: List[Pipeline],
+                          parent_ids: List[uint16_t],
+                          order: List[str]) -> List[Pipeline]:
+        # quick checks
+        assert len(parent_ids) > 0
+        assert len(population) > 0
+        assert offspring_cnt > 0
+
+        # list to store the offspring
+        offspring = []
+
+        # go through the order of operators
+        p_id = 0
+        for op in order:
+            # mutation only
+            if op == 'm':
+                off = self.mutate(rng, population[parent_ids[p_id]], hub)
+                offspring.append(off)
+                p_id += 1
+            # crossover only
+            elif op == 'c':
+                off = self.crossover(rng, population[parent_ids[p_id]], population[parent_ids[p_id+1]], hub)
+
+                # coin flip to decide if we should mutate the offspring
+                if rng.choice([True, False], p=[self.mut_prob, 1.0-self.mut_prob]):
+                    off = self.mutate_post_crossover(rng, off, hub)
+
+                offspring.append(off)
+                p_id += 2
+            else:
+                raise ValueError(f"Unknown operator: {op}")
+
+        # make sure we have the right number of offspring
+        assert len(offspring) == offspring_cnt
+        assert p_id == len(parent_ids)
+
+        # return the offspring
+        return offspring
+
+    @abstractmethod
+    def mutate(self, rng: rng_t, parent: Pipeline, hub: Hub) -> Pipeline:
+        """
+        Function to mutate a given parent pipeline.
+
+        Parameters:
+        rng (rng_t): A numpy random number generator from the evolver
+        parent (Pipeline): The parent pipeline to be mutated
+        hub: An interface to a branch hub to get branch specific information
+
+        Returns:
+        Tuple[Pipeline, uint16_t]: The mutated pipeline and the number of mutations applied
+        """
+        pass
+
+    @abstractmethod
+    def mutate_post_crossover(self, rng: rng_t, offspring: Pipeline, hub: Hub) -> Pipeline:
+        """
+        Function to mutate an offspring post being generated from crossover operation.
+
+        Parameters:
+        rng (rng_t): A numpy random number generator from the evolver
+        offspring (Pipeline): The offspring pipeline generated from crossover operation
+        hub: An interface to a branch hub to get branch specific information
+
+        Returns:
+        Tuple[Pipeline, uint16_t]: The mutated offspring pipeline and the number of mutations applied
+        """
+        pass
+
+    @abstractmethod
+    def crossover(self, rng: rng_t, parent1: Pipeline, parent2: Pipeline, hub: Hub) -> Pipeline:
+        """
+        Function to perform crossover between two parents to generate an offspring pipeline.
+
+        Parameters:
+        rng (rng_t): A numpy random number generator from the evolver
+        parent1 (Pipeline): The first parent pipeline
+        parent2 (Pipeline): The second parent pipeline
+        hub: An interface to a branch hub to get branch specific information
+
+        Returns:
+        Pipeline: The offspring pipeline generated from the two parents
+        """
+        pass
+
+    # calculate number of branches to add within the limits of branch_max and branch_min
+    def num_branches_to_add(self, rng: rng_t, branches: Set) -> uint16_t:
+        # quick checks
+        assert len(branches) <= self.branch_max
+        assert self.branch_max - len(branches) >= 0
+
+        # get a number of interactions to add based on self.branch_max and self.branch_min
+        if len(branches) < self.branch_min:
+            return uint16_t(rng.integers(self.branch_min - len(branches), self.branch_max - len(branches), endpoint=False))
+        else:
+            num_add_range = uint16_t(max(self.branch_max - len(branches), 0))
+
+        # if 0 or 1 just return the number
+        if num_add_range == 0 or num_add_range == 1:
+            return uint16_t(num_add_range)
+        # else pick a number between the range and 1 (range < self.num_add_interactions)
+        else:
+            return uint16_t(rng.integers(1, num_add_range, endpoint=False))
