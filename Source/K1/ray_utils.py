@@ -1,3 +1,4 @@
+import time
 from ..Base.selectors import SelectorNode
 from ..Base.types import (float32_t, int16_t, prob_t, int32_t, snp_t, uint16_t)
 
@@ -10,280 +11,199 @@ import logging
 from sklearn.inspection import permutation_importance
 import pandas as pd
 import numpy.typing as npt
+import numba
 
-# evaluate unseen snps for additive encoding and a specific fold
-@ray.remote                                                                          # r2     snp    lo     error
-def ray_snp_eval_add(X, y, train_idx, valid_idx, snp, lo=snp_t('additive')) -> Tuple[float32_t,snp_t,snp_t,float32_t]:
-    # quick checks
+# Pre-defined LUTs (global constants for maximum performance) for encoders
+LUT_DOMINANT = np.array([0.0, 1.0, 1.0], dtype=float32_t)
+LUT_RECESSIVE = np.array([0.0, 0.0, 1.0], dtype=float32_t)
+LUT_HETEROSIS = np.array([0.0, 1.0, 0.0], dtype=float32_t)
+LUT_UNDERDOMINANT = np.array([0.5, 0.0, 1.0], dtype=float32_t)
+LUT_OVERDOMINANT = np.array([0.0, 1.0, 0.5], dtype=float32_t)
+LUT_SUBADDITIVE = np.array([0.0, 0.25, 1.0], dtype=float32_t)
+LUT_SUPERADDITIVE = np.array([0.0, 0.75, 1.0], dtype=float32_t)
+# LUT not needed for additive encoding as the data should already be in the correct format (0.0, 0.5, 1.0)
+
+# Ultra-optimized numba encoding functions
+@numba.njit(cache=True)
+def _encode_with_lut_fast(X, lut):
+    """
+    Ultra-fast vectorized encoding using lookup table.
+    Uses fastmath for SIMD optimization and cache=True to cache compiled code.
+    """
+    n = X.shape[0]
+    out = np.empty(n, dtype=np.float32)
+    for i in range(n):
+        # Direct integer conversion: 0.0->0, 0.5->1, 1.0->2
+        idx = int(X[i] * 2.0)
+        out[i] = lut[idx]
+    return out
+
+@numba.njit(cache=True)
+def encode_dominant(X):
+    return _encode_with_lut_fast(X, LUT_DOMINANT)
+
+@numba.njit(cache=True)
+def encode_recessive(X):
+    return _encode_with_lut_fast(X, LUT_RECESSIVE)
+
+@numba.njit(cache=True)
+def encode_heterosis(X):
+    return _encode_with_lut_fast(X, LUT_HETEROSIS)
+
+@numba.njit(cache=True)
+def encode_underdominant(X):
+    return _encode_with_lut_fast(X, LUT_UNDERDOMINANT)
+
+@numba.njit(cache=True)
+def encode_overdominant(X):
+    return _encode_with_lut_fast(X, LUT_OVERDOMINANT)
+
+@numba.njit(cache=True)
+def encode_subadditive(X):
+    return _encode_with_lut_fast(X, LUT_SUBADDITIVE)
+
+@numba.njit(cache=True)
+def encode_superadditive(X):
+    return _encode_with_lut_fast(X, LUT_SUPERADDITIVE)
+
+# No encode function needed for additive encoding
+
+@numba.njit(cache=True)
+def build_pager_lut(X, y):
+    """
+    Build a PAGER LUT (3 values for genotypes 0.0, 0.5, 1.0)
+    based on phenotype means normalized relative to genotype 0 mean (anchor).
+    Optimized with fastmath and cache for repeated calls.
+    """
+    means = np.zeros(3, dtype=float32_t)
+    present = np.zeros(3, dtype=float32_t)
+    geno_keys = np.array([0.0, 0.5, 1.0], dtype=float32_t)
+
+    # Compute phenotype means per genotype
+    for k, g in enumerate(geno_keys):
+        mask = X == g
+        n = np.sum(mask)
+        if n > 0:
+            means[k] = np.mean(y[mask])
+            present[k] = 1
+
+    # Determine anchor (genotype 0.0 if present)
+    if present[0]:
+        anchor = means[0]
+    else:
+        first_present = -1
+        for i in range(3):
+            if present[i]:
+                first_present = i
+                break
+        anchor = means[first_present] if first_present >= 0 else 0.0
+
+    # Compute relative differences
+    rel = means - anchor
+
+    # Normalize to [0, 1] (min-max scaling) among present genotypes
+    if np.any(present):
+        vals = rel[present == 1]
+        mn, mx = np.min(vals), np.max(vals)
+        scaled = np.empty(3, dtype=float32_t)
+        if mx - mn == 0:
+            for i in range(3):
+                scaled[i] = 0.0 if present[i] else 0.5
+        else:
+            for i in range(3):
+                scaled[i] = (rel[i] - mn) / (mx - mn) if present[i] else 0.5 # if a genotype is not present, assign 0.5
+    else:
+        scaled = np.full(3, 0.5, dtype=float32_t) 
+
+    return scaled  # shape (3,)
+
+@numba.njit(cache=True)
+def encode_pager(X, lut):
+    """
+    Encode genotypes using a precomputed PAGER LUT.
+    Ultra-fast with fastmath and cache optimizations.
+    """
+    n = X.shape[0]
+    out = np.empty(n, dtype=np.float32)
+    for i in range(n):
+        genotype = int(X[i] * 2.0)
+        out[i] = lut[genotype]
+    return out
+
+# -----------------------------
+# Generic Ray worker template
+# -----------------------------
+def _ray_snp_eval_template(X, y, train_idx, valid_idx, snp, lo, encoder_func=None):
     assert isinstance(X, np.ndarray), "X should be a numpy array"
-    assert '.' in snp, "snp should be in the format 'chr.pos'"
 
-    # transform data for regression model (adding constant for intercept)
-    regressor = sm.OLS(y[train_idx], sm.add_constant(X[train_idx], has_constant='add'))
+    # Special case: if encoder_func is None, data is already in correct format (e.g., additive)
+    if encoder_func is None:
+        X_encoded = X
+    else:
+        try:
+            X_encoded = encoder_func(X)
+        except Exception as e:
+            logging.error(f"Encoding error for {lo}: {e}")
+            return float32_t(0.0), snp, lo, float32_t(-1.0)
 
-    # try to fit the pipeline
     try:
+        regressor = sm.OLS(y[train_idx], sm.add_constant(X_encoded[train_idx], has_constant='add'))
         results = regressor.fit()
     except Exception as e:
-        logging.error(f"Exception while fitting the pipeline: {e}")
+        logging.error(f"OLS fitting error for {lo}: {e}")
         return float32_t(0.0), snp, lo, float32_t(-1.0)
 
-    # try to score the pipeline
-    try:
-        y_pred = results.predict(sm.add_constant(X[valid_idx], has_constant='add'))
-    except Exception as e:
-        logging.error(f"Error while scoring the pipeline: {e}")
-        return float32_t(0.0), snp, lo, float32_t(-1.0)
-
-    return float32_t(r2_score(y[valid_idx], y_pred)), snp, lo, float32_t(1.0)
-
-# evaluate unseen snps for dominant encoding and a specific fold
-@ray.remote                                                                          # r2     snp    lo     error
-def ray_snp_eval_dom(X, y, train_idx, valid_idx, snp, lo=snp_t('dominant')) -> Tuple[float32_t,snp_t,snp_t,float32_t]:
-    # quick checks
-    assert isinstance(X, np.ndarray), "X should be a numpy array"
-
-    # todo: need to add the best way to transform the data for encoding
-    mapping = {float32_t(0.0): float32_t(0.0), float32_t(0.5): float32_t(1.0), float32_t(1.0): float32_t(1.0)}
-    X_encoded = X.copy()
-    for original, encoded in mapping.items():
-        X_encoded[X_encoded == original] = encoded
-
-    # transform data for regression model
-    regressor = sm.OLS(y[train_idx], sm.add_constant(X_encoded[train_idx], has_constant='add'))
-
-    # try to fit the pipeline
-    try:
-        results = regressor.fit()
-    except Exception as e:
-        logging.error(f"Exception while fitting the pipeline: {e}")
-        return float32_t(0.0), snp, lo, float32_t(-1.0)
-
-    # try to score the pipeline
     try:
         y_pred = results.predict(sm.add_constant(X_encoded[valid_idx], has_constant='add'))
+        score = r2_score(y[valid_idx], y_pred)
     except Exception as e:
-        logging.error(f"Error while scoring the pipeline: {e}")
+        logging.error(f"Scoring error for {lo}: {e}")
         return float32_t(0.0), snp, lo, float32_t(-1.0)
 
-    return float32_t(r2_score(y[valid_idx], y_pred)), snp, lo, float32_t(1.0)
+    return float32_t(score), snp, lo, float32_t(1.0)
 
-# evaluate unseen snps for recessive encoding and a specific fold
-@ray.remote                                                                            # r2     snp    lo     error
-def ray_snp_eval_rec(X, y, train_idx, valid_idx, snp, lo=snp_t('recessive')) -> Tuple[float32_t,snp_t,snp_t,float32_t]:
-    # quick checks
-    assert isinstance(X, np.ndarray), "X should be a numpy array"
+# Ray-remote functions to evaluate SNPs with different encodings
 
-    # todo: need to add the best way to transform the data for encoding
-    mapping = {float32_t(0.0): float32_t(0.0), float32_t(0.5): float32_t(0.0), float32_t(1.0): float32_t(1.0)}
-    X_encoded = X.copy()
-    for original, encoded in mapping.items():
-        X_encoded[X_encoded == original] = encoded
+@ray.remote
+def ray_snp_eval_dom(X, y, train_idx, valid_idx, snp, lo=snp_t('dominant')):
+    return _ray_snp_eval_template(X, y, train_idx, valid_idx, snp, lo, encode_dominant)
 
-    # transform data for regression model
-    regressor = sm.OLS(y[train_idx], sm.add_constant(X_encoded[train_idx], has_constant='add'))
+@ray.remote
+def ray_snp_eval_rec(X, y, train_idx, valid_idx, snp, lo=snp_t('recessive')):
+    return _ray_snp_eval_template(X, y, train_idx, valid_idx, snp, lo, encode_recessive)
 
-    # try to fit the pipeline
-    try:
-        results = regressor.fit()
-    except Exception as e:
-        logging.error(f"Exception while fitting the pipeline: {e}")
-        return float32_t(0.0), snp, lo, float32_t(-1.0)
+@ray.remote
+def ray_snp_eval_het(X, y, train_idx, valid_idx, snp, lo=snp_t('heterosis')):
+    return _ray_snp_eval_template(X, y, train_idx, valid_idx, snp, lo, encode_heterosis)
 
-    # try to score the pipeline
-    try:
-        y_pred = results.predict(sm.add_constant(X_encoded[valid_idx], has_constant='add'))
-    except Exception as e:
-        logging.error(f"Error while scoring the pipeline: {e}")
-        return float32_t(0.0), snp, lo, float32_t(-1.0)
+@ray.remote
+def ray_snp_eval_und(X, y, train_idx, valid_idx, snp, lo=snp_t('underdominant')):
+    return _ray_snp_eval_template(X, y, train_idx, valid_idx, snp, lo, encode_underdominant)
 
-    return float32_t(r2_score(y[valid_idx], y_pred)), snp, lo, float32_t(1.0)
+@ray.remote
+def ray_snp_eval_ovd(X, y, train_idx, valid_idx, snp, lo=snp_t('overdominant')):
+    return _ray_snp_eval_template(X, y, train_idx, valid_idx, snp, lo, encode_overdominant)
 
-# evaluate unseen snps for heterosis encoding and a specific fold
-@ray.remote                                                                            # r2     snp    lo     error
-def ray_snp_eval_het(X, y, train_idx, valid_idx, snp, lo=snp_t('heterosis')) -> Tuple[float32_t,snp_t,snp_t,float32_t]:
-    # quick checks
-    assert isinstance(X, np.ndarray), "X should be a numpy array"
+@ray.remote
+def ray_snp_eval_sub(X, y, train_idx, valid_idx, snp, lo=snp_t('subadditive')):
+    return _ray_snp_eval_template(X, y, train_idx, valid_idx, snp, lo, encode_subadditive)
 
-    # todo: need to add the best way to transform the data for encoding
-    mapping = {float32_t(0.0): float32_t(0.0), float32_t(0.5): float32_t(1.0), float32_t(1.0): float32_t(0.0)}
-    X_encoded = X.copy()
-    for original, encoded in mapping.items():
-        X_encoded[X_encoded == original] = encoded
+@ray.remote
+def ray_snp_eval_sup(X, y, train_idx, valid_idx, snp, lo=snp_t('superadditive')):
+    return _ray_snp_eval_template(X, y, train_idx, valid_idx, snp, lo, encode_superadditive)
 
-    # transform data for regression model
-    regressor = sm.OLS(y[train_idx], sm.add_constant(X_encoded[train_idx], has_constant='add'))
+@ray.remote
+def ray_snp_eval_add(X, y, train_idx, valid_idx, snp, lo=snp_t('additive')):
+    """
+    Evaluate additive encoding - data is already in additive format (0.0, 0.5, 1.0),
+    so no encoding transformation is needed. Pass None as encoder_func.
+    """
+    return _ray_snp_eval_template(X, y, train_idx, valid_idx, snp, lo, encoder_func=None)
 
-    # try to fit the pipeline
-    try:
-        results = regressor.fit()
-    except Exception as e:
-        logging.error(f"Exception while fitting the pipeline: {e}")
-        return float32_t(0.0), snp, lo, float32_t(-1.0)
-
-    # try to score the pipeline
-    try:
-        y_pred = results.predict(sm.add_constant(X_encoded[valid_idx], has_constant='add'))
-    except Exception as e:
-        logging.error(f"Error while scoring the pipeline: {e}")
-        return float32_t(0.0), snp, lo, float32_t(-1.0)
-
-    return float32_t(r2_score(y[valid_idx], y_pred)), snp, lo, float32_t(1.0)
-
-# evaluate unseen snps for underdominant encoding and a specific fold
-@ray.remote                                                                                # r2     snp    lo     error
-def ray_snp_eval_und(X, y, train_idx, valid_idx, snp, lo=snp_t('underdominant')) -> Tuple[float32_t,snp_t,snp_t,float32_t]:
-    # quick checks
-    assert isinstance(X, np.ndarray), "X should be a numpy array"
-
-    # todo: need to add the best way to transform the data for encoding
-    mapping = {float32_t(0.0): float32_t(0.5), float32_t(0.5): float32_t(0.0), float32_t(1.0): float32_t(1.0)}
-    X_encoded = X.copy()
-    for original, encoded in mapping.items():
-        X_encoded[X_encoded == original] = encoded
-
-    # transform data for regression model
-    regressor = sm.OLS(y[train_idx], sm.add_constant(X_encoded[train_idx], has_constant='add'))
-
-    # try to fit the pipeline
-    try:
-        results = regressor.fit()
-    except Exception as e:
-        logging.error(f"Exception while fitting the pipeline: {e}")
-        return float32_t(0.0), snp, lo, float32_t(-1.0)
-
-    # try to score the pipeline
-    try:
-        y_pred = results.predict(sm.add_constant(X_encoded[valid_idx], has_constant='add'))
-    except Exception as e:
-        logging.error(f"Error while scoring the pipeline: {e}")
-        return float32_t(0.0), snp, lo, float32_t(-1.0)
-
-    return float32_t(r2_score(y[valid_idx], y_pred)), snp, lo, float32_t(1.0)
-
-# evaluate unseen snps for overdominant encoding and a specific fold
-@ray.remote                                                                                # r2     snp    lo     error
-def ray_snp_eval_ovd(X, y, train_idx, valid_idx, snp, lo=snp_t('overdominant')) -> Tuple[float32_t,snp_t,snp_t,float32_t]:
-    # quick checks
-    assert isinstance(X, np.ndarray), "X should be a numpy array"
-
-    # todo: need to add the best way to transform the data for encoding
-    mapping = {float32_t(0.0): float32_t(0.0), float32_t(0.5): float32_t(1.0), float32_t(1.0): float32_t(0.5)}
-    X_encoded = X.copy()
-    for original, encoded in mapping.items():
-        X_encoded[X_encoded == original] = encoded
-
-    # transform data for regression model
-    regressor = sm.OLS(y[train_idx], sm.add_constant(X_encoded[train_idx], has_constant='add'))
-
-    # try to fit the pipeline
-    try:
-        results = regressor.fit()
-    except Exception as e:
-        logging.error(f"Exception while fitting the pipeline: {e}")
-        return float32_t(0.0), snp, lo, float32_t(-1.0)
-
-    # try to score the pipeline
-    try:
-        y_pred = results.predict(sm.add_constant(X_encoded[valid_idx], has_constant='add'))
-    except Exception as e:
-        logging.error(f"Error while scoring the pipeline: {e}")
-        return float32_t(0.0), snp, lo, float32_t(-1.0)
-
-    return float32_t(r2_score(y[valid_idx], y_pred)), snp, lo, float32_t(1.0)
-
-# evaluate unseen snps for subadditive encoding and a specific fold
-@ray.remote                                                                              # r2     snp    lo     error
-def ray_snp_eval_sub(X, y, train_idx, valid_idx, snp, lo=snp_t('subadditive')) -> Tuple[float32_t,snp_t,snp_t,float32_t]:
-    # quick checks
-    assert isinstance(X, np.ndarray), "X should be a numpy array"
-
-    # todo: need to add the best way to transform the data for encoding
-    mapping = {float32_t(0.0):float32_t(0.0), float32_t(0.5): float32_t(0.25), float32_t(1.0): float32_t(1.0)}
-    X_encoded = X.copy()
-    for original, encoded in mapping.items():
-        X_encoded[X_encoded == original] = encoded
-
-    # transform data for regression model
-    regressor = sm.OLS(y[train_idx], sm.add_constant(X_encoded[train_idx], has_constant='add'))
-
-    # try to fit the pipeline
-    try:
-        results = regressor.fit()
-    except Exception as e:
-        logging.error(f"Exception while fitting the pipeline: {e}")
-        return float32_t(0.0), snp, lo, float32_t(-1.0)
-
-    # try to score the pipeline
-    try:
-        y_pred = results.predict(sm.add_constant(X_encoded[valid_idx], has_constant='add'))
-    except Exception as e:
-        logging.error(f"Error while scoring the pipeline: {e}")
-        return float32_t(0.0), snp, lo, float32_t(-1.0)
-
-    return float32_t(r2_score(y[valid_idx], y_pred)), snp, lo, float32_t(1.0)
-
-# evaluate unseen snps for superadditive encoding and a specific fold
-@ray.remote                                                                                # r2     snp    lo     error
-def ray_snp_eval_sup(X, y, train_idx, valid_idx, snp, lo=snp_t('superadditive')) -> Tuple[float32_t,snp_t,snp_t,float32_t]:
-    # quick checks
-    assert isinstance(X, np.ndarray), "X should be a numpy array"
-
-    # todo: need to add the best way to transform the data for encoding
-    mapping = {float32_t(0.0):float32_t(0.0), float32_t(0.5): float32_t(0.75), float32_t(1.0): float32_t(1.0)}
-    X_encoded = X.copy()
-    for original, encoded in mapping.items():
-        X_encoded[X_encoded == original] = encoded
-
-    # transform data for regression model
-    regressor = sm.OLS(y[train_idx], sm.add_constant(X_encoded[train_idx], has_constant='add'))
-
-    # try to fit the pipeline
-    try:
-        results = regressor.fit()
-    except Exception as e:
-        logging.error(f"Exception while fitting the pipeline: {e}")
-        return float32_t(0.0), snp, lo, float32_t(-1.0)
-
-    # try to score the pipeline
-    try:
-        y_pred = results.predict(sm.add_constant(X_encoded[valid_idx], has_constant='add'))
-    except Exception as e:
-        logging.error(f"Error while scoring the pipeline: {e}")
-        return float32_t(0.0), snp, lo, float32_t(-1.0)
-
-    return float32_t(r2_score(y[valid_idx], y_pred)), snp, lo, float32_t(1.0)
-
-# evaluate unseen snps for PAGER encoding and a specific fold
-# @ray.remote                                                                          # r2     snp    lo     error
-# def ray_snp_eval_pager(X, y, train_idx, valid_idx, snp, lo=snp_t('pager')) -> Tuple[float32_t,snp_t,snp_t,float32_t]:
-#     # quick checks
-#     assert isinstance(X, np.ndarray), "X should be a numpy array"
-
-#     uni_node = UniPAGERNode(X=X[train_idx], y=y[train_idx])
-#     X_transformed = np.array(uni_node.transform(X[train_idx]).ravel(), dtype=float32_t)
-
-#     # transform data for regression model
-#     X_transformed = sm.add_constant(X_transformed, has_constant='add')
-#     regressor = sm.OLS(y[train_idx], X_transformed)
-
-#     # try to fit the pipeline
-#     try:
-#         results = regressor.fit()
-#     except Exception as e:
-#         logging.error(f"Exception while fitting the pipeline: {e}")
-#         return float32_t(-100000.0), snp, lo
-
-#     # try to score the pipeline
-#     try:
-#         X_val = np.array(uni_node.transform(X[valid_idx]).ravel(), dtype=float32_t)
-#         X_val = sm.add_constant(X_val, has_constant='add')
-#         y_pred = results.predict(X_val)
-#     except Exception as e:
-#         logging.error(f"Error while scoring the pipeline: {e}")
-#         return float32_t(-100000.0), snp, lo
-
-#     return float32_t(r2_score(y[valid_idx], y_pred)), snp, lo
+@ray.remote
+def ray_snp_eval_pager(X, y, train_idx, valid_idx, snp, lo=snp_t('pager')):
+    return _ray_snp_eval_template(X, y, train_idx, valid_idx, snp, lo,
+                                 lambda X_data: encode_pager(X_data, build_pager_lut(X_data[train_idx], y[train_idx])))
 
 # permuation feature importance
 @ray.remote
@@ -302,49 +222,57 @@ def ray_pfi(X, y, train_idx, valid_idx, new_column_names, root_node, random_stat
     # get permutation feature importance on the validation set
     pfi = permutation_importance(fitted_model, X_valid, y[valid_idx], n_repeats=100, random_state=random_state, scoring='r2')
 
+    # Note: pfi.importances_mean has length = num_features + 1 (due to constant)
+    # Skip the first element (constant) and map the rest to feature names
     for i in range(len(new_column_names)):
-        if pfi.importances_mean[i] > 0:
-            pfi_results[new_column_names[i]] = pfi.importances_mean[i]
+        # Add 1 to index to skip the constant column
+        pfi_results[new_column_names[i]] = pfi.importances_mean[i + 1]
 
     return pfi_results, pop_id
 
-# evaluate unseen snps (additive is not needed as it is the original encoding)
+# evaluate unseen snps and encode them efficiently using numba
 @ray.remote
-def ray_snp_encoder(X, y,  train_idx, enc:snp_t, snp: snp_t) -> Tuple[np.ndarray,snp_t]:
+def ray_snp_encoder(X, y, train_idx, enc: snp_t, snp: snp_t) -> Tuple[np.ndarray, snp_t]:
+    """
+    Efficiently encode SNP data using pre-defined LUTs and numba.
+    For PAGER encoding, builds LUT from training data and applies to entire X.
+    Optimized for maximum speed with direct LUT access.
+    """
     assert isinstance(X, np.ndarray), "X should be a numpy array"
     assert isinstance(y, np.ndarray), "y should be a numpy array"
     assert isinstance(enc, snp_t), "enc should be a numpy string"
 
-    # copy to modify based on encoding
-    X_encoded = X.copy()
-
-    # todo: special case for pager encoding
-    if enc == snp_t('pager'):
+    # Get the encoding string (convert from numpy string if needed)
+    enc_str = str(enc) if isinstance(enc, np.str_) else enc
+    
+    # Special case: additive - data is already in correct format
+    if enc_str == 'additive':
         return X, snp
+    
+    # Special case: PAGER - build LUT from training data, apply to all data
+    if enc_str == 'pager':
+        lut = build_pager_lut(X[train_idx], y[train_idx])
+        X_encoded = encode_pager(X, lut)
+        return X_encoded, snp
 
-    mapping = None
-    if enc == snp_t('dominant'):
-        mapping = {float32_t(0.0): float32_t(0.0), float32_t(0.5): float32_t(1.0), float32_t(1.0): float32_t(1.0)}
-    elif enc == snp_t('recessive'):
-        mapping = {float32_t(0.0): float32_t(0.0), float32_t(0.5): float32_t(0.0), float32_t(1.0): float32_t(1.0)}
-    elif enc == snp_t('heterosis'):
-        mapping = {float32_t(0.0): float32_t(0.0), float32_t(0.5): float32_t(1.0), float32_t(1.0): float32_t(0.0)}
-    elif enc == snp_t('underdominant'):
-        mapping = {float32_t(0.0): float32_t(0.5), float32_t(0.5): float32_t(0.0), float32_t(1.0): float32_t(1.0)}
-    elif enc == snp_t('overdominant'):
-        mapping = {float32_t(0.0): float32_t(0.0), float32_t(0.5): float32_t(1.0), float32_t(1.0): float32_t(0.5)}
-    elif enc == snp_t('subadditive'):
-        mapping = {float32_t(0.0):float32_t(0.0), float32_t(0.5): float32_t(0.25), float32_t(1.0): float32_t(1.0)}
-    elif enc == snp_t('superadditive'):
-        mapping = {float32_t(0.0):float32_t(0.0), float32_t(0.5): float32_t(0.75), float32_t(1.0): float32_t(1.0)}
+    # Direct LUT mapping for maximum speed (no function call overhead)
+    lut_map = {
+        'dominant': LUT_DOMINANT,
+        'recessive': LUT_RECESSIVE,
+        'heterosis': LUT_HETEROSIS,
+        'underdominant': LUT_UNDERDOMINANT,
+        'overdominant': LUT_OVERDOMINANT,
+        'subadditive': LUT_SUBADDITIVE,
+        'superadditive': LUT_SUPERADDITIVE,
+    }
+    
+    if enc_str in lut_map:
+        # Direct encoding with pre-allocated LUT (fastest path)
+        X_encoded = _encode_with_lut_fast(X, lut_map[enc_str])
+        return X_encoded, snp
     else:
         logging.error(f"Encoding {enc} not recognized for SNP {snp}.")
         return X, snp
-
-    # encode the SNP based on the mapping
-    for original, encoded in mapping.items():
-        X_encoded[X_encoded == original] = encoded
-    return X_encoded, snp
 
 # all univariate snps with their best lo goes to the LD operator, then the feature selector
 @ray.remote
@@ -381,6 +309,7 @@ def ray_eval_pipeline_ld_fs(snp_names: List[snp_t],
     except Exception as e:
         logging.error(f"Exception while fitting LD node: {e}")
         return float32_t(-1.0), int16_t(0), pop_id, [], {}
+
 
     # adding the selector and regressor nodes
     try:

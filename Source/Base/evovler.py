@@ -46,6 +46,7 @@ class EA(ABC):
                  save_directory: str = "",
                  window_distance: int32_t = int32_t(1000000),
                  branch_explainability_threshold: float32_t = float32_t(0.0),
+                 ld_flag: bool = True,
                  ) -> None:
         """
         Main class for the evolutionary algorithm.
@@ -85,6 +86,8 @@ class EA(ABC):
             Directory to save the results.
         branch_explainability_threshold: float32_t
             Threshold for branch explainability for a branch to be considered important.
+        ld_flag: bool
+            Flag to indicate whether to use LD pruning or not.
         """
         # initial population
         self.population: List[Pipeline] = []
@@ -137,6 +140,9 @@ class EA(ABC):
 
         assert 0.0 <= branch_explainability_threshold <= 1.0, "branch_explainability_threshold must be between 0 and 1."
         self.branch_explainability_threshold = branch_explainability_threshold
+
+        assert isinstance(ld_flag, bool), "ld_flag must be a boolean."
+        self.ld_flag = ld_flag
 
         # random number generator to be passed to all other stochastic functions
         self.rng = np.random.default_rng(seed)

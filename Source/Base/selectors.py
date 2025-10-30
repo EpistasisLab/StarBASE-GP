@@ -21,12 +21,17 @@ class SelectorNode(ABC):
         - selector: A scikit-learn selector instance.
         '''
         self.selector = selector
+        # Note: self.name and self.params should be set by subclasses BEFORE calling super().__init__()
 
     def fit(self, X, y=None):
         self.selector.fit(X, y)
 
     def transform(self, X):
         return self.selector.transform(X)
+    
+    def get_params(self):
+        """Return the parameters of the selector."""
+        return getattr(self, 'params', {})  # Return params if it exists, otherwise empty dict
 
     @abstractmethod
     def mutate(self, rng: rng_t):
@@ -55,6 +60,7 @@ class SelectorNode(ABC):
 @typechecked
 class VarianceThresholdNode(SelectorNode):
     def __init__(self, rng: rng_t):
+        self.name = 'VarianceThreshold'
         # threshold is a float between 0.0001 and 0.05
         self.params = {'threshold': float32_t(rng.uniform(low=0.0001, high=0.05))}
         # pass super class the initialized selector
@@ -83,6 +89,7 @@ class VarianceThresholdNode(SelectorNode):
 # select percentile
 class SelectPercentileNode(SelectorNode):
     def __init__(self, rng: rng_t):
+        self.name = 'SelectPercentile'
         # percentile is an int between 50 and 100
         self.params = {'percentile': int8_t(rng.integers(low=50, high=100)), 'score_func': f_regression}
         # pass super class the initialized selector
@@ -108,6 +115,7 @@ class SelectPercentileNode(SelectorNode):
 # select fwe
 class SelectFweNode(SelectorNode):
     def __init__(self, rng: rng_t):
+        self.name = 'SelectFwe'
         # alpha is a float between 0.0001 and 0.05
         self.params = {'alpha': float32_t(rng.uniform(low=1e-4, high=0.05)), 'score_func': f_regression}
         # pass super class the initialized selector
@@ -133,6 +141,7 @@ class SelectFweNode(SelectorNode):
 # select from model using L1-based feature selection (model is lasso regression)
 class SelectFromModelLasso(SelectorNode):
     def __init__(self, rng: rng_t, seed: int):
+        self.name = 'SelectFromModelLasso'
         # threshold is either 'mean' or 'median', Lasso with random_state = seed
         self.params = {'estimator': Lasso(random_state=seed), 'threshold': rng.choice([snp_t('mean'), snp_t('median')])}
         # pass super class the initialized selector
@@ -147,6 +156,7 @@ class SelectFromModelLasso(SelectorNode):
 # select from model using tree-based feature selection (model is ExtraTreesRegressor)
 class SelectFromModelTree(SelectorNode):
     def __init__(self, rng: rng_t, seed: int):
+        self.name = 'SelectFromModelTree'
         # threshold is either 'mean' or 'median', ExtraTreesRegressor with random_state = seed
         self.params = {'estimator': ExtraTreesRegressor(random_state=seed), 'threshold': rng.choice([snp_t('mean'), snp_t('median')])}
         # pass super class the initialized selector
@@ -161,6 +171,7 @@ class SelectFromModelTree(SelectorNode):
 # sequential feature selector, model = RandomForestRegressor
 class SequentialFeatureSelectorNode(SelectorNode):
     def __init__(self, rng: rng_t, seed: int):
+        self.name = 'SequentialFeatureSelector'
         # tol is a float between 1e-5 and 0.5, RandomForestRegressor with random_state = seed
         self.params = {'estimator': RandomForestRegressor(random_state=seed), 'tol': float32_t(rng.uniform(low=1e-5, high=0.5))}
         # pass super class the initialized selector
@@ -190,8 +201,10 @@ class FeatureEncodingFrequencySelector(SelectorNode):
      Features are selected on the basis of a threshold assigned for encoding frequency. If frequency of any unique element is less than or equal to threshold,
      the feature is removed.  """
     def __init__(self, rng: rng_t):
+        self.name = 'FeatureEncodingFrequencySelector'
         # threshold is a float between 0.01 and 0.3
         self.threshold = float32_t(rng.uniform(low=0.01, high=0.3)) # increments of 0.05
+        self.params = {'threshold': self.threshold}  # Add params dict for consistency
         self.boolean_mask = None
         return
 
@@ -250,6 +263,9 @@ class FeatureEncodingFrequencySelector(SelectorNode):
         # if neither of the above, then we can just add the shift
         else:
             self.threshold = self.threshold + shift
+        
+        # Update params dict to stay in sync
+        self.params['threshold'] = self.threshold
 
     def get_feature_count(self):
         """
@@ -280,3 +296,26 @@ class FeatureEncodingFrequencySelector(SelectorNode):
                 final_features.append(feature_names[i])
 
         return final_features
+
+
+##########################################################################################
+########################## OLS Regressor for PFI #########################################
+##########################################################################################
+
+class OLSRegressor:
+    """
+    Simple wrapper for statsmodels OLS to work with sklearn's permutation_importance.
+    This class provides a scikit-learn compatible interface for OLS regression.
+    """
+    def __init__(self):
+        self.model = None
+        
+    def fit(self, X, y):
+        """Fit OLS model to training data."""
+        import statsmodels.api as sm
+        self.model = sm.OLS(y, X).fit()
+        return self
+        
+    def predict(self, X):
+        """Predict using the fitted OLS model."""
+        return self.model.predict(X)

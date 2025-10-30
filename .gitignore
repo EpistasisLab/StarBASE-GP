@@ -3,3 +3,9 @@ Source/__pycache__/
 Source/Base/__pycache__/
 Source/K1/__pycache__/
 Source/K2/__pycache__/
+consideration_hub.csv
+pareto_front_plot.png
+pareto_front_pipelines.csv
+snp_hub.csv
+utopia_pipeline_test_results.csv
+.DS_Store

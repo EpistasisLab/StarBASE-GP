@@ -469,6 +469,10 @@ class K1_Hub(Hub):
             pruned_pos = 6 # position for the pruned flag in hub value list
           gen_seen_pos = 7 # position for the seen flag in hub value list
         gen_pruned_pos = 8 # position for the pruned flag in hub value list
+      pruned_reason_pos = 9 # position for the pruned reason in hub value list
+       ld_threshold_pos = 10 # position for the LD threshold in hub value list
+ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value list
+         anchor_snp_pos = 12 # position for the anchor snp in hub value list
         """
 
         # Save snp hub with headers
@@ -484,7 +488,11 @@ class K1_Hub(Hub):
             # v[6]: prunned (row[7])
             # v[7]: gen_seen (row[8])
             # v[8]: gen_prunned (row[9])
-            snp_data.append([k, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]])
+            # v[9]: pruned_reason (row[10])
+            # v[10]: ld_threshold (row[11])
+            # v[11]: ld_genomic_distance (row[12])
+            # v[12]: anchor_snp (row[13])
+            snp_data.append([k, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12]])
 
         # Sort snp_data by the second column (AVG_R2)
         snp_data.sort(key=lambda x: x[1], reverse=True)  # reverse=True for descending order
@@ -492,11 +500,11 @@ class K1_Hub(Hub):
         # Write snp hub to file
         with open(save_dir+"snp_hub.csv", 'w') as f:
             # Write the headers for the snp_file
-            f.write("snp,chr,bp,r2,bin_num,bin_idx,encoding,seen,pruned,gen_seen,gen_pruned\n")
+            f.write("snp,chr,bp,r2,bin_num,bin_idx,encoding,seen,pruned,gen_seen,gen_pruned,pruned_reason,ld_threshold,ld_genomic_distance,anchor_snp\n")
             for row in snp_data:
                 # split snp into chromosome and position
                 chrom, pos = row[0].split('.')
-                f.write(f"{row[0]},{chrom},{pos},{row[1]},{row[2]},{row[4]},{row[5]},{row[6]},{row[7]},{row[8]},{row[9]}\n")
+                f.write(f"{row[0]},{chrom},{pos},{row[1]},{row[2]},{row[4]},{row[5]},{row[6]},{row[7]},{row[8]},{row[9]},{row[10]},{row[11]},{row[12]},{row[13]}\n")
 
         # save csv with both seen and not prunned snps
         # Write snp hub to file

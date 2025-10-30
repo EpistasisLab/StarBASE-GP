@@ -5,6 +5,7 @@ from ..Base.types import (float32_t, int16_t, prob_t, int32_t, snp_t, uint16_t)
 from ..Base.pipeline import Pipeline
 from ..Base.utils import snp_chrm_pos
 from ..Base import nsga_tool as nsga
+from ..Base.selectors import OLSRegressor
 
 # import K1 specific classes
 from .snp_hub import K1_Hub
@@ -22,6 +23,8 @@ from typing import List, Tuple
 import numpy.typing as npt
 import matplotlib.pyplot as plt
 import time
+from sklearn.metrics import r2_score
+import statsmodels.api as sm
 
 @typechecked
 class K1_Evolver(EA):
@@ -44,6 +47,7 @@ class K1_Evolver(EA):
                  save_directory: str = "",
                  window_distance: int32_t = int32_t(1000000),
                  branch_explainability_threshold: float32_t = float32_t(0.0),
+                 ld_flag: bool = True,
                  regression: bool = True
                  ) -> None:
         """
@@ -68,14 +72,15 @@ class K1_Evolver(EA):
                          m_out_chr_p=m_out_chr_p,
                          save_directory=save_directory,
                          window_distance=window_distance,
-                         branch_explainability_threshold=branch_explainability_threshold)
+                         branch_explainability_threshold=branch_explainability_threshold,
+                         ld_flag=ld_flag)
         self.regression = regression
 
         # todo: add pager encoder once done
         self.encoder_types = [ snp_t('additive'), snp_t('dominant'), snp_t('recessive'),
                               snp_t('heterosis'), snp_t('underdominant'), snp_t('overdominant'),
                               snp_t('subadditive'), snp_t('superadditive'),
-                            #   snp_t('pager')
+                              snp_t('pager')
                               ]
         # initialize reproduction class
         self.reproduction = K1_Reproduction(branch_max=self.branch_max,
@@ -184,6 +189,11 @@ class K1_Evolver(EA):
         print('Final run/population details')
         print('Final population size:', len(self.population), flush=True)
 
+        # save Pareto front details and plot Pareto front
+        self.save_and_plot_pareto_front()
+        # save the hubs details
+        self.hub.save_hubs(self.save_directory)
+
         return
 
     def initialize_population(self) -> None:
@@ -268,8 +278,11 @@ class K1_Evolver(EA):
         for i, pipeline in enumerate(pipelines):
             pipeline_evaluation_details[i] = {snp_t('r2'): float32_t(0.0), snp_t('feature_cnt'): None, snp_t('features'): None,
                                               snp_t('ld_used'): False, snp_t('error'): False, snp_t('count'): uint16_t(0)}
-            # if pipeline contains snps from the same chromosome, we need to use LD pruner
-            if self.snps_on_the_same_chromosome(pipeline.branch_set):
+            
+            # Check if LD pruning should be applied:
+            # 1. ld_flag must be True
+            # 2. Pipeline must contain SNPs from the same chromosome
+            if self.ld_flag and self.snps_on_the_same_chromosome(pipeline.branch_set):
                 ray_jobs.append(ray_utils.ray_eval_pipeline_ld_fs.remote(snp_names=[snp for snp in pipeline.get_branch_set()],
                                                                          x_train_ori=[self.hub.get_ori_ray_id(snp) for snp in pipeline.get_branch_set()],
                                                                          x_train_enc=[self.hub.get_enc_ray_id(snp) for snp in pipeline.get_branch_set()],
@@ -280,7 +293,7 @@ class K1_Evolver(EA):
                                                                          pop_id=uint16_t(i),
                                                                          snp_r2_set=self.hub.generate_r2_dict(pipeline.get_branch_set())))
                 pipeline_evaluation_details[i][snp_t('ld_used')] = True
-            # else, no need for ld pruner
+            # else, no need for ld pruner (either ld_flag is False or SNPs are not on same chromosome)
             else:
                 ray_jobs.append(ray_utils.ray_eval_pipeline_fs.remote(snp_names=[snp for snp in pipeline.get_branch_set()],
                                                                      x_train_enc=[self.hub.get_enc_ray_id(snp) for snp in pipeline.get_branch_set()],
@@ -470,8 +483,11 @@ class K1_Evolver(EA):
                 # superadditive model ray job
                 ray_jobs.append(ray_utils.ray_snp_eval_sup.remote(X = self.hub.get_ori_ray_id(snp), y = self.all_y_ray_id, train_idx = fold_data['train_idx'],
                                                                   valid_idx = fold_data['val_idx'], snp = snp))
+                # pager model ray job
+                ray_jobs.append(ray_utils.ray_snp_eval_pager.remote(X = self.hub.get_ori_ray_id(snp), y = self.all_y_ray_id, train_idx = fold_data['train_idx'],
+                                                                  valid_idx = fold_data['val_idx'], snp = snp))
         # todo: missing pager calls
-        assert len(ray_jobs) == len(unseen_branches) * self.k * 8  # k folds for each unseen snp and number of encoders
+        assert len(ray_jobs) == len(unseen_branches) * self.k * 9  # k folds for each unseen snp and number of encoders
 
         # container to hold snp performance (accumulated r2, count, error flag, encoder type, encoded_x ray id(depending on r2 / count >= threshold))
         snp_perf = {}
@@ -577,3 +593,270 @@ class K1_Evolver(EA):
                 # Use modulo to wrap around and avoid index errors
                 sampling_list[(start_idx+i) % chrom_num] += 1
         return sampling_list
+    
+    def post_analysis_with_good_snps(self):
+        """
+        Function to perform analysis on all the Pareto front pipelines using the validation set using only the good snps seen during evolution.
+        """
+        # get the Pareto front pipelines
+        _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(float32_t(1.0), int32_t(-1))))
+        pareto_front_pipelines = []
+        for i, r in enumerate(rank):
+            if r == 0: # rank 0 is the Pareto front
+                pareto_front_pipelines.append(self.population[i])
+        print(f"Number of pipelines in Pareto front for post analysis: {len(pareto_front_pipelines)}", flush=True)
+
+        # # sort the Pareto front by feature count
+        # pareto_front_pipelines = sorted(pareto_front_pipelines, key=lambda x: x.get_trait_feature_cnt())
+
+        # # print all the pipelines in the Pareto front
+        # for pid, pipeline in enumerate(pareto_front_pipelines):
+        #     print(f"Pipeline ID: {pid}", flush=True)
+        #     print(f"Train R2: {pipeline.get_trait_r2()}", flush=True)
+        #     print(f"Feature Count: {pipeline.get_trait_feature_cnt()}", flush=True)
+        #     print(f"Feature Set: {pipeline.get_trait_feature_names()}", flush=True)
+        #     print(f"Selector: {pipeline.get_selector_node().name} with params {pipeline.get_selector_node().get_params()}", flush=True)
+        #     print('-'*30, flush=True)
+
+        # collect all the parallel jobs for evaluating the pipelines on the validation set
+        ray_jobs = []
+        pareto_validation_r2 = {}
+        # collect all snps that made it to the regressor for Pareto pipelines to evaluate on validation set (the pruned ones are not considered)
+        for pipeline_id, pipeline in enumerate(pareto_front_pipelines):
+            # filter only active SNPs
+            features_final = [snp for snp in pipeline.get_trait_feature_names() if self.hub.get_active_flag(snp) == True]
+
+            # store details for each pipeline
+            pareto_validation_r2[pipeline_id] = {'validation_r2': float32_t(-1.0), 
+                                                 'test_r2': float32_t(-1.0),
+                                                 'train_r2': pipeline.get_trait_r2(),
+                                                 'feature_cnt': pipeline.get_trait_feature_cnt(),
+                                                 'selector': pipeline.get_selector_node().name,
+                                                 'selector_params': pipeline.get_selector_node().get_params(),
+                                                 'feature_set': set(features_final),
+                                                 'pipeline': pipeline  # Store pipeline object to access root node
+                                                 }
+            # create ray job for evaluating the pipeline on the validation set
+            ray_jobs.append(ray_utils.ray_eval_pipeline_r2.remote(X=[self.hub.get_enc_ray_id(snp) for snp in features_final],
+                                                                   y=self.all_y_ray_id,
+                                                                   train_idx=self.train_idx_ray,
+                                                                   valid_idx=self.val_idx_ray,
+                                                                   pop_id=uint16_t(pipeline_id))) 
+            # process results as they come in
+            while len(ray_jobs) > 0:
+                finished, ray_jobs = ray.wait(ray_jobs)
+                r2, pop_id, error = ray.get(finished)[0]
+                if error < float32_t(0.0):
+                    print(f"Error during post analysis evaluation of pipeline {pop_id}", flush=True)
+                    continue
+                pareto_validation_r2[pop_id]['validation_r2'] = float32_t(r2)
+        print("Post analysis on validation set completed.", flush=True)
+
+        # sort pareto_validation_r2 by key (pipeline_id)
+        pareto_validation_r2 = dict(sorted(pareto_validation_r2.items()))
+
+        ################# FIND THE UTOPIA MODEL #################
+
+        # find model based on Utopia point (maximize r2 and minimize feature count)
+        utopia_pipeline_id = {}
+        max_r2 = max([data["validation_r2"] for data in pareto_validation_r2.values()])
+        min_r2 = min([data["validation_r2"] for data in pareto_validation_r2.values()])
+        max_comp = max([data["feature_cnt"] for data in pareto_validation_r2.values()])
+        min_comp = min([data["feature_cnt"] for data in pareto_validation_r2.values()])
+
+        for pid, data in pareto_validation_r2.items():
+            # save utopia distance score
+            r2 = (1 - ((data["validation_r2"] - min_r2) / (max_r2 - min_r2)))**2
+            comp = (1 - (1 - (data["feature_cnt"] - min_comp) / (max_comp - min_comp)))**2
+            utopia_pipeline_id[pid] = np.sqrt(r2 + comp)
+
+        # find the set of snps with the smallest utopia distance
+        min_distance = float32_t(10000000.0)
+        utopia_point_pipeline_id = None
+        for pid, distance in utopia_pipeline_id.items():
+            if min_distance > distance:
+                min_distance = distance
+                utopia_point_pipeline_id = pid
+        
+        # print the details of the utopia point pipeline
+        print(f"Utopia Point Pipeline ID: {utopia_point_pipeline_id}", flush=True)
+        print(f"Utopia Point Pipeline Train R2: {pareto_validation_r2[utopia_point_pipeline_id]['train_r2']}", flush=True)
+        print(f"Utopia Point Pipeline Validation R2: {pareto_validation_r2[utopia_point_pipeline_id]['validation_r2']}", flush=True)
+        print(f"Utopia Point Pipeline Feature Count: {pareto_validation_r2[utopia_point_pipeline_id]['feature_cnt']}", flush=True)
+        print(f"Utopia Point Pipeline Feature Set: {pareto_validation_r2[utopia_point_pipeline_id]['feature_set']}", flush=True)
+
+        # send snps of pipeline with utopia point to final test
+        self.final_pipeline_test(pareto_validation_r2[utopia_point_pipeline_id],
+                                 'utopia_pipeline_test_results.csv',
+                                 pareto_validation_r2[utopia_point_pipeline_id]['train_r2'],
+                                 pareto_validation_r2[utopia_point_pipeline_id]['validation_r2'],
+                                 pareto_validation_r2[utopia_point_pipeline_id]['feature_cnt'])
+        return
+
+    # function to take in a set of snp names and perform final test on the test dataset
+    def final_pipeline_test(self, pipeline_data: Dict, file_name: str, train_r2: float32_t, validation_r2: float32_t, size: int16_t) -> None:
+        """
+        Function to perform the final test on the test dataset.
+        Combines training and validation datasets to fit a linear regression model.
+        Then, evaluates the model on the test dataset and computes PFI using ray_pfi.
+        Saves results to a CSV file.
+        """
+        snp_names = list(pipeline_data['feature_set'])  # Get features from pipeline_data
+        print(f"Performing final test on {len(snp_names)} SNPs...", flush=True)
+
+        # Combine training and validation indices for final model training
+        combined_train_idx = np.concatenate([ray.get(self.train_idx_ray), ray.get(self.val_idx_ray)])
+        combined_idx_ray_id = ray.put(combined_train_idx)
+        test_idx_ray_id = ray.put(self.test_idx)
+
+        # Re-encode SNPs based on their best encoding type
+        # Use combined train+validation data for encoding (to learn encoding from larger dataset)
+        ray_jobs = []
+        for snp in snp_names:
+            ray_jobs.append(ray_utils.ray_snp_encoder.remote(
+                X=self.hub.get_ori_ray_id(snp),
+                y=self.all_y_ray_id,
+                train_idx=combined_train_idx,  # Use combined indices for encoding
+                enc=self.hub.get_encoding(snp),
+                snp=snp
+            ))
+        
+        print(f"Encoding {len(snp_names)} SNPs for final test...", flush=True)
+        
+        # Process encoding results
+        transformed_snp_ray_ids = {}
+        while len(ray_jobs) > 0:
+            finished, ray_jobs = ray.wait(ray_jobs)
+            encoded_x, snp_name = ray.get(finished)[0]
+            # Put encoded array into Ray object store
+            transformed_snp_ray_ids[snp_name] = ray.put(encoded_x)
+
+        # Create column names for PFI (include encoding type)
+        column_names_with_encoding = [f'chr{snp}_{self.hub.get_encoding(snp)}' for snp in snp_names]
+
+        # Calculate train + validation R² using ray remote function
+        print("Calculating train + validation R²...", flush=True)
+        train_valid_r2_job = ray_utils.ray_eval_pipeline_r2.remote(
+            X=[transformed_snp_ray_ids[snp] for snp in snp_names],
+            y=self.all_y_ray_id,
+            train_idx=combined_idx_ray_id,
+            valid_idx=combined_idx_ray_id,
+            pop_id=uint16_t(0)
+        )
+        train_val_r2, _, error = ray.get(train_valid_r2_job)
+        if error < float32_t(0.0):
+            print(f"Error during train + validation R² calculation", flush=True)
+            train_val_r2 = float32_t(-1.0)
+        print(f'Train + Validation R² Score: {train_val_r2}', flush=True)
+
+        # Calculate test R² using ray remote function
+        print("Calculating test R²...", flush=True)
+        test_r2_job = ray_utils.ray_eval_pipeline_r2.remote(
+            X=[transformed_snp_ray_ids[snp] for snp in snp_names],
+            y=self.all_y_ray_id,
+            train_idx=combined_idx_ray_id,
+            valid_idx=test_idx_ray_id,
+            pop_id=uint16_t(0)
+        )
+        
+        test_r2, _, error = ray.get(test_r2_job)
+        
+        if error < float32_t(0.0):
+            print(f"Error during test R² calculation", flush=True)
+            test_r2 = float32_t(-1.0)
+        
+        pipeline_data['test_r2'] = test_r2
+        print(f'Test R² Score: {test_r2}', flush=True)
+
+        # Calculate PFI on test set using ray_pfi
+        print("Calculating permutation feature importance on test set...", flush=True)
+        
+        # Create an OLS regressor for PFI calculation
+        ols_regressor = OLSRegressor()
+        
+        # Call ray_pfi
+        pfi_job = ray_utils.ray_pfi.remote(
+            X=[transformed_snp_ray_ids[snp] for snp in snp_names],
+            y=self.all_y_ray_id,
+            train_idx=combined_train_idx,
+            valid_idx=self.test_idx,
+            new_column_names=column_names_with_encoding,
+            root_node=ols_regressor,
+            random_state=self.rng.integers(0, 100000),
+            pop_id=uint16_t(0)
+        )
+        
+        pfi_results, _ = ray.get(pfi_job)
+        
+        print(f"PFI calculated for {len(pfi_results)} features", flush=True)
+
+        # Create DataFrame with PFI results
+        pfi_df = pd.DataFrame(list(pfi_results.items()), columns=['SNP', 'Importance'])
+        pfi_df = pfi_df.sort_values(by='Importance', ascending=False)
+        pfi_df['Cross-validated Train R2'] = train_val_r2
+        pfi_df['Validation R2'] = validation_r2
+        pfi_df['Train+Valid R2'] = train_val_r2
+        pfi_df['Test R2'] = test_r2
+        pfi_df['Model Size'] = size
+        
+        # Save to CSV
+        output_path = os.path.join(self.save_directory, file_name)
+        pfi_df.to_csv(output_path, index=False)
+        print(f"Results saved to {file_name}", flush=True)
+
+    # function to save and plot Pareto front at the end of evolution
+    def save_and_plot_pareto_front(self):
+        """
+        Function to save and plot the Pareto front at the end of evolution.
+        Saves the Pareto front pipelines to a CSV file and generates a plot.
+        """
+        # get the front 0 pipelines
+        _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(float32_t(1.0), int32_t(-1))))
+        pareto_front_pipelines = []
+        for i, r in enumerate(rank):
+            if r == 0: # rank 0 is the Pareto front
+                pareto_front_pipelines.append(self.population[i])
+        print(f"Number of pipelines in Pareto front at the end of evolution:{len(pareto_front_pipelines)}", flush=True)
+        # sort the Pareto front by feature count
+        pareto_front_pipelines = sorted(pareto_front_pipelines, key=lambda x: x.get_trait_feature_cnt())
+        # save the Pareto pipeline details to a csv file
+        pareto_data = []
+        for pid, pipeline in enumerate(pareto_front_pipelines):
+            pareto_data.append({
+                'Pipeline ID': pid + 1,  # Start from 1 instead of 0
+                'Cross-validated R2': pipeline.get_trait_r2(),
+                'Feature Count': pipeline.get_trait_feature_cnt(),
+                'Feature Set': ';'.join(pipeline.get_trait_feature_names()),
+                'Selector': pipeline.get_selector_node().name,
+                'Selector Params': pipeline.get_selector_node().get_params()
+            })
+        pareto_df = pd.DataFrame(pareto_data)
+        pareto_df.to_csv(os.path.join(self.save_directory, 'pareto_front_pipelines.csv'), index=False)
+        print("Pareto front pipelines saved to pareto_front_pipelines.csv", flush=True)
+        # plot the Pareto front
+        plt.figure(figsize=(10, 6))
+        plt.title('Pareto Front: R2 vs Feature Count')
+        plt.xlabel('Feature Count')
+        plt.ylabel('Cross-validated R2')
+        plt.grid(True)
+
+        # plot pareto front pipelines as red dots
+        pareto_r2 = [pipeline.get_trait_r2() for pipeline in pareto_front_pipelines]
+        pareto_feat_cnt = [pipeline.get_trait_feature_cnt() for pipeline in pareto_front_pipelines]
+        plt.scatter(pareto_feat_cnt, pareto_r2, color='red', label='Pareto Front')
+        
+        # Annotate the points with pipeline numbers (indexes in pareto front)
+        for i, (feature_count, r2_score) in enumerate(zip(pareto_feat_cnt, pareto_r2)):
+            plt.annotate(
+                str(i + 1),  # Text label (pipeline ID starting from 1)
+                (feature_count, r2_score),  # The point where the annotation should be
+                textcoords="offset points",  # Use offset for better readability
+                xytext=(5, 5),  # Offset position (x, y)
+                ha='center',  # Horizontal alignment
+                fontsize=9,
+                color='blue'
+            )
+        
+        plt.legend()
+        plt.savefig(os.path.join(self.save_directory, 'pareto_front_plot.png'))
+        print("Pareto front plot saved to pareto_front_plot.png", flush=True)

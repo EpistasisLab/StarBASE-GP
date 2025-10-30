@@ -12,6 +12,108 @@ from typeguard import typechecked
 import pandas as pd
 import statsmodels.api as sm
 from statsmodels.stats.multitest import multipletests
+import numba
+
+# Numba-optimized helper functions for LD calculation and pruning
+@numba.njit(cache=True)
+def calculate_ld_numba(x1, x2):
+    """
+    Fast LD (R²) calculation between two SNP arrays using numba.
+    Computes Pearson correlation coefficient and squares it.
+    """
+    n = len(x1)
+    
+    # Calculate means
+    mean_x1 = 0.0
+    mean_x2 = 0.0
+    for i in range(n):
+        mean_x1 += x1[i]
+        mean_x2 += x2[i]
+    mean_x1 /= n
+    mean_x2 /= n
+    
+    # Calculate correlation
+    numerator = 0.0
+    sum_sq_x1 = 0.0
+    sum_sq_x2 = 0.0
+    
+    for i in range(n):
+        diff_x1 = x1[i] - mean_x1
+        diff_x2 = x2[i] - mean_x2
+        numerator += diff_x1 * diff_x2
+        sum_sq_x1 += diff_x1 * diff_x1
+        sum_sq_x2 += diff_x2 * diff_x2
+    
+    # Avoid division by zero
+    if sum_sq_x1 == 0.0 or sum_sq_x2 == 0.0:
+        return 0.0
+    
+    correlation = numerator / (np.sqrt(sum_sq_x1) * np.sqrt(sum_sq_x2))
+    r_squared = correlation * correlation
+    
+    return r_squared
+
+@numba.njit(cache=True, parallel=True)
+def compute_ld_matrix(X_array, snp_indices):
+    """
+    Compute pairwise LD matrix for a subset of SNPs.
+    Uses parallel computation for speed.
+    
+    Parameters:
+    - X_array: 2D array of shape (n_samples, n_snps)
+    - snp_indices: indices of SNPs to compute LD for
+    
+    Returns:
+    - ld_matrix: symmetric matrix of LD values
+    """
+    n_snps = len(snp_indices)
+    ld_matrix = np.zeros((n_snps, n_snps), dtype=np.float32)
+    
+    for i in numba.prange(n_snps):
+        idx_i = snp_indices[i]
+        for j in range(i + 1, n_snps):
+            idx_j = snp_indices[j]
+            ld_val = calculate_ld_numba(X_array[:, idx_i], X_array[:, idx_j])
+            ld_matrix[i, j] = ld_val
+            ld_matrix[j, i] = ld_val  # Symmetric
+    
+    return ld_matrix
+
+@numba.njit(fastmath=True, cache=True)
+def prune_snps_by_ld(ld_matrix, marginal_r2_array, ld_threshold):
+    """
+    Identify SNPs to remove based on LD threshold.
+    Keeps SNP with higher marginal R².
+    
+    Parameters:
+    - ld_matrix: pairwise LD matrix
+    - marginal_r2_array: array of marginal R² values for each SNP
+    - ld_threshold: LD threshold for pruning
+    
+    Returns:
+    - pruned_indices: set of indices to remove
+    - anchor_indices: anchor SNP index for each pruned SNP (-1 if not pruned)
+    """
+    n_snps = ld_matrix.shape[0]
+    pruned = np.zeros(n_snps, dtype=np.bool_)
+    anchor_indices = np.full(n_snps, -1, dtype=np.int32)
+    
+    for i in range(n_snps):
+        if pruned[i]:
+            continue
+        for j in range(i + 1, n_snps):
+            if pruned[j]:
+                continue
+            if ld_matrix[i, j] > ld_threshold:
+                if marginal_r2_array[i] > marginal_r2_array[j]:
+                    pruned[j] = True
+                    anchor_indices[j] = i
+                else:
+                    pruned[i] = True
+                    anchor_indices[i] = j
+                    break  # Move to next i since i is pruned
+    
+    return pruned, anchor_indices
 
 @typechecked
 class LDSelector(SelectorNode):
@@ -41,12 +143,6 @@ class LDSelector(SelectorNode):
         if X_original.empty:
             self.selected_features_ = None
             return self
-
-        # Function to calculate LD (R²) between two SNPs
-        def calculate_ld(X, snp1: np.str_, snp2: np.str_):
-            correlation = np.corrcoef(X[snp1], X[snp2])[0, 1]
-            r_squared = correlation ** 2
-            return r_squared
 
         # Function to remove subset groups from a list of groups
         def remove_subsets(groups):
@@ -115,26 +211,31 @@ class LDSelector(SelectorNode):
                     snp = group[0]
                     final_selected_snps.append(snp)
                     continue
+                
+                # Convert group to numpy array for numba processing
                 group_df = genotype_df_original[group]
                 snp_list = group_df.columns.tolist()
-
-                for i, snp1 in enumerate(snp_list):
-                    if snp1 in ld_removed_snps:
-                        continue
-                    for j in range(i + 1, len(snp_list)):
-                        snp2 = snp_list[j]
-                        if snp2 in ld_removed_snps:
-                            continue
-                        ld_value = calculate_ld(genotype_df_original, snp1, snp2)
-                        if ld_value > ld_threshold:
-                            if marginal_r2[snp1] > marginal_r2[snp2]:
-                                ld_removed_snps.add(snp2)
-                                ld_removed_snps_in_group.add(snp2)
-                                anchor_snp_details[snp2] = f"chr{snp1}" # hold the name of the anchor SNP which pruned the SNP
-                            else:
-                                ld_removed_snps.add(snp1)
-                                ld_removed_snps_in_group.add(snp1)
-                                anchor_snp_details[snp1] = f"chr{snp2}" # hold the name of the anchor SNP which pruned the SNP
+                X_group_array = group_df.values  # Shape: (n_samples, n_snps_in_group)
+                
+                # Get marginal R² values for this group
+                marginal_r2_group = np.array([marginal_r2[snp] for snp in snp_list], dtype=np.float32)
+                
+                # Create indices for all SNPs (0 to n_snps_in_group-1)
+                snp_indices = np.arange(len(snp_list), dtype=np.int32)
+                
+                # Compute LD matrix using optimized numba function
+                ld_matrix = compute_ld_matrix(X_group_array, snp_indices)
+                
+                # Prune SNPs based on LD using optimized numba function
+                pruned_mask, anchor_indices = prune_snps_by_ld(ld_matrix, marginal_r2_group, ld_threshold)
+                
+                # Update pruned SNPs and anchor details
+                for local_idx, snp in enumerate(snp_list):
+                    if pruned_mask[local_idx]:
+                        ld_removed_snps.add(snp)
+                        ld_removed_snps_in_group.add(snp)
+                        anchor_local_idx = anchor_indices[local_idx]
+                        anchor_snp_details[snp] = f"chr{snp_list[anchor_local_idx]}"
 
                 non_pruned_snps_in_group = [s for s in snp_list if s not in ld_removed_snps_in_group] # remaining SNPs after LD pruning
                 # update the snp_details_after_ld dictionary for the pruned SNPs
