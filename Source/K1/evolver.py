@@ -468,35 +468,16 @@ class K1_Evolver(EA):
             assert isinstance(snp, snp_t), "SNP must be of type snp_t."
             assert '.' in snp, "SNP must be a string with chromosome and position separated by a dot."
 
+            # Launch one Ray job per SNP per fold that evaluates ALL 9 encodings
             for _, fold_data in self.train_fold_dict_ray.items():
-                # additive model ray job
-                ray_jobs.append(ray_utils.ray_snp_eval_add.remote(X = self.hub.get_ori_ray_id(snp), y = self.all_y_ray_id, train_idx = fold_data['train_idx'],
-                                                                  valid_idx = fold_data['val_idx'], snp = snp))
-                # dominant model ray job
-                ray_jobs.append(ray_utils.ray_snp_eval_dom.remote(X = self.hub.get_ori_ray_id(snp), y = self.all_y_ray_id, train_idx = fold_data['train_idx'],
-                                                                  valid_idx = fold_data['val_idx'], snp = snp))
-                # recessive model ray job
-                ray_jobs.append(ray_utils.ray_snp_eval_rec.remote(X = self.hub.get_ori_ray_id(snp), y = self.all_y_ray_id, train_idx = fold_data['train_idx'],
-                                                                  valid_idx = fold_data['val_idx'], snp = snp))
-                # heterosis model ray job
-                ray_jobs.append(ray_utils.ray_snp_eval_het.remote(X = self.hub.get_ori_ray_id(snp), y = self.all_y_ray_id, train_idx = fold_data['train_idx'],
-                                                                  valid_idx = fold_data['val_idx'], snp = snp))
-                # underdominant model ray job
-                ray_jobs.append(ray_utils.ray_snp_eval_und.remote(X = self.hub.get_ori_ray_id(snp), y = self.all_y_ray_id, train_idx = fold_data['train_idx'],
-                                                                  valid_idx = fold_data['val_idx'], snp = snp))
-                # overdominant model ray job
-                ray_jobs.append(ray_utils.ray_snp_eval_ovd.remote(X = self.hub.get_ori_ray_id(snp), y = self.all_y_ray_id, train_idx = fold_data['train_idx'],
-                                                                  valid_idx = fold_data['val_idx'], snp = snp))
-                # subadditive model ray job
-                ray_jobs.append(ray_utils.ray_snp_eval_sub.remote(X = self.hub.get_ori_ray_id(snp), y = self.all_y_ray_id, train_idx = fold_data['train_idx'],
-                                                                  valid_idx = fold_data['val_idx'], snp = snp))
-                # superadditive model ray job
-                ray_jobs.append(ray_utils.ray_snp_eval_sup.remote(X = self.hub.get_ori_ray_id(snp), y = self.all_y_ray_id, train_idx = fold_data['train_idx'],
-                                                                  valid_idx = fold_data['val_idx'], snp = snp))
-                # pager model ray job
-                ray_jobs.append(ray_utils.ray_snp_eval_pager.remote(X = self.hub.get_ori_ray_id(snp), y = self.all_y_ray_id, train_idx = fold_data['train_idx'],
-                                                                  valid_idx = fold_data['val_idx'], snp = snp))
-        assert len(ray_jobs) == len(unseen_branches) * self.k * 9  # k folds for each unseen snp and number of encoders
+                ray_jobs.append(ray_utils.ray_snp_eval_all_encodings.remote(
+                    X = self.hub.get_ori_ray_id(snp), 
+                    y = self.all_y_ray_id, 
+                    train_idx = fold_data['train_idx'],
+                    valid_idx = fold_data['val_idx'], 
+                    snp = snp
+                ))
+        assert len(ray_jobs) == len(unseen_branches) * self.k  # k folds for each unseen snp (all encodings in one call)
 
         # container to hold snp performance (accumulated r2, count, error flag, encoder type, encoded_x ray id(depending on r2 / count >= threshold))
         snp_perf = {}
@@ -513,11 +494,14 @@ class K1_Evolver(EA):
         while len(ray_jobs) > 0:
             # collect results
             finished, ray_jobs = ray.wait(ray_jobs)
-            r2, snp_name, lo, error = ray.get(finished)[0]
-            assert error >= 0.0, "Error flag must be non-negative. Error during SNP evaluation cannot occur."
-            # add them up
-            snp_perf[snp_name][lo][snp_t('r2')] += r2
-            snp_perf[snp_name][lo][snp_t('cnt')] += float32_t(1.0)
+            encoding_results = ray.get(finished)[0]  # Returns dict of {encoding_name: (r2, snp, enc, error)}
+            
+            # Process results for all encodings from this single job
+            for enc_name, (r2, snp_name, lo, error) in encoding_results.items():
+                assert error >= 0.0, f"Error flag must be non-negative for {enc_name}. Error during SNP evaluation cannot occur."
+                # add them up
+                snp_perf[snp_name][lo][snp_t('r2')] += r2
+                snp_perf[snp_name][lo][snp_t('cnt')] += float32_t(1.0)
         # timing print
         print(f"Evaluating {len(unseen_branches)} unseen branches took {(time.time() - start_time) / 60} mins", flush=True)
 

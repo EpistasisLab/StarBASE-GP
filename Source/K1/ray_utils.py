@@ -403,3 +403,55 @@ def ray_eval_pipeline_r2(X: List[ray.ObjectID],
         return float32_t(-1.0), pop_id, float32_t(-1.0)
 
     return float32_t(r2_score(y[valid_idx], y_pred)), pop_id, float32_t(1.0)
+
+# Optimized: Evaluate all 9 encodings in a single Ray call
+@ray.remote
+def ray_snp_eval_all_encodings(X, y, train_idx, valid_idx, snp):
+    """
+    Evaluate all 9 encoding types for a single SNP in one Ray call.
+    This dramatically reduces Ray scheduling overhead by batching all encodings together.
+    
+    Returns:
+        Dict[str, Tuple[float, str, str, float]]: 
+            Dictionary mapping encoding name to (r2_score, snp, encoding, error_flag)
+    """
+    assert isinstance(X, np.ndarray), "X should be a numpy array"
+    
+    results = {}
+    
+    # Define all encodings to evaluate
+    encodings = [
+        ('additive', None),  # No transformation needed
+        ('dominant', encode_dominant),
+        ('recessive', encode_recessive),
+        ('heterosis', encode_heterosis),
+        ('underdominant', encode_underdominant),
+        ('overdominant', encode_overdominant),
+        ('subadditive', encode_subadditive),
+        ('superadditive', encode_superadditive),
+        ('pager', lambda X_data: encode_pager(X_data, build_pager_lut(X_data[train_idx], y[train_idx])))
+    ]
+    
+    for enc_name, encoder_func in encodings:
+        try:
+            # Encode the data
+            if encoder_func is None:
+                X_encoded = X
+            else:
+                X_encoded = encoder_func(X)
+            
+            # Fit OLS model
+            regressor = sm.OLS(y[train_idx], sm.add_constant(X_encoded[train_idx], has_constant='add'))
+            fit_results = regressor.fit()
+            
+            # Score on validation set
+            y_pred = fit_results.predict(sm.add_constant(X_encoded[valid_idx], has_constant='add'))
+            score = r2_score(y[valid_idx], y_pred)
+            
+            results[enc_name] = (float32_t(score), snp, snp_t(enc_name), float32_t(1.0))
+            
+        except Exception as e:
+            logging.error(f"Error evaluating {enc_name} for SNP {snp}: {e}")
+            results[enc_name] = (float32_t(0.0), snp, snp_t(enc_name), float32_t(-1.0))
+    
+    return results
