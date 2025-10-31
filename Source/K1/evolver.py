@@ -135,11 +135,15 @@ class K1_Evolver(EA):
             assert(0 < len(self.population) <= self.pop_size)
 
             # get the size of the front 0 after each generation
-            _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(float32_t(1.0), int32_t(-1))))
             count = 0
-            for r in rank:
-                if r == 0:
-                    count += 1
+            if len(self.population) >= 2:
+                _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(float32_t(1.0), int32_t(-1))))
+                count = 0
+                for r in rank:
+                    if r == 0:
+                        count += 1
+            else:
+                count = 1
             print('Size of Pareto Front:', count, flush=True)
             self.hub.seen_snps_proportion()  # count the number of unseen snps after each generation
 
@@ -151,10 +155,15 @@ class K1_Evolver(EA):
             start_time = time.time()
 
             # get order of mutation/crossover to do with the extra offspring
-            var_order, parent_cnt = self.reproduction.variation_order(self.rng, uint16_t(2*self.pop_size))
-
-            # get the parent scores by position
-            parent_ids = self.parent_selection(parent_cnt)
+            var_order = None
+            parent_cnt = None
+            parent_ids = None
+            if len(self.population) == 1:
+                var_order, parent_cnt = [snp_t('m')] * uint16_t(2*self.pop_size), uint16_t(2*self.pop_size)
+                parent_ids = [uint16_t(0)] * parent_cnt
+            else:
+                var_order, parent_cnt = self.reproduction.variation_order(self.rng, uint16_t(2*self.pop_size))
+                parent_ids = self.parent_selection(parent_cnt)
 
             # generate offspring
             offspring = self.reproduction.produce_offspring(rng = self.rng,
@@ -278,7 +287,7 @@ class K1_Evolver(EA):
         for i, pipeline in enumerate(pipelines):
             pipeline_evaluation_details[i] = {snp_t('r2'): float32_t(0.0), snp_t('feature_cnt'): None, snp_t('features'): None,
                                               snp_t('ld_used'): False, snp_t('error'): False, snp_t('count'): uint16_t(0)}
-            
+
             # Check if LD pruning should be applied:
             # 1. ld_flag must be True
             # 2. Pipeline must contain SNPs from the same chromosome
@@ -394,8 +403,9 @@ class K1_Evolver(EA):
             all_snps.update(pipeline.get_branch_set())
         unseen_snps = self.hub.get_unseen_snps(all_snps)
 
-        # evaluate all unseen snps
-        self.evaluate_unseen_branches(unseen_snps, gen_info)
+        # evaluate all unseen snps if we have any to evaluate
+        if len(unseen_snps) > 0:
+            self.evaluate_unseen_branches(unseen_snps, gen_info)
 
         # offspring pipelines with no good snps
         updated_pipelines = []
@@ -486,7 +496,6 @@ class K1_Evolver(EA):
                 # pager model ray job
                 ray_jobs.append(ray_utils.ray_snp_eval_pager.remote(X = self.hub.get_ori_ray_id(snp), y = self.all_y_ray_id, train_idx = fold_data['train_idx'],
                                                                   valid_idx = fold_data['val_idx'], snp = snp))
-        # todo: missing pager calls
         assert len(ray_jobs) == len(unseen_branches) * self.k * 9  # k folds for each unseen snp and number of encoders
 
         # container to hold snp performance (accumulated r2, count, error flag, encoder type, encoded_x ray id(depending on r2 / count >= threshold))
@@ -593,7 +602,7 @@ class K1_Evolver(EA):
                 # Use modulo to wrap around and avoid index errors
                 sampling_list[(start_idx+i) % chrom_num] += 1
         return sampling_list
-    
+
     def post_analysis_with_good_snps(self):
         """
         Function to perform analysis on all the Pareto front pipelines using the validation set using only the good snps seen during evolution.
@@ -627,7 +636,7 @@ class K1_Evolver(EA):
             features_final = [snp for snp in pipeline.get_trait_feature_names() if self.hub.get_active_flag(snp) == True]
 
             # store details for each pipeline
-            pareto_validation_r2[pipeline_id] = {'validation_r2': float32_t(-1.0), 
+            pareto_validation_r2[pipeline_id] = {'validation_r2': float32_t(-1.0),
                                                  'test_r2': float32_t(-1.0),
                                                  'train_r2': pipeline.get_trait_r2(),
                                                  'feature_cnt': pipeline.get_trait_feature_cnt(),
@@ -641,7 +650,7 @@ class K1_Evolver(EA):
                                                                    y=self.all_y_ray_id,
                                                                    train_idx=self.train_idx_ray,
                                                                    valid_idx=self.val_idx_ray,
-                                                                   pop_id=uint16_t(pipeline_id))) 
+                                                                   pop_id=uint16_t(pipeline_id)))
             # process results as they come in
             while len(ray_jobs) > 0:
                 finished, ray_jobs = ray.wait(ray_jobs)
@@ -677,7 +686,7 @@ class K1_Evolver(EA):
             if min_distance > distance:
                 min_distance = distance
                 utopia_point_pipeline_id = pid
-        
+
         # print the details of the utopia point pipeline
         print(f"Utopia Point Pipeline ID: {utopia_point_pipeline_id}", flush=True)
         print(f"Utopia Point Pipeline Train R2: {pareto_validation_r2[utopia_point_pipeline_id]['train_r2']}", flush=True)
@@ -720,9 +729,9 @@ class K1_Evolver(EA):
                 enc=self.hub.get_encoding(snp),
                 snp=snp
             ))
-        
+
         print(f"Encoding {len(snp_names)} SNPs for final test...", flush=True)
-        
+
         # Process encoding results
         transformed_snp_ray_ids = {}
         while len(ray_jobs) > 0:
@@ -758,22 +767,22 @@ class K1_Evolver(EA):
             valid_idx=test_idx_ray_id,
             pop_id=uint16_t(0)
         )
-        
+
         test_r2, _, error = ray.get(test_r2_job)
-        
+
         if error < float32_t(0.0):
             print(f"Error during test R² calculation", flush=True)
             test_r2 = float32_t(-1.0)
-        
+
         pipeline_data['test_r2'] = test_r2
         print(f'Test R² Score: {test_r2}', flush=True)
 
         # Calculate PFI on test set using ray_pfi
         print("Calculating permutation feature importance on test set...", flush=True)
-        
+
         # Create an OLS regressor for PFI calculation
         ols_regressor = OLSRegressor()
-        
+
         # Call ray_pfi
         pfi_job = ray_utils.ray_pfi.remote(
             X=[transformed_snp_ray_ids[snp] for snp in snp_names],
@@ -785,9 +794,9 @@ class K1_Evolver(EA):
             random_state=self.rng.integers(0, 100000),
             pop_id=uint16_t(0)
         )
-        
+
         pfi_results, _ = ray.get(pfi_job)
-        
+
         print(f"PFI calculated for {len(pfi_results)} features", flush=True)
 
         # Create DataFrame with PFI results
@@ -798,7 +807,7 @@ class K1_Evolver(EA):
         pfi_df['Train+Valid R2'] = train_val_r2
         pfi_df['Test R2'] = test_r2
         pfi_df['Model Size'] = size
-        
+
         # Save to CSV
         output_path = os.path.join(self.save_directory, file_name)
         pfi_df.to_csv(output_path, index=False)
@@ -844,7 +853,7 @@ class K1_Evolver(EA):
         pareto_r2 = [pipeline.get_trait_r2() for pipeline in pareto_front_pipelines]
         pareto_feat_cnt = [pipeline.get_trait_feature_cnt() for pipeline in pareto_front_pipelines]
         plt.scatter(pareto_feat_cnt, pareto_r2, color='red', label='Pareto Front')
-        
+
         # Annotate the points with pipeline numbers (indexes in pareto front)
         for i, (feature_count, r2_score) in enumerate(zip(pareto_feat_cnt, pareto_r2)):
             plt.annotate(
@@ -856,7 +865,7 @@ class K1_Evolver(EA):
                 fontsize=9,
                 color='blue'
             )
-        
+
         plt.legend()
         plt.savefig(os.path.join(self.save_directory, 'pareto_front_plot.png'))
         print("Pareto front plot saved to pareto_front_plot.png", flush=True)
