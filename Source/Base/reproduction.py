@@ -98,7 +98,7 @@ class Reproduction(ABC):
                           offspring_cnt: uint16_t,
                           population: List[Pipeline],
                           parent_ids: List[uint16_t],
-                          order: List[str]) -> List[Pipeline]:
+                          order: List[snp_t]) -> List[Pipeline]:
         # quick checks
         assert len(parent_ids) > 0
         assert len(population) > 0
