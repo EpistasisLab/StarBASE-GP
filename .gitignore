@@ -9,3 +9,4 @@ pareto_front_pipelines.csv
 snp_hub.csv
 utopia_pipeline_test_results.csv
 .DS_Store
+generation_details.csv

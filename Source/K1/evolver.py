@@ -15,7 +15,7 @@ from .reproduction import K1_Reproduction
 # import other necessary libraries
 import numpy as np
 from typeguard import typechecked
-from typing import List, Dict, Set
+from typing import List, Dict, Set, Tuple
 import pandas as pd
 import os
 import ray
@@ -147,10 +147,12 @@ class K1_Evolver(EA):
             print('Size of Pareto Front:', count, flush=True)
             self.hub.seen_snps_proportion()  # count the number of unseen snps after each generation
 
-            # record all the generation details
-            generation_details.append({'generation': g,
-                                        'front_zero_size': count,
-                                        'consideration_set_size': self.hub.consideration_hub_size()})
+            # Initialize generation stats dictionary (will be updated after evaluation)
+            gen_stats = {
+                'generation': g,
+                'front_zero_size': count,
+                'consideration_set_size': self.hub.consideration_hub_size()
+            }
 
             start_time = time.time()
 
@@ -180,7 +182,7 @@ class K1_Evolver(EA):
 
             # evaluate the offspring
             print('Evaluating offspring pipelines...', flush=True)
-            offspring = self.evaluation(offspring, int16_t(g))
+            offspring, eval_stats = self.evaluation(offspring, int16_t(g))
 
             # must be less than or equal because of potential negative r2 offspring pipelines
             assert (0 < len(offspring) + len(self.population) <= 3 * self.pop_size)
@@ -191,7 +193,20 @@ class K1_Evolver(EA):
             # make sure we have the correct number of pipelines
             assert len(self.population) <= self.pop_size
 
-            print(f"Time to finish generation: {(time.time() - start_time) / 60} minutes", flush=True)
+            # Calculate total generation time
+            gen_time = (time.time() - start_time) / 60  # in minutes
+            print(f"Time to finish generation: {gen_time} minutes", flush=True)
+            
+            # Add evaluation stats and timing to generation details
+            gen_stats.update({
+                'total_time_mins': gen_time,
+                'fs_only_count': eval_stats['fs_only_count'],
+                'ld_fs_count': eval_stats['ld_fs_count'],
+                'sequential_selector_count': eval_stats['sequential_selector_count'],
+                'fs_time_mins': eval_stats['fs_time']
+            })
+            generation_details.append(gen_stats)
+            
             print('-'*50, flush=True)
 
         # prints for the end of a run and the final population
@@ -202,6 +217,12 @@ class K1_Evolver(EA):
         self.save_and_plot_pareto_front()
         # save the hubs details
         self.hub.save_hubs(self.save_directory)
+        
+        # save generation details to CSV
+        if len(generation_details) > 0:
+            gen_df = pd.DataFrame(generation_details)
+            gen_df.to_csv(os.path.join(self.save_directory, 'generation_details.csv'), index=False)
+            print("Generation details saved to generation_details.csv", flush=True)
 
         return
 
@@ -260,11 +281,11 @@ class K1_Evolver(EA):
 
         # evaluate the initial population
         print('Evaluating initial population pipelines...', flush=True)
-        self.population = self.evaluation(self.population, gen_info=int16_t(0))
+        self.population, _ = self.evaluation(self.population, gen_info=int16_t(0))
         assert 1 <= len(self.population) <= self.pop_size, "Population size contained no valid pipelines after pipeline evaluation."
         return
 
-    def evaluation(self, pipelines: List[Pipeline], gen_info: int16_t) -> List[Pipeline]:
+    def evaluation(self, pipelines: List[Pipeline], gen_info: int16_t) -> Tuple[List[Pipeline], Dict]:
         """
         Function to evaluate entire pipelines.
         All of this should be done in asyncronous parallel jobs for maximum efficiency.
@@ -276,15 +297,25 @@ class K1_Evolver(EA):
             Generation number for logging purposes.
 
         Returns:
-        List[Pipeline]: List of evaluated pipelines (pipelines updated with evaluation results).
+        Tuple[List[Pipeline], Dict]: 
+            - List of evaluated pipelines (pipelines updated with evaluation results)
+            - Dictionary containing evaluation statistics (fs_only_count, ld_fs_count, sequential_selector_count, fs_time)
         """
         # quick checks
         assert len(pipelines) > 0, "No pipelines to evaluate."
+
+        # keep a count of number of pipelines that are calling only fs vs ld+fs
+        fs_only_count = 0
+        ld_fs_count = 0
+        sequential_selector_count = 0
 
         # create ray jobs for each pipeline evaluation depending on if ld is needed or not
         ray_jobs = []
         pipeline_evaluation_details = {}
         for i, pipeline in enumerate(pipelines):
+            # Count SequentialFeatureSelector usage
+            if pipeline.get_selector_node().name == 'SequentialFeatureSelector':
+                sequential_selector_count += 1
             pipeline_evaluation_details[i] = {snp_t('r2'): float32_t(0.0), snp_t('feature_cnt'): None, snp_t('features'): None,
                                               snp_t('ld_used'): False, snp_t('error'): False, snp_t('count'): uint16_t(0)}
 
@@ -302,6 +333,7 @@ class K1_Evolver(EA):
                                                                          pop_id=uint16_t(i),
                                                                          snp_r2_set=self.hub.generate_r2_dict(pipeline.get_branch_set())))
                 pipeline_evaluation_details[i][snp_t('ld_used')] = True
+                ld_fs_count += 1
             # else, no need for ld pruner (either ld_flag is False or SNPs are not on same chromosome)
             else:
                 ray_jobs.append(ray_utils.ray_eval_pipeline_fs.remote(snp_names=[snp for snp in pipeline.get_branch_set()],
@@ -310,6 +342,8 @@ class K1_Evolver(EA):
                                                                      train_idx=self.train_idx_ray,
                                                                      selector_node=pipeline.get_selector_node(),
                                                                      pop_id=uint16_t(i)))
+                fs_only_count += 1
+        print(f"Total pipelines calling only FS: {fs_only_count}, Total pipelines calling LD + FS: {ld_fs_count}", flush=True)   
         # keep track of LD prunned snps
         pruned_snps = set()
         # will hold the snp details after LD for each pipeline
@@ -336,8 +370,9 @@ class K1_Evolver(EA):
                 if details['pruned'] == True:
                     pruned_snps.add(snp)
                     snp_details_per_snp[snp] = details
-        # timing print
-        print(f"Feature selection (ld->fs | fs) took {(time.time() - start_time) / 60} mins", flush=True)
+        # timing print and save
+        fs_time = (time.time() - start_time) / 60  # in minutes
+        print(f"Feature selection (ld->fs | fs) took {fs_time} mins", flush=True)
 
         # send pipelines with no error to be evaluated for r2 across k-folds (only pipelines with error == False)
         ray_jobs = []
@@ -387,7 +422,15 @@ class K1_Evolver(EA):
             # add to evaluated pipelines
             evaluated_pipelines.append(pipelines[pipeline_id])
 
-        return evaluated_pipelines
+        # Create statistics dictionary
+        eval_stats = {
+            'fs_only_count': fs_only_count,
+            'ld_fs_count': ld_fs_count,
+            'sequential_selector_count': sequential_selector_count,
+            'fs_ld_time_all_pipelines': fs_time
+        }
+
+        return evaluated_pipelines, eval_stats
 
     def process_offspring(self, pipelines: List[Pipeline], gen_info: int16_t) -> List[Pipeline]:
         # quick checks

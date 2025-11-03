@@ -296,6 +296,8 @@ def ray_eval_pipeline_ld_fs(snp_names: List[snp_t],
     x_train_transformed_df = pd.DataFrame({name: ray.get(data_obj)[train_idx].tolist() for name, data_obj in zip(snp_names, x_train_enc)})
     x_train_original_df = pd.DataFrame({name: ray.get(data_obj)[train_idx].tolist() for name, data_obj in zip(snp_names, x_train_ori)})
 
+    # finding out the time taken for LD node alone
+    ld_start_time = time.time()
     # fit the LD node - send the unencoded snps for pearson's correlation calculation, the encoded data, the target and the snp r2 dictionary having the best lo r2
     try:
         ld_node.fit(x_train_original_df, x_train_transformed_df, y_train[train_idx], snp_r2_dict)
@@ -309,9 +311,14 @@ def ray_eval_pipeline_ld_fs(snp_names: List[snp_t],
     except Exception as e:
         logging.error(f"Exception while fitting LD node: {e}")
         return float32_t(-1.0), int16_t(0), pop_id, [], {}
+    ld_end_time = time.time()
+    ld_duration = (ld_end_time - ld_start_time) / 60
+    print(f"LD node processing time: {ld_duration:.4f} minutes")
 
 
-    # adding the selector and regressor nodes
+    # adding the selector nodes
+    # finding out the time taken for feature selector alone
+    fs_start_time = time.time()
     try:
         # get snps from selector node
         selector_node.fit(x_train_transformed_df, y_train[train_idx])
@@ -322,6 +329,9 @@ def ray_eval_pipeline_ld_fs(snp_names: List[snp_t],
     except Exception as e:
         logging.error(f"Exception while feature selector fits/transforms: {e}")
         return float32_t(-1.0), int16_t(0), pop_id, [], ld_node.snp_details_after_ld
+    fs_end_time = time.time()
+    fs_duration = (fs_end_time - fs_start_time) / 60
+    print(f"Feature Selector: {selector_node.name} processing time: {fs_duration:.4f} minutes")
 
     # need this bc the root node would tell us if nothing was passed to it with the old implementation
     if feature_count == 0:
