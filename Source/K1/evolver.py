@@ -203,7 +203,7 @@ class K1_Evolver(EA):
                 'fs_only_count': eval_stats['fs_only_count'],
                 'ld_fs_count': eval_stats['ld_fs_count'],
                 'sequential_selector_count': eval_stats['sequential_selector_count'],
-                'fs_time_mins': eval_stats['fs_time']
+                'fs_ld_time_all_pipelines': eval_stats['fs_time']
             })
             generation_details.append(gen_stats)
             
