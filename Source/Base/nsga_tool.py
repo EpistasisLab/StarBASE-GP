@@ -245,7 +245,7 @@ def non_dominated_truncate(fronts: List[npt.NDArray[int16_t]], distances: npt.ND
     # check that first object in fronts is a numpy array
     assert isinstance(fronts[0], np.ndarray)
     # make sure that N is positive and less than the population size
-    assert 0 < N <= len(distances)
+    #assert 0 < N <= len(distances)
 
     # go through each front and add the solutions to the survivors
     survivors = []

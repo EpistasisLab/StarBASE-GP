@@ -749,7 +749,7 @@ class K1_Evolver(EA):
         for pid, data in pareto_validation_r2.items():
             pareto_data.append({
                 'Pipeline ID': pid + 1,  # Start from 1 instead of 0
-                'Cross-validated R2': data['train_r2'],
+                'Cross-validated Train R2': data['train_r2'],
                 'Validation R2': data['validation_r2'],
                 'Feature Count': data['feature_cnt'],
                 'Selector': data['selector'],
