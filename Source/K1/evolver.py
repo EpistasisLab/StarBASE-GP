@@ -201,9 +201,7 @@ class K1_Evolver(EA):
             gen_stats.update({
                 'total_time_mins': gen_time,
                 'fs_only_count': eval_stats['fs_only_count'],
-                'ld_fs_count': eval_stats['ld_fs_count'],
-                'sequential_selector_count': eval_stats['sequential_selector_count'],
-                'fs_ld_time_all_pipelines_mins': eval_stats['fs_ld_time_all_pipelines']
+                'pipelines_evaluated': eval_stats['pipelines_evaluated']
             })
             generation_details.append(gen_stats)
             
@@ -343,11 +341,13 @@ class K1_Evolver(EA):
                                                                      selector_node=pipeline.get_selector_node(),
                                                                      pop_id=uint16_t(i)))
                 fs_only_count += 1
-        print(f"Total pipelines calling only FS: {fs_only_count}, Total pipelines calling LD + FS: {ld_fs_count}", flush=True)   
         # keep track of LD prunned snps
         pruned_snps = set()
         # will hold the snp details after LD for each pipeline
         snp_details_per_snp = {}
+        # Track LD timing separately
+        ld_start_time = time.time()
+        ld_jobs_completed = 0
         # process results as they come in
         start_time = time.time()
         while len(ray_jobs) > 0:
@@ -361,18 +361,25 @@ class K1_Evolver(EA):
             pipeline_evaluation_details[pop_id][snp_t('feature_cnt')] = feature_cnt
             pipeline_evaluation_details[pop_id][snp_t('features')] = features
 
-            # add a check that if snp_details_after_ld is an empty dict, we skip the for loop
-            if ld_details is None or len(ld_details) == 0:
-                continue
-
-            # update the pruned snps based on the snp details after LD
-            for snp, details in ld_details.items():
-                if details['pruned'] == True:
-                    pruned_snps.add(snp)
-                    snp_details_per_snp[snp] = details
+            # Track if this was an LD job (has ld_details)
+            if ld_details is not None and len(ld_details) > 0:
+                ld_jobs_completed += 1
+                # update the pruned snps based on the snp details after LD
+                for snp, details in ld_details.items():
+                    if details['pruned'] == True:
+                        pruned_snps.add(snp)
+                        snp_details_per_snp[snp] = details
+        
+        # Calculate LD time (only for LD jobs)
+        ld_time = 0.0
+        if ld_jobs_completed > 0:
+            ld_time = (time.time() - ld_start_time) / 60  # in minutes
+        
         # timing print and save
         fs_time = (time.time() - start_time) / 60  # in minutes
         print(f"Feature selection (ld->fs | fs) took {fs_time} mins", flush=True)
+        if ld_time > 0:
+            print(f"LD processing for {ld_jobs_completed} pipelines took {ld_time} mins", flush=True)
 
         # send pipelines with no error to be evaluated for r2 across k-folds (only pipelines with error == False)
         ray_jobs = []
@@ -427,7 +434,9 @@ class K1_Evolver(EA):
             'fs_only_count': fs_only_count,
             'ld_fs_count': ld_fs_count,
             'sequential_selector_count': sequential_selector_count,
-            'fs_ld_time_all_pipelines': fs_time
+            'fs_time': fs_time,
+            'ld_time': ld_time,
+            'pipelines_evaluated': len(evaluated_pipelines)
         }
 
         return evaluated_pipelines, eval_stats
@@ -525,8 +534,8 @@ class K1_Evolver(EA):
         # container to hold snp performance (accumulated r2, count, error flag, encoder type, encoded_x ray id(depending on r2 / count >= threshold))
         snp_perf = {}
         for snp_name in unseen_branches:
-            # initialize with best encoder as None and encoded_x as None
-            snp_perf[snp_name] = {snp_t('b_encoder'): None, snp_t('encoded_x'): None}
+            # initialize with best encoder as None, encoded_x as None, and pager_lut_sum as zeros array
+            snp_perf[snp_name] = {snp_t('b_encoder'): None, snp_t('encoded_x'): None, snp_t('pager_lut_sum'): np.zeros(3, dtype=float32_t), snp_t('pager_lut_cnt'): 0}
             for encoder in self.encoder_types:
                 # extend snp_perf with r2 and count for each of the encoders
                 snp_perf[snp_name][encoder] = {snp_t('r2'): float32_t(0.0), snp_t('cnt'): float32_t(0.0)}
@@ -537,14 +546,18 @@ class K1_Evolver(EA):
         while len(ray_jobs) > 0:
             # collect results
             finished, ray_jobs = ray.wait(ray_jobs)
-            encoding_results = ray.get(finished)[0]  # Returns dict of {encoding_name: (r2, snp, enc, error)}
+            encoding_results = ray.get(finished)[0]  # Returns dict of {encoding_name: (r2, snp, enc, error, pager_lut)}
             
             # Process results for all encodings from this single job
-            for enc_name, (r2, snp_name, lo, error) in encoding_results.items():
+            for enc_name, (r2, snp_name, lo, error, pager_lut) in encoding_results.items():
                 assert error >= 0.0, f"Error flag must be non-negative for {enc_name}. Error during SNP evaluation cannot occur."
                 # add them up
                 snp_perf[snp_name][lo][snp_t('r2')] += r2
                 snp_perf[snp_name][lo][snp_t('cnt')] += float32_t(1.0)
+                # Accumulate PAGER LUT values across all folds for averaging
+                if enc_name == 'pager' and pager_lut is not None:
+                    snp_perf[snp_name][snp_t('pager_lut_sum')] += pager_lut
+                    snp_perf[snp_name][snp_t('pager_lut_cnt')] += 1
         # timing print
         print(f"Evaluating {len(unseen_branches)} unseen branches took {(time.time() - start_time) / 60} mins", flush=True)
 
@@ -594,12 +607,21 @@ class K1_Evolver(EA):
             if snp_perf[snp_name][snp_perf[snp_name][snp_t('b_encoder')]][snp_t('r2')] / float32_t(self.k) >= self.branch_explainability_threshold:
                 enc_id = ray.put(snp_perf[snp_name][snp_t('encoded_x')])
 
+            # Get averaged PAGER LUT if encoding is pager
+            pager_lut = None
+            if snp_perf[snp_name][snp_t('b_encoder')] == snp_t('pager'):
+                pager_lut_cnt = snp_perf[snp_name][snp_t('pager_lut_cnt')]
+                if pager_lut_cnt > 0:
+                    # Average PAGER LUT values across all k-folds
+                    pager_lut = snp_perf[snp_name][snp_t('pager_lut_sum')] / float32_t(pager_lut_cnt)
+
             self.hub.update_snp_hub_r2_enc(snp=snp_name,
                                           r2=snp_perf[snp_name][snp_perf[snp_name][snp_t('b_encoder')]][snp_t('r2')] / float32_t(self.k),
                                           enc=snp_perf[snp_name][snp_t('b_encoder')],
                                           enc_x=enc_id,
                                           gen_seen=gen_seen,
-                                          snp_explainability_threshold=self.branch_explainability_threshold)
+                                          snp_explainability_threshold=self.branch_explainability_threshold,
+                                          pager_lut=pager_lut)
 
     def get_sampling(self, cnt:uint16_t, chrom_num:uint16_t) -> npt.NDArray[uint16_t]:
         """
@@ -642,8 +664,8 @@ class K1_Evolver(EA):
                 pareto_front_pipelines.append(self.population[i])
         print(f"Number of pipelines in Pareto front for post analysis: {len(pareto_front_pipelines)}", flush=True)
 
-        # # sort the Pareto front by feature count
-        # pareto_front_pipelines = sorted(pareto_front_pipelines, key=lambda x: x.get_trait_feature_cnt())
+        # Sort the Pareto front by feature count (MUST match save_and_plot_pareto_front ordering)
+        pareto_front_pipelines = sorted(pareto_front_pipelines, key=lambda x: x.get_trait_feature_cnt())
 
         # # print all the pipelines in the Pareto front
         # for pid, pipeline in enumerate(pareto_front_pipelines):
@@ -720,6 +742,83 @@ class K1_Evolver(EA):
         print(f"Utopia Point Pipeline Validation R2: {pareto_validation_r2[utopia_point_pipeline_id]['validation_r2']}", flush=True)
         print(f"Utopia Point Pipeline Feature Count: {pareto_validation_r2[utopia_point_pipeline_id]['feature_cnt']}", flush=True)
         print(f"Utopia Point Pipeline Feature Set: {pareto_validation_r2[utopia_point_pipeline_id]['feature_set']}", flush=True)
+
+        ################# SAVE PARETO FRONT PIPELINES TO CSV #################
+        # Create pareto_front_pipelines.csv with validation R2
+        pareto_data = []
+        for pid, data in pareto_validation_r2.items():
+            pareto_data.append({
+                'Pipeline ID': pid + 1,  # Start from 1 instead of 0
+                'Cross-validated R2': data['train_r2'],
+                'Validation R2': data['validation_r2'],
+                'Feature Count': data['feature_cnt'],
+                'Selector': data['selector'],
+                'Selector Params': data['selector_params'],
+                'Feature Set': ';'.join(sorted(data['feature_set']))  # Feature Set at the end
+            })
+        pareto_df = pd.DataFrame(pareto_data)
+        pareto_df.to_csv(os.path.join(self.save_directory, 'pareto_front_pipelines.csv'), index=False)
+        print("Pareto front pipelines saved to pareto_front_pipelines.csv", flush=True)
+
+        ################# PLOT VALIDATION R2 VS FEATURE COUNT #################
+        # Extract data for plotting
+        feature_counts = [data['feature_cnt'] for data in pareto_validation_r2.values()]
+        validation_r2s = [data['validation_r2'] for data in pareto_validation_r2.values()]
+        pipeline_ids = list(pareto_validation_r2.keys())
+        
+        # Create the plot
+        plt.figure(figsize=(10, 6))
+        
+        # Plot all pipelines
+        colors = ['red' if pid == utopia_point_pipeline_id else 'blue' for pid in pipeline_ids]
+        plt.scatter(feature_counts, validation_r2s, c=colors, s=100, alpha=0.6, edgecolors='black', linewidth=1.5)
+        
+        # Annotate each point with pipeline ID (shifted by +1 to start from 1)
+        for i, pid in enumerate(pipeline_ids):
+            plt.annotate(str(pid + 1), (feature_counts[i], validation_r2s[i]), 
+                        textcoords="offset points", xytext=(0, 5), ha='center', fontsize=9)
+        
+        # Set x-axis to integer increments (automatically scaled based on data range)
+        min_features = min(feature_counts)
+        max_features = max(feature_counts)
+        feature_range = max_features - min_features
+        
+        # Determine appropriate step size based on range
+        if feature_range <= 10:
+            step = 1
+        elif feature_range <= 20:
+            step = 2
+        elif feature_range <= 50:
+            step = 5
+        elif feature_range <= 100:
+            step = 10
+        else:
+            step = 20
+        
+        # Create tick positions starting from 0 or nearest multiple
+        x_min = int(min_features // step) * step
+        x_max = int(max_features // step + 1) * step
+        x_ticks = np.arange(x_min, x_max + step, step)
+        plt.xticks(x_ticks)
+        
+        plt.xlabel('Feature Count', fontsize=12)
+        plt.ylabel('Validation R²', fontsize=12)
+        plt.title('Pareto Front: Validation R² vs Feature Count', fontsize=14)
+        plt.grid(True, alpha=0.3)
+        
+        # Add legend
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor='blue', edgecolor='black', label='Pareto Front Pipeline'),
+            Patch(facecolor='red', edgecolor='black', label='Utopia Point Pipeline')
+        ]
+        plt.legend(handles=legend_elements, loc='best')
+        
+        # Save the plot
+        plt.tight_layout()
+        plt.savefig(self.save_directory + 'pareto_validation_plot.png', dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"Pareto validation plot saved to {self.save_directory}pareto_validation_plot.png", flush=True)
 
         # send snps of pipeline with utopia point to final test
         self.final_pipeline_test(pareto_validation_r2[utopia_point_pipeline_id],
@@ -855,31 +954,18 @@ class K1_Evolver(EA):
         print(f"Number of pipelines in Pareto front at the end of evolution:{len(pareto_front_pipelines)}", flush=True)
         # sort the Pareto front by feature count
         pareto_front_pipelines = sorted(pareto_front_pipelines, key=lambda x: x.get_trait_feature_cnt())
-        # save the Pareto pipeline details to a csv file
-        pareto_data = []
-        for pid, pipeline in enumerate(pareto_front_pipelines):
-            pareto_data.append({
-                'Pipeline ID': pid + 1,  # Start from 1 instead of 0
-                'Cross-validated R2': pipeline.get_trait_r2(),
-                'Feature Count': pipeline.get_trait_feature_cnt(),
-                'Feature Set': ';'.join(pipeline.get_trait_feature_names()),
-                'Selector': pipeline.get_selector_node().name,
-                'Selector Params': pipeline.get_selector_node().get_params()
-            })
-        pareto_df = pd.DataFrame(pareto_data)
-        pareto_df.to_csv(os.path.join(self.save_directory, 'pareto_front_pipelines.csv'), index=False)
-        print("Pareto front pipelines saved to pareto_front_pipelines.csv", flush=True)
+        
         # plot the Pareto front
         plt.figure(figsize=(10, 6))
-        plt.title('Pareto Front: R2 vs Feature Count')
-        plt.xlabel('Feature Count')
-        plt.ylabel('Cross-validated R2')
-        plt.grid(True)
+        plt.title('Pareto Front: Cross-validated R² vs Feature Count', fontsize=14)
+        plt.xlabel('Feature Count', fontsize=12)
+        plt.ylabel('Cross-validated R²', fontsize=12)
+        plt.grid(True, alpha=0.3)
 
-        # plot pareto front pipelines as red dots
+        # plot pareto front pipelines as blue dots
         pareto_r2 = [pipeline.get_trait_r2() for pipeline in pareto_front_pipelines]
         pareto_feat_cnt = [pipeline.get_trait_feature_cnt() for pipeline in pareto_front_pipelines]
-        plt.scatter(pareto_feat_cnt, pareto_r2, color='red', label='Pareto Front')
+        plt.scatter(pareto_feat_cnt, pareto_r2, color='blue', s=100, alpha=0.6, edgecolors='black', linewidth=1.5, label='Pareto Front')
 
         # Annotate the points with pipeline numbers (indexes in pareto front)
         for i, (feature_count, r2_score) in enumerate(zip(pareto_feat_cnt, pareto_r2)):
@@ -887,12 +973,35 @@ class K1_Evolver(EA):
                 str(i + 1),  # Text label (pipeline ID starting from 1)
                 (feature_count, r2_score),  # The point where the annotation should be
                 textcoords="offset points",  # Use offset for better readability
-                xytext=(5, 5),  # Offset position (x, y)
+                xytext=(0, 5),  # Offset position above the point
                 ha='center',  # Horizontal alignment
-                fontsize=9,
-                color='blue'
+                fontsize=9
             )
 
-        plt.legend()
-        plt.savefig(os.path.join(self.save_directory, 'pareto_front_plot.png'))
+        # Set x-axis to integer increments (automatically scaled based on data range)
+        min_features = min(pareto_feat_cnt)
+        max_features = max(pareto_feat_cnt)
+        feature_range = max_features - min_features
+        
+        # Determine appropriate step size based on range
+        if feature_range <= 10:
+            step = 1
+        elif feature_range <= 20:
+            step = 2
+        elif feature_range <= 50:
+            step = 5
+        elif feature_range <= 100:
+            step = 10
+        else:
+            step = 20
+        
+        # Create tick positions starting from 0 or nearest multiple
+        x_min = int(min_features // step) * step
+        x_max = int(max_features // step + 1) * step
+        x_ticks = np.arange(x_min, x_max + step, step)
+        plt.xticks(x_ticks)
+
+        plt.legend(loc='best')
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.save_directory, 'pareto_front_plot.png'), dpi=300, bbox_inches='tight')
         print("Pareto front plot saved to pareto_front_plot.png", flush=True)

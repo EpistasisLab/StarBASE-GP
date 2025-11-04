@@ -16,7 +16,8 @@ from ..Base.types import (rng_t, prob_t, int32_t, uint16_t, snp_t)
 from ..Base.reproduction import Reproduction
 from ..Base.hub import Hub
 from ..Base.selectors import (VarianceThresholdNode, SelectPercentileNode, SelectFweNode, SelectFromModelLasso,
-                              SelectFromModelTree, SequentialFeatureSelectorNode, FeatureEncodingFrequencySelector)
+                              SelectFromModelTree, FeatureEncodingFrequencySelector)  # SequentialFeatureSelectorNode - commented out
+                              # , SequentialFeatureSelectorNode)
 # imports from K1
 from .ld_selector import LDSelector
 from .snp_hub import K1_Hub
@@ -75,8 +76,8 @@ class K1_Reproduction(Reproduction):
         assert len(branches) > 0, "Branches set cannot be empty."
         assert seed >= 0, "Seed must be non-negative."
 
-        # selector options to choose from
-        selector_choice = rng.choice([0,1,2,3,4,5,6])
+        # selector options to choose from (removed option 5 - SequentialFeatureSelector)
+        selector_choice = rng.choice([0,1,2,3,4,6])
 
         if selector_choice == 0: # variance threshold
             return Pipeline(branch_set=branches, ld_node=LDSelector(rng=rng), selector_node=VarianceThresholdNode(rng=rng))
@@ -88,8 +89,8 @@ class K1_Reproduction(Reproduction):
             return Pipeline(branch_set=branches, ld_node=LDSelector(rng=rng), selector_node=SelectFromModelLasso(rng=rng, seed=seed))
         elif selector_choice == 4: # select from model tree
             return Pipeline(branch_set=branches, ld_node=LDSelector(rng=rng), selector_node=SelectFromModelTree(rng=rng, seed=seed))
-        elif selector_choice == 5: # sequential feature selector
-            return Pipeline(branch_set=branches, ld_node=LDSelector(rng=rng), selector_node=SequentialFeatureSelectorNode(rng=rng, seed=seed))
+        # elif selector_choice == 5: # sequential feature selector - COMMENTED OUT FOR PERFORMANCE
+        #     return Pipeline(branch_set=branches, ld_node=LDSelector(rng=rng), selector_node=SequentialFeatureSelectorNode(rng=rng, seed=seed))
         else: # feature encoding frequency selector
             return Pipeline(branch_set=branches, ld_node=LDSelector(rng=rng), selector_node=FeatureEncodingFrequencySelector(rng=rng))
 

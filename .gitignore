@@ -10,3 +10,4 @@ snp_hub.csv
 utopia_pipeline_test_results.csv
 .DS_Store
 generation_details.csv
+pareto_validation_plot.png

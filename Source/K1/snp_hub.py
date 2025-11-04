@@ -156,9 +156,12 @@ class K1_Hub(Hub):
                 (10) ld_threshold (float32_t): LD threshold, default = -1
                 (11) ld_genomic_distance (int32_t): genomic distance, default = -1
                 (12) anchor_snp (snp_t): anchor SNP used for LD pruning, default = ''
+                (13) pager_0 (float32_t): PAGER LUT value for genotype 0, default = -1
+                (14) pager_1 (float32_t): PAGER LUT value for genotype 0.5, default = -1
+                (15) pager_2 (float32_t): PAGER LUT value for genotype 1, default = -1
             """
 
-            # {snp: [res, idx, ori_rid, end_rid, enc, seen, active, gen_seen, gen_pruned, pruned_reason, ld_threshold, ld_genomic_distance, anchor_snp]}
+            # {snp: [res, idx, ori_rid, end_rid, enc, seen, active, gen_seen, gen_pruned, pruned_reason, ld_threshold, ld_genomic_distance, anchor_snp, pager_0, pager_1, pager_2]}
             self.hub = {}
 
         # will add snp, sum, bin, pos， idx, res, typ to the hub
@@ -176,7 +179,10 @@ class K1_Hub(Hub):
                        pruned_reason: snp_t = snp_t(''),
                        ld_threshold: float32_t = float32_t(-1.0),
                        ld_genomic_distance: int32_t = int32_t(-1),
-                       anchor_snp: snp_t = snp_t('')) -> None:
+                       anchor_snp: snp_t = snp_t(''),
+                       pager_0: float32_t = float32_t(-1.0),
+                       pager_1: float32_t = float32_t(-1.0),
+                       pager_2: float32_t = float32_t(-1.0)) -> None:
             """
             will take in a snp, sum, cnt, bin, and pos and add it to the hub
 
@@ -195,10 +201,13 @@ class K1_Hub(Hub):
                 (10) ld_threshold (float32_t): LD threshold, default = -1
                 (11) ld_genomic_distance (int32_t): genomic distance, default = -1
                 (12) anchor_snp (snp_t): anchor SNP used for LD pruning, default = ''
+                (13) pager_0 (float32_t): PAGER LUT value for genotype 0, default = -1
+                (14) pager_1 (float32_t): PAGER LUT value for genotype 0.5, default = -1
+                (15) pager_2 (float32_t): PAGER LUT value for genotype 1, default = -1
             """
 
             # add to hub
-            self.hub[snp] = [res,idx,ori_rid,end_rid,enc,seen,active,gen_seen,gen_pruned,pruned_reason,ld_threshold,ld_genomic_distance,anchor_snp]
+            self.hub[snp] = [res,idx,ori_rid,end_rid,enc,seen,active,gen_seen,gen_pruned,pruned_reason,ld_threshold,ld_genomic_distance,anchor_snp,pager_0,pager_1,pager_2]
             return
 
         # get snp result r^2
@@ -301,6 +310,27 @@ class K1_Hub(Hub):
             # return the type
             return self.hub[snp][12]
 
+        # get pager_0 value (LUT for genotype 0)
+        def get_pager_0(self, snp: snp_t) -> float32_t:
+            # check snp exists in the hub
+            assert snp in self.hub
+            # return the type
+            return self.hub[snp][13]
+
+        # get pager_1 value (LUT for genotype 0.5)
+        def get_pager_1(self, snp: snp_t) -> float32_t:
+            # check snp exists in the hub
+            assert snp in self.hub
+            # return the type
+            return self.hub[snp][14]
+
+        # get pager_2 value (LUT for genotype 1)
+        def get_pager_2(self, snp: snp_t) -> float32_t:
+            # check snp exists in the hub
+            assert snp in self.hub
+            # return the type
+            return self.hub[snp][15]
+
         # flip the active flag via r2
         def flip_activate_flag_r2(self, snp: snp_t) -> None:
             # check snp exists in the hub
@@ -365,7 +395,8 @@ class K1_Hub(Hub):
                               encoding:snp_t,
                               enc_x: ray.ObjectID | None,
                               gen_seen: int16_t,
-                              snp_explainability_threshold: float32_t) -> None:
+                              snp_explainability_threshold: float32_t,
+                              pager_lut: np.ndarray | None = None) -> None:
             # assert that snp is in hub
             assert snp in self.hub
             # make sure we have not seen this snp before
@@ -383,6 +414,12 @@ class K1_Hub(Hub):
             self.hub[snp][4] = encoding
             # update the generation seen
             self.hub[snp][7] = gen_seen
+
+            # Update PAGER LUT values if encoding is 'pager' and LUT is provided
+            if encoding == snp_t('pager') and pager_lut is not None and len(pager_lut) == 3:
+                self.hub[snp][13] = float32_t(pager_lut[0])  # pager_0
+                self.hub[snp][14] = float32_t(pager_lut[1])  # pager_1
+                self.hub[snp][15] = float32_t(pager_lut[2])  # pager_2
 
             # if r2 is negative, flip to inactive
             if r2 < snp_explainability_threshold:
@@ -492,34 +529,63 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
             # v[10]: ld_threshold (row[11])
             # v[11]: ld_genomic_distance (row[12])
             # v[12]: anchor_snp (row[13])
-            snp_data.append([k, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12]])
+            # v[13]: pager_0 (row[14])
+            # v[14]: pager_1 (row[15])
+            # v[15]: pager_2 (row[16])
+            snp_data.append([k, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13], v[14], v[15]])
 
         # Sort snp_data by the second column (AVG_R2)
         snp_data.sort(key=lambda x: x[1], reverse=True)  # reverse=True for descending order
 
         # Write snp hub to file
         with open(save_dir+"snp_hub.csv", 'w') as f:
-            # Write the headers for the snp_file
-            f.write("snp,chr,bp,r2,bin_num,bin_idx,encoding,seen,pruned,gen_seen,gen_pruned,pruned_reason,ld_threshold,ld_genomic_distance,anchor_snp\n")
+            # Write the headers for the snp_file (removed bin_idx column)
+            f.write("snp,chr,bp,r2,bin_num,encoding,seen,pruned,gen_seen,gen_pruned,pruned_reason,ld_threshold,ld_genomic_distance,anchor_snp,pager_0,pager_1,pager_2\n")
             for row in snp_data:
                 # split snp into chromosome and position
                 chrom, pos = row[0].split('.')
-                f.write(f"{row[0]},{chrom},{pos},{row[1]},{row[2]},{row[4]},{row[5]},{row[6]},{row[7]},{row[8]},{row[9]},{row[10]},{row[11]},{row[12]},{row[13]}\n")
+                # Add 'chr' prefix to SNP name
+                snp_with_chr = f"chr{row[0]}"
+                # Get pager values from hub
+                # row[13] = anchor_snp, row[14] = pager_0, row[15] = pager_1, row[16] = pager_2
+                # Check if values are numeric (float) and not default -1
+                try:
+                    pager_0_val = float(row[14])
+                    pager_0 = '' if pager_0_val < 0 else str(pager_0_val)
+                except (ValueError, TypeError):
+                    pager_0 = ''
+                
+                try:
+                    pager_1_val = float(row[15])
+                    pager_1 = '' if pager_1_val < 0 else str(pager_1_val)
+                except (ValueError, TypeError):
+                    pager_1 = ''
+                
+                try:
+                    pager_2_val = float(row[16])
+                    pager_2 = '' if pager_2_val < 0 else str(pager_2_val)
+                except (ValueError, TypeError):
+                    pager_2 = ''
+                
+                # Write all columns (removed bin_idx which was row[4]): row[13] is anchor_snp, then pager_0, pager_1, pager_2
+                f.write(f"{snp_with_chr},{chrom},{pos},{row[1]},{row[2]},{row[5]},{row[6]},{row[7]},{row[8]},{row[9]},{row[10]},{row[11]},{row[12]},{row[13]},{pager_0},{pager_1},{pager_2}\n")
 
         # save csv with both seen and not prunned snps
-        # Write snp hub to file
+        # Write consideration hub to file
         with open(save_dir+"consideration_hub.csv", 'w') as f:
             # Write the headers for the snp_file
             f.write("snp,r2,encoding\n")
             for row in snp_data:
                 if row[6] == True and row[7] == False:
-                    f.write(f"{row[0]},{row[1]},{row[5]}\n")
+                    # Add 'chr' prefix to SNP name
+                    snp_with_chr = f"chr{row[0]}"
+                    f.write(f"{snp_with_chr},{row[1]},{row[5]}\n")
         return
 
     # update snp hub with best univariate r2 result and corresponding encoder type
-    def update_snp_hub_r2_enc(self, snp:snp_t, r2:float32_t, enc: snp_t, enc_x: ray.ObjectID | None, gen_seen: int16_t, snp_explainability_threshold: float32_t) -> None:
+    def update_snp_hub_r2_enc(self, snp:snp_t, r2:float32_t, enc: snp_t, enc_x: ray.ObjectID | None, gen_seen: int16_t, snp_explainability_threshold: float32_t, pager_lut: np.ndarray | None = None) -> None:
         # update Hub object: if r2 is negative, flip prunned flag
-        self.db.update_r2_enc(snp, r2, enc, enc_x, gen_seen, snp_explainability_threshold)
+        self.db.update_r2_enc(snp, r2, enc, enc_x, gen_seen, snp_explainability_threshold, pager_lut)
         # update Consideration_Hub object: if r2 is less than threshold, remove snp from non prunned
         if r2 < snp_explainability_threshold:
             self.consider.remove_snp(snp)
