@@ -196,7 +196,7 @@ class K1_Evolver(EA):
             # Calculate total generation time
             gen_time = (time.time() - start_time) / 60  # in minutes
             print(f"Time to finish generation: {gen_time} minutes", flush=True)
-            
+
             # Add evaluation stats and timing to generation details
             gen_stats.update({
                 'total_time_mins': gen_time,
@@ -204,7 +204,7 @@ class K1_Evolver(EA):
                 'pipelines_evaluated': eval_stats['pipelines_evaluated']
             })
             generation_details.append(gen_stats)
-            
+
             print('-'*50, flush=True)
 
         # prints for the end of a run and the final population
@@ -215,7 +215,7 @@ class K1_Evolver(EA):
         self.save_and_plot_pareto_front()
         # save the hubs details
         self.hub.save_hubs(self.save_directory)
-        
+
         # save generation details to CSV
         if len(generation_details) > 0:
             gen_df = pd.DataFrame(generation_details)
@@ -295,7 +295,7 @@ class K1_Evolver(EA):
             Generation number for logging purposes.
 
         Returns:
-        Tuple[List[Pipeline], Dict]: 
+        Tuple[List[Pipeline], Dict]:
             - List of evaluated pipelines (pipelines updated with evaluation results)
             - Dictionary containing evaluation statistics (fs_only_count, ld_fs_count, sequential_selector_count, fs_time)
         """
@@ -369,12 +369,12 @@ class K1_Evolver(EA):
                     if details['pruned'] == True:
                         pruned_snps.add(snp)
                         snp_details_per_snp[snp] = details
-        
+
         # Calculate LD time (only for LD jobs)
         ld_time = 0.0
         if ld_jobs_completed > 0:
             ld_time = (time.time() - ld_start_time) / 60  # in minutes
-        
+
         # timing print and save
         fs_time = (time.time() - start_time) / 60  # in minutes
         print(f"Feature selection (ld->fs | fs) took {fs_time} mins", flush=True)
@@ -523,10 +523,10 @@ class K1_Evolver(EA):
             # Launch one Ray job per SNP per fold that evaluates ALL 9 encodings
             for _, fold_data in self.train_fold_dict_ray.items():
                 ray_jobs.append(ray_utils.ray_snp_eval_all_encodings.remote(
-                    X = self.hub.get_ori_ray_id(snp), 
-                    y = self.all_y_ray_id, 
+                    X = self.hub.get_ori_ray_id(snp),
+                    y = self.all_y_ray_id,
                     train_idx = fold_data['train_idx'],
-                    valid_idx = fold_data['val_idx'], 
+                    valid_idx = fold_data['val_idx'],
                     snp = snp
                 ))
         assert len(ray_jobs) == len(unseen_branches) * self.k  # k folds for each unseen snp (all encodings in one call)
@@ -547,7 +547,7 @@ class K1_Evolver(EA):
             # collect results
             finished, ray_jobs = ray.wait(ray_jobs)
             encoding_results = ray.get(finished)[0]  # Returns dict of {encoding_name: (r2, snp, enc, error, pager_lut)}
-            
+
             # Process results for all encodings from this single job
             for enc_name, (r2, snp_name, lo, error, pager_lut) in encoding_results.items():
                 assert error >= 0.0, f"Error flag must be non-negative for {enc_name}. Error during SNP evaluation cannot occur."
@@ -565,7 +565,7 @@ class K1_Evolver(EA):
         ray_jobs = []
         for snp_name in unseen_branches:
             # find best encoder for the snp
-            best_r2 = float32_t(-100000.0)
+            best_r2 = float32_t(-10000000000000.0)
             best_encoder = None
 
             # go through each encoder and find the best average r2
@@ -588,6 +588,13 @@ class K1_Evolver(EA):
                                                                  train_idx = self.train_idx_ray,
                                                                  enc = best_encoder,
                                                                  snp = snp_name))
+            elif float32_t(0.0) > self.branch_explainability_threshold and best_encoder != snp_t('additive'):
+                ray_jobs.append(ray_utils.ray_snp_encoder.remote(X = self.hub.get_ori_ray_id(snp_name),
+                                                                 y = self.all_y_ray_id,
+                                                                 train_idx = self.train_idx_ray,
+                                                                 enc = best_encoder,
+                                                                 snp = snp_name))
+
         # process encoded snp results
         start_time = time.time()
         count = 0
@@ -605,6 +612,9 @@ class K1_Evolver(EA):
             enc_id = None
             # set enc_id to those snps with r2 / k >= threshold
             if snp_perf[snp_name][snp_perf[snp_name][snp_t('b_encoder')]][snp_t('r2')] / float32_t(self.k) >= self.branch_explainability_threshold:
+                enc_id = ray.put(snp_perf[snp_name][snp_t('encoded_x')])
+            # or set enc_id to those snps if threshold < 0.0
+            elif float32_t(0.0) > self.branch_explainability_threshold and snp_perf[snp_name][snp_t('b_encoder')] != snp_t('additive'):
                 enc_id = ray.put(snp_perf[snp_name][snp_t('encoded_x')])
 
             # Get averaged PAGER LUT if encoding is pager
@@ -765,24 +775,24 @@ class K1_Evolver(EA):
         feature_counts = [data['feature_cnt'] for data in pareto_validation_r2.values()]
         validation_r2s = [data['validation_r2'] for data in pareto_validation_r2.values()]
         pipeline_ids = list(pareto_validation_r2.keys())
-        
+
         # Create the plot
         plt.figure(figsize=(10, 6))
-        
+
         # Plot all pipelines
         colors = ['red' if pid == utopia_point_pipeline_id else 'blue' for pid in pipeline_ids]
         plt.scatter(feature_counts, validation_r2s, c=colors, s=100, alpha=0.6, edgecolors='black', linewidth=1.5)
-        
+
         # Annotate each point with pipeline ID (shifted by +1 to start from 1)
         for i, pid in enumerate(pipeline_ids):
-            plt.annotate(str(pid + 1), (feature_counts[i], validation_r2s[i]), 
+            plt.annotate(str(pid + 1), (feature_counts[i], validation_r2s[i]),
                         textcoords="offset points", xytext=(0, 5), ha='center', fontsize=9)
-        
+
         # Set x-axis to integer increments (automatically scaled based on data range)
         min_features = min(feature_counts)
         max_features = max(feature_counts)
         feature_range = max_features - min_features
-        
+
         # Determine appropriate step size based on range
         if feature_range <= 10:
             step = 1
@@ -794,18 +804,18 @@ class K1_Evolver(EA):
             step = 10
         else:
             step = 20
-        
+
         # Create tick positions starting from 0 or nearest multiple
         x_min = int(min_features // step) * step
         x_max = int(max_features // step + 1) * step
         x_ticks = np.arange(x_min, x_max + step, step)
         plt.xticks(x_ticks)
-        
+
         plt.xlabel('Feature Count', fontsize=12)
         plt.ylabel('Validation R²', fontsize=12)
         plt.title('Pareto Front: Validation R² vs Feature Count', fontsize=14)
         plt.grid(True, alpha=0.3)
-        
+
         # Add legend
         from matplotlib.patches import Patch
         legend_elements = [
@@ -813,7 +823,7 @@ class K1_Evolver(EA):
             Patch(facecolor='red', edgecolor='black', label='Utopia Point Pipeline')
         ]
         plt.legend(handles=legend_elements, loc='best')
-        
+
         # Save the plot
         plt.tight_layout()
         plt.savefig(self.save_directory + 'pareto_validation_plot.png', dpi=300, bbox_inches='tight')
@@ -954,7 +964,7 @@ class K1_Evolver(EA):
         print(f"Number of pipelines in Pareto front at the end of evolution:{len(pareto_front_pipelines)}", flush=True)
         # sort the Pareto front by feature count
         pareto_front_pipelines = sorted(pareto_front_pipelines, key=lambda x: x.get_trait_feature_cnt())
-        
+
         # plot the Pareto front
         plt.figure(figsize=(10, 6))
         plt.title('Pareto Front: Cross-validated R² vs Feature Count', fontsize=14)
@@ -982,7 +992,7 @@ class K1_Evolver(EA):
         min_features = min(pareto_feat_cnt)
         max_features = max(pareto_feat_cnt)
         feature_range = max_features - min_features
-        
+
         # Determine appropriate step size based on range
         if feature_range <= 10:
             step = 1
@@ -994,7 +1004,7 @@ class K1_Evolver(EA):
             step = 10
         else:
             step = 20
-        
+
         # Create tick positions starting from 0 or nearest multiple
         x_min = int(min_features // step) * step
         x_max = int(max_features // step + 1) * step
