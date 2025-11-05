@@ -115,6 +115,11 @@ class K1_Evolver(EA):
         return
 
     def evolve(self, gens: uint16_t) -> None:
+        # print initial hub stats
+        print('Initial Hub details:')
+        self.hub.seen_snps_proportion()
+        print('', flush=True)
+
         # list to store the generation details - front zero size, still consider snp set size, number of snps pruned
         generation_details = []
         # start the timer for the entire process
