@@ -138,7 +138,7 @@ class EA(ABC):
         assert 0 <= window_distance, "window_distance must be non-negative."
         self.window_distance = window_distance
 
-        assert 0.0 <= branch_explainability_threshold <= 1.0, "branch_explainability_threshold must be between 0 and 1."
+        assert branch_explainability_threshold <= 1.0, "branch_explainability_threshold must be less than 1.0"
         self.branch_explainability_threshold = branch_explainability_threshold
 
         assert isinstance(ld_flag, bool), "ld_flag must be a boolean."
