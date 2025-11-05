@@ -82,6 +82,7 @@ class K1_Hub(Hub):
 
         # remove snp from the hub when it has been flagged as inactive
         def remove_snp(self, snp: snp_t) -> None:
+            assert False, "Debugging - remove this line later"
             # get chromosome and position
             chrom, pos = snp_chrm_pos(snp)
 
