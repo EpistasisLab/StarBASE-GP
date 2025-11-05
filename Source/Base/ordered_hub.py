@@ -19,8 +19,21 @@ class Ordered_Hub:
         self.order = {}
         return
 
-    # get window for a given SNP
     def get_window(self, chrom: int32_t, position: int32_t, idx: int32_t, distance: int32_t) -> List[int32_t]:
+        """
+        Given an snp position and its index in the ordered list for a chromosome,
+        return all positions within the given distance from the position.
+
+        Args:
+            chrom (int32_t): chromosome number for the SNP
+            position (int32_t): base pair position for the SNP
+            idx (int32_t): index of the SNP in the ordered list for the chromosome (hub tracks this)
+            distance (int32_t): distance from the SNP position to search for other SNPs
+
+        Returns:
+            List[int32_t]: List of positions within the given distance from the SNP position.
+        """
+
         # make sure the chromosome exists
         assert chrom in self.order
         # make sure idx is within the bounds of the order dictionary for a chromosome
@@ -55,15 +68,30 @@ class Ordered_Hub:
 
         return window_list
 
-    # count the total number of objects in the order dictionary
     def count_order_objs(self) -> uint32_t:
+        """
+        Count the total number of objects in the order dictionary.
+
+        Returns:
+            uint32_t: Total number of objects in the order dictionary.
+        """
         count = uint32_t(0)
         for _, order in self.order.items():
             count += uint32_t(len(order))
         return count
 
-    # create ordered lists for each chromosome based on the snps provided
     def generate_order(self, snps: List[snp_t]) -> List[Tuple[snp_t, int32_t]]:
+        """
+        Given a list of SNPs, generate the order dictionary and return a list of tuples
+        containing each SNP and its index in the sorted order for its chromosome.
+
+        Args:
+            snps (List[snp_t]): List of SNPs to process.
+
+        Returns:
+            List[Tuple[snp_t, int32_t]]: List of tuples containing each SNP and its index in the sorted order for its chromosome.
+        """
+
         # quick checks
         assert len(snps) > 0
 

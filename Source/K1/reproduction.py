@@ -14,17 +14,16 @@
 from ..Base.pipeline import Pipeline
 from ..Base.types import (rng_t, prob_t, int32_t, uint16_t, snp_t)
 from ..Base.reproduction import Reproduction
-from ..Base.hub import Hub
 from ..Base.selectors import (VarianceThresholdNode, SelectPercentileNode, SelectFweNode, SelectFromModelLasso,
-                              SelectFromModelTree, FeatureEncodingFrequencySelector)  # SequentialFeatureSelectorNode - commented out
-                              # , SequentialFeatureSelectorNode)
+                              SelectFromModelTree, FeatureEncodingFrequencySelector)
+
 # imports from K1
 from .ld_selector import LDSelector
 from .snp_hub import K1_Hub
 
 # additional imports
 from typeguard import typechecked
-from typing import Tuple, Set
+from typing import Set
 import numpy as np
 import copy as cp
 
@@ -67,17 +66,21 @@ class K1_Reproduction(Reproduction):
     def generate_random_pipeline(self, rng: rng_t, branches: Set, seed: int) -> Pipeline:
         """
         Function to generate a random pipeline during the initialization of the population.
+
         Parameters:
-        rng (rng_t): A numpy random number generator from the evolver
-        branches (Set): A set of branches to add to the pipeline (univariate snps or interactions (K2, K3, ...))
-        seed (int): A seed to use for random_states within pipeline selector/ld nodes (if needed)
+            rng (rng_t): A numpy random number generator from the evolver
+            branches (Set): A set of branches to add to the pipeline (univariate snps or interactions (K2, K3, ...))
+            seed (int): A seed to use for random_states within pipeline selector/ld nodes (if needed)
+
+        Returns:
+            Pipeline: A randomly generated pipeline
         """
         # quick checks
         assert len(branches) > 0, "Branches set cannot be empty."
         assert seed >= 0, "Seed must be non-negative."
 
-        # selector options to choose from (removed option 5 - SequentialFeatureSelector)
-        selector_choice = rng.choice([0,1,2,3,4,6])
+        # selector options to choose from
+        selector_choice = rng.choice([0,1,2,3,4,5])
 
         if selector_choice == 0: # variance threshold
             return Pipeline(branch_set=branches, ld_node=LDSelector(rng=rng), selector_node=VarianceThresholdNode(rng=rng))
@@ -89,8 +92,6 @@ class K1_Reproduction(Reproduction):
             return Pipeline(branch_set=branches, ld_node=LDSelector(rng=rng), selector_node=SelectFromModelLasso(rng=rng, seed=seed))
         elif selector_choice == 4: # select from model tree
             return Pipeline(branch_set=branches, ld_node=LDSelector(rng=rng), selector_node=SelectFromModelTree(rng=rng, seed=seed))
-        # elif selector_choice == 5: # sequential feature selector - COMMENTED OUT FOR PERFORMANCE
-        #     return Pipeline(branch_set=branches, ld_node=LDSelector(rng=rng), selector_node=SequentialFeatureSelectorNode(rng=rng, seed=seed))
         else: # feature encoding frequency selector
             return Pipeline(branch_set=branches, ld_node=LDSelector(rng=rng), selector_node=FeatureEncodingFrequencySelector(rng=rng))
 
@@ -99,12 +100,12 @@ class K1_Reproduction(Reproduction):
         Function to mutate a given parent pipeline.
 
         Parameters:
-        rng (rng_t): A numpy random number generator from the evolver
-        parent (Pipeline): The parent pipeline to be mutated
-        hub: An interface to a branch hub to get branch specific information
+            rng (rng_t): A numpy random number generator from the evolver
+            parent (Pipeline): The parent pipeline to be mutated
+            hub: An interface to a branch hub to get branch specific information
 
         Returns:
-        Tuple[Pipeline, uint16_t]: The mutated pipeline and the number of mutations applied
+            Pipeline: The mutated pipeline and the number of mutations applied
         """
         # quick checks: make sure parent has at least one branch
         assert len(parent.get_trait_feature_names()) > 0, "Parent pipeline must have at least one branch to mutate."
@@ -136,17 +137,18 @@ class K1_Reproduction(Reproduction):
     def mutate_post_crossover(self, rng: rng_t, offspring: Pipeline, hub: K1_Hub) -> Pipeline:
         """
         Function to mutate an offspring post being generated from crossover operation.
-        Note that we use the original branch set from the offspring to determine number of mutations.
-        The offspring has not been evaluated yet, so there are no trait_feature_names to use.
+        Note that this mutation may be different from the standard mutation operation.
+        I.e., offspring passed will not have trait features set.
 
         Parameters:
-        rng (rng_t): A numpy random number generator from the evolver
-        offspring (Pipeline): The offspring pipeline generated from crossover operation
-        hub: An interface to a branch hub to get branch specific information
+            rng (rng_t): A numpy random number generator from the evolver
+            offspring (Pipeline): The offspring pipeline generated from crossover operation
+            hub: An interface to a branch hub to get branch specific information
 
         Returns:
-        Tuple[Pipeline, uint16_t]: The mutated offspring pipeline and the number of mutations applied
+            Pipeline: The mutated offspring pipeline
         """
+
         # quick checks: make sure offspring has at least one branch
         assert len(offspring.get_branch_set()) > 0, "Offspring pipeline must have at least one branch to mutate."
         # make sure none of the branches are inactive
@@ -181,13 +183,14 @@ class K1_Reproduction(Reproduction):
         Function to mutate a given anchor branch SNP.
 
         Parameters:
-        rng (rng_t): A numpy random number generator from the evolver
-        branch (snp_t): The branch SNP to mutate
-        hub: An interface to a branch hub to get branch specific information
+            rng (rng_t): A numpy random number generator from the evolver
+            branch (snp_t): The branch SNP to mutate
+            hub: An interface to a branch hub to get branch specific information
 
         Returns:
-        snp_t: The mutated branch SNP
+            snp_t: The mutated branch SNP
         """
+
         # quick checks
         assert hub.get_active_flag(branch), "Anchor branch must be active in the hub to mutate"
         assert '.' in branch, "Anchor branch SNP must be in the format 'chrom.pos'"
@@ -197,8 +200,8 @@ class K1_Reproduction(Reproduction):
                                                                                 self.m_out_win_p / (self.m_in_win_p + self.m_out_win_p + self.m_out_chr_p),
                                                                                 self.m_out_chr_p / (self.m_in_win_p + self.m_out_win_p + self.m_out_chr_p)])
         # smart or random mutation roll
-        ran_roll = rng.choice([True, False], p=[self.mut_ran_p / (self.mut_ran_p + self.mut_smt_p),
-                                                           self.mut_smt_p / (self.mut_ran_p + self.mut_smt_p)])
+        ran_roll = rng.choice([True, False], p=[self.mut_ran_p / (self.mut_ran_p + self.mut_smt_p), self.mut_smt_p / (self.mut_ran_p + self.mut_smt_p)])
+
         # perform mutation based on type
         if mutation_type == 'in_window':
             if ran_roll:
@@ -222,13 +225,13 @@ class K1_Reproduction(Reproduction):
         Assuming that these parents have been evaluated so can use trait_feature_names branches.
 
         Parameters:
-        rng (rng_t): A numpy random number generator from the evolver
-        parent1 (Pipeline): The first parent pipeline
-        parent2 (Pipeline): The second parent pipeline
-        hub: An interface to a branch hub to get branch specific information
+            rng (rng_t): A numpy random number generator from the evolver
+            parent1 (Pipeline): The first parent pipeline
+            parent2 (Pipeline): The second parent pipeline
+            hub: An interface to a branch hub to get branch specific information
 
         Returns:
-        Pipeline: The offspring pipeline generated from the two parents
+            Pipeline: The offspring pipeline generated from the two parents
         """
         # quick checks: make sure both parents have at least one branch that are active
         assert len(hub.remove_inactive_branches(parent1.get_trait_feature_names())) > 0, "Parent 1 pipeline must have at least one active branch to perform crossover."
@@ -260,7 +263,6 @@ class K1_Reproduction(Reproduction):
                             selector_node=cp.deepcopy(parent1.selector_node if rng.choice([True, False]) else parent2.selector_node))
         else: # smart crossover
             r2 = np.array([hub.get_r2(branch) for branch in combined_branches])
-            prob_dist = r2 / np.sum(r2)
-            return Pipeline(branch_set=set(rng.choice(list(combined_branches), size=num_branches, replace=False, p=prob_dist)),
+            return Pipeline(branch_set=set(rng.choice(list(combined_branches), size=num_branches, replace=False, p=r2 / np.sum(r2))),
                             ld_node=cp.deepcopy(parent1.ld_node if rng.choice([True, False]) else parent2.ld_node),
                             selector_node=cp.deepcopy(parent1.selector_node if rng.choice([True, False]) else parent2.selector_node))

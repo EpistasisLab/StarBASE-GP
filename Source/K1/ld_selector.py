@@ -3,10 +3,9 @@
 ##########################################################################################
 
 from ..Base.selectors import SelectorNode
-from ..Base.types import (rng_t, prob_t, int32_t, uint16_t, float32_t)
+from ..Base.types import (rng_t, float32_t)
 
 from decimal import Decimal
-from typing import Dict
 import numpy as np
 from typeguard import typechecked
 import pandas as pd
@@ -14,7 +13,6 @@ import statsmodels.api as sm
 from statsmodels.stats.multitest import multipletests
 import numba
 
-# Numba-optimized helper functions for LD calculation and pruning
 @numba.njit(cache=True)
 def calculate_ld_numba(x1, x2):
     """
@@ -22,7 +20,7 @@ def calculate_ld_numba(x1, x2):
     Computes Pearson correlation coefficient and squares it.
     """
     n = len(x1)
-    
+
     # Calculate means
     mean_x1 = 0.0
     mean_x2 = 0.0
@@ -31,26 +29,26 @@ def calculate_ld_numba(x1, x2):
         mean_x2 += x2[i]
     mean_x1 /= n
     mean_x2 /= n
-    
+
     # Calculate correlation
     numerator = 0.0
     sum_sq_x1 = 0.0
     sum_sq_x2 = 0.0
-    
+
     for i in range(n):
         diff_x1 = x1[i] - mean_x1
         diff_x2 = x2[i] - mean_x2
         numerator += diff_x1 * diff_x2
         sum_sq_x1 += diff_x1 * diff_x1
         sum_sq_x2 += diff_x2 * diff_x2
-    
+
     # Avoid division by zero
     if sum_sq_x1 == 0.0 or sum_sq_x2 == 0.0:
         return 0.0
-    
+
     correlation = numerator / (np.sqrt(sum_sq_x1) * np.sqrt(sum_sq_x2))
     r_squared = correlation * correlation
-    
+
     return r_squared
 
 @numba.njit(cache=True, parallel=True)
@@ -58,17 +56,18 @@ def compute_ld_matrix(X_array, snp_indices):
     """
     Compute pairwise LD matrix for a subset of SNPs.
     Uses parallel computation for speed.
-    
+
     Parameters:
-    - X_array: 2D array of shape (n_samples, n_snps)
-    - snp_indices: indices of SNPs to compute LD for
-    
+        X_array: 2D array of shape (n_samples, n_snps)
+        snp_indices: indices of SNPs to compute LD for
+
     Returns:
-    - ld_matrix: symmetric matrix of LD values
+        ld_matrix: symmetric matrix of LD values
     """
+
     n_snps = len(snp_indices)
     ld_matrix = np.zeros((n_snps, n_snps), dtype=np.float32)
-    
+
     for i in numba.prange(n_snps):
         idx_i = snp_indices[i]
         for j in range(i + 1, n_snps):
@@ -76,7 +75,7 @@ def compute_ld_matrix(X_array, snp_indices):
             ld_val = calculate_ld_numba(X_array[:, idx_i], X_array[:, idx_j])
             ld_matrix[i, j] = ld_val
             ld_matrix[j, i] = ld_val  # Symmetric
-    
+
     return ld_matrix
 
 @numba.njit(fastmath=True, cache=True)
@@ -84,20 +83,21 @@ def prune_snps_by_ld(ld_matrix, marginal_r2_array, ld_threshold):
     """
     Identify SNPs to remove based on LD threshold.
     Keeps SNP with higher marginal R².
-    
+
     Parameters:
-    - ld_matrix: pairwise LD matrix
-    - marginal_r2_array: array of marginal R² values for each SNP
-    - ld_threshold: LD threshold for pruning
-    
+        ld_matrix: pairwise LD matrix
+        marginal_r2_array: array of marginal R² values for each SNP
+        ld_threshold: LD threshold for pruning
+
     Returns:
-    - pruned_indices: set of indices to remove
-    - anchor_indices: anchor SNP index for each pruned SNP (-1 if not pruned)
+        pruned_indices: set of indices to remove
+        anchor_indices: anchor SNP index for each pruned SNP (-1 if not pruned)
     """
+    
     n_snps = ld_matrix.shape[0]
     pruned = np.zeros(n_snps, dtype=np.bool_)
     anchor_indices = np.full(n_snps, -1, dtype=np.int32)
-    
+
     for i in range(n_snps):
         if pruned[i]:
             continue
@@ -112,32 +112,29 @@ def prune_snps_by_ld(ld_matrix, marginal_r2_array, ld_threshold):
                     pruned[i] = True
                     anchor_indices[i] = j
                     break  # Move to next i since i is pruned
-    
+
     return pruned, anchor_indices
 
 @typechecked
 class LDSelector(SelectorNode):
     def __init__(self, rng: rng_t):
+        # threshold values in steps of 0.05 between 0.5 and 0.95
+        values = [float(Decimal('0.5') + Decimal('0.05') * i) for i in range(10)] # using Decimal for precision
+        # genomic distances in steps of 100,000 between 500,000 and 1,000,000
+        distance_choices = list(range(500000, 1000001, 100000))
+        self.params = {
+            'threshold': rng.choice(values),
+            'genomic_distance': rng.choice(distance_choices)
+        }
 
-            # threshold values in steps of 0.05 between 0.5 and 0.95
-            values = [float(Decimal('0.5') + Decimal('0.05') * i) for i in range(10)] # using Decimal for precision
-            # genomic distances in steps of 100,000 between 500,000 and 1,000,000
-            distance_choices = list(range(500000, 1000001, 100000))
-            self.params = {
-                'threshold': rng.choice(values),
-                'genomic_distance': rng.choice(distance_choices)
-            }
+        self.threshold = self.params['threshold']
+        self.genomic_distance = self.params['genomic_distance']
+        self.selected_features_ = None
+        self.bool_mask = None
+        self.name_of_selected_features = None
 
-            # todo: only use params dictionary if possible?
-            self.threshold = self.params['threshold']
-            self.genomic_distance = self.params['genomic_distance']
-            self.selected_features_ = None
-            self.bool_mask = None
-            self.name_of_selected_features = None
-
-            # dictionary to store the details of SNPs after LD pruning - pruned flag, reason for pruning, threshold used, genomic distance used, and anchor SNP
-            self.snp_details_after_ld = {}
-
+        # dictionary to store the details of SNPs after LD pruning - pruned flag, reason for pruning, threshold used, genomic distance used, and anchor SNP
+        self.snp_details_after_ld = {}
 
     def fit(self, X_original, X_encoded, y, snp_r2_dict):
         if X_original.empty:
@@ -211,24 +208,24 @@ class LDSelector(SelectorNode):
                     snp = group[0]
                     final_selected_snps.append(snp)
                     continue
-                
+
                 # Convert group to numpy array for numba processing
                 group_df = genotype_df_original[group]
                 snp_list = group_df.columns.tolist()
                 X_group_array = group_df.values  # Shape: (n_samples, n_snps_in_group)
-                
+
                 # Get marginal R² values for this group
                 marginal_r2_group = np.array([marginal_r2[snp] for snp in snp_list], dtype=np.float32)
-                
+
                 # Create indices for all SNPs (0 to n_snps_in_group-1)
                 snp_indices = np.arange(len(snp_list), dtype=np.int32)
-                
+
                 # Compute LD matrix using optimized numba function
                 ld_matrix = compute_ld_matrix(X_group_array, snp_indices)
-                
+
                 # Prune SNPs based on LD using optimized numba function
                 pruned_mask, anchor_indices = prune_snps_by_ld(ld_matrix, marginal_r2_group, ld_threshold)
-                
+
                 # Update pruned SNPs and anchor details
                 for local_idx, snp in enumerate(snp_list):
                     if pruned_mask[local_idx]:
@@ -326,17 +323,17 @@ class LDSelector(SelectorNode):
         Transform the data to include only the selected features.
 
         Parameters:
-        - X (array-like): The input features (2D array of shape [n_samples, n_features]).
+            X (array-like): The input features (2D array of shape [n_samples, n_features]).
 
         Returns:
-        - X_transformed (array-like): The transformed array with only selected features.
+            X_transformed (array-like): The transformed array with only selected features.
         """
+
         if self.selected_features_ is None:
             raise RuntimeError("LDSelector has not been fitted yet.")
         return X[:, self.bool_mask]
 
     def mutate(self, rng: rng_t):
-
         # shift is a rng from normal distribution with a change in 1st decimal place
         shift = 0.05 * rng.choice([-1.0, 1.0])
 
@@ -368,12 +365,12 @@ class LDSelector(SelectorNode):
 
     def get_feature_count(self):
         """
-            Get the number of features selected by the selector.
+        Get the number of features selected by the selector.
 
-            Returns:
-            - int: The number of features selected. If the selector has not been fitted yet,
-           raises a RuntimeError.
+        Returns:
+            int: The number of features selected. If the selector has not been fitted yet, raises a RuntimeError.
         """
+
         if self.selected_features_ is None:
             raise RuntimeError("LDSelector has not been fitted yet.")
 

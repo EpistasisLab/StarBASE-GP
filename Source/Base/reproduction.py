@@ -52,17 +52,17 @@ class Reproduction(ABC):
     def generate_random_pipeline(self, rng: rng_t, branches: Set, seed: int) -> Pipeline:
         """
         Function to generate a random pipeline during the initialization of the population.
+
         Parameters:
-        rng (rng_t): A numpy random number generator from the evolver
-        branches (Set): A set of branches to add to the pipeline (univariate snps or interactions (K2, K3, ...))
-        seed (int): A seed to use for random_states within pipeline selector/ld nodes (if needed)
+            rng (rng_t): A numpy random number generator from the evolver
+            branches (Set): A set of branches to add to the pipeline (univariate snps or interactions (K2, K3, ...))
+            seed (int): A seed to use for random_states within pipeline selector/ld nodes (if needed)
         """
         pass
 
-    # method to generate the order of variation operators
     def variation_order(self, rng: rng_t, offspring_cnt: uint16_t) -> Tuple[List[snp_t], uint16_t]:
         """
-        Function to generate the order of variation operators to be applied to generate offspring.
+        Generate the order of variation operators to be applied to generate offspring.
         The order is determined by the probabilities of mutation and crossover.
         We return a list with the names of the operators in the order they should be applied.
         E.g.: ['m', 'c', 'm', 'c', ...]
@@ -71,12 +71,12 @@ class Reproduction(ABC):
         Mutation means one parent is required
 
         Parameters:
-        rng (rng_t): A numpy random number generator from the evolver
-        offpring_cnt (pop_size_t): The number of offspring to generate
+            rng (rng_t): A numpy random number generator from the evolver
+            offpring_cnt (pop_size_t): The number of offspring to generate
 
         Returns:
-        List[snp_t]: A list of strings representing the order of variation operators to be applied
-        pop_size_t: The number of parents needed to generate the offspring
+            List[snp_t]: A list of strings representing the order of variation operators to be applied
+            pop_size_t: The number of parents needed to generate the offspring
         """
         # parents needed by variantion operators
         parent_count = {'m': 1, 'c': 2}
@@ -91,7 +91,6 @@ class Reproduction(ABC):
         # return the order and number of parents needed
         return order, uint16_t(sum(parent_count[op] for op in order))
 
-    # method to iterate though variation operations and generate offspring
     def produce_offspring(self,
                           rng: rng_t,
                           hub: Hub,
@@ -99,6 +98,21 @@ class Reproduction(ABC):
                           population: List[Pipeline],
                           parent_ids: List[uint16_t],
                           order: List[snp_t]) -> List[Pipeline]:
+        """
+        Generate offspring pipelines based on the given order of variation operations.
+
+        Parameters:
+            rng (rng_t): A numpy random number generator from the evolver
+            hub: An interface to a branch hub to get branch specific information
+            offspring_cnt (uint16_t): The number of offspring to generate
+            population (List[Pipeline]): The current population of pipelines
+            parent_ids (List[uint16_t]): The list of parent IDs to use for generating offspring
+            order (List[snp_t]): The order of variation operations to apply
+
+        Returns:
+            List[Pipeline]: The list of generated offspring pipelines
+        """
+
         # quick checks
         assert len(parent_ids) > 0
         assert len(population) > 0
@@ -141,12 +155,12 @@ class Reproduction(ABC):
         Function to mutate a given parent pipeline.
 
         Parameters:
-        rng (rng_t): A numpy random number generator from the evolver
-        parent (Pipeline): The parent pipeline to be mutated
-        hub: An interface to a branch hub to get branch specific information
+            rng (rng_t): A numpy random number generator from the evolver
+            parent (Pipeline): The parent pipeline to be mutated
+            hub: An interface to a branch hub to get branch specific information
 
         Returns:
-        Tuple[Pipeline, uint16_t]: The mutated pipeline and the number of mutations applied
+            Pipeline: The mutated offspring pipeline
         """
         pass
 
@@ -154,14 +168,16 @@ class Reproduction(ABC):
     def mutate_post_crossover(self, rng: rng_t, offspring: Pipeline, hub: Hub) -> Pipeline:
         """
         Function to mutate an offspring post being generated from crossover operation.
+        Note that this mutation may be different from the standard mutation operation.
+        I.e., offspring passed will not have trait features set.
 
         Parameters:
-        rng (rng_t): A numpy random number generator from the evolver
-        offspring (Pipeline): The offspring pipeline generated from crossover operation
-        hub: An interface to a branch hub to get branch specific information
+            rng (rng_t): A numpy random number generator from the evolver
+            offspring (Pipeline): The offspring pipeline generated from crossover operation
+            hub: An interface to a branch hub to get branch specific information
 
         Returns:
-        Tuple[Pipeline, uint16_t]: The mutated offspring pipeline and the number of mutations applied
+            Pipeline: The mutated offspring pipeline
         """
         pass
 
@@ -169,20 +185,32 @@ class Reproduction(ABC):
     def crossover(self, rng: rng_t, parent1: Pipeline, parent2: Pipeline, hub: Hub) -> Pipeline:
         """
         Function to perform crossover between two parents to generate an offspring pipeline.
+        Assuming that these parents have been evaluated so can use trait_feature_names branches.
 
         Parameters:
-        rng (rng_t): A numpy random number generator from the evolver
-        parent1 (Pipeline): The first parent pipeline
-        parent2 (Pipeline): The second parent pipeline
-        hub: An interface to a branch hub to get branch specific information
+            rng (rng_t): A numpy random number generator from the evolver
+            parent1 (Pipeline): The first parent pipeline
+            parent2 (Pipeline): The second parent pipeline
+            hub: An interface to a branch hub to get branch specific information
 
         Returns:
-        Pipeline: The offspring pipeline generated from the two parents
+            Pipeline: The offspring pipeline generated from the two parents
         """
         pass
 
-    # calculate number of branches to add within the limits of branch_max and branch_min
     def num_branches_to_add(self, rng: rng_t, branches: Set) -> uint16_t:
+        """
+        Calculate the number of branches to add within a mutated pipeline.
+        Standardized for all derived classes to use
+
+        Args:
+            rng (rng_t): A numpy random number generator from the evolver
+            branches (Set): A set of branches in the pipeline
+
+        Returns:
+            uint16_t: The number of branches to add
+        """
+
         # quick checks
         assert len(branches) <= self.branch_max
         assert self.branch_max - len(branches) >= 0

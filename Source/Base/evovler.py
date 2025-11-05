@@ -1,7 +1,10 @@
 #####################################################################################################
 #
 # Evolutionary algorithm base class that evolves pipelines.
-# We use the NSGA-II algorithm to evolve pipelines.
+# Derived classes must provide the specific implementations for initialization, evaluation, and evolution.
+# Must also provide Hubs to manage shared resources like branches, encoders, and selectors.
+# Must also provide specific mutation and crossover operators in specific reproductive classes.
+# NSGA-II algorithm evolves pipelines.
 #
 #####################################################################################################
 
@@ -14,7 +17,6 @@ import ray
 from typing import List, Tuple
 import numpy.typing as npt
 from . import nsga_tool as nsga
-import matplotlib.pyplot as plt
 import datatable as dt
 from datatable import f
 import warnings
@@ -138,7 +140,7 @@ class EA(ABC):
         assert 0 <= window_distance, "window_distance must be non-negative."
         self.window_distance = window_distance
 
-        assert branch_explainability_threshold <= 1.0, "branch_explainability_threshold must be less than 1.0"
+        assert branch_explainability_threshold <= 1.0, "branch_explainability_threshold must be less than or equal to 1.0"
         self.branch_explainability_threshold = branch_explainability_threshold
 
         assert isinstance(ld_flag, bool), "ld_flag must be a boolean."
@@ -151,7 +153,6 @@ class EA(ABC):
         ray.init(num_cpus=cores, include_dashboard=True)
         print(flush=True)
 
-    # data splitter: will return indices for train/val/test splits
     def split_dataset_indices(self,
                               n_samples: int,
                               train_ratio: float = 0.7,
@@ -164,7 +165,7 @@ class EA(ABC):
         """
         assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-9, "Ratios must sum to 1."
 
-        print("Splitting data into train/val/test setspass", flush=True)
+        print("Splitting data into train/val/test sets", flush=True)
 
         # shuffle indices
         idx = np.arange(n_samples)
@@ -212,13 +213,22 @@ class EA(ABC):
 
         return np.sort(train_idx), np.sort(val_idx), np.sort(test_idx)
 
-    # function to generate k-folds for a list of indices
     def make_cv_splits_for_subset(self,
                                   subset_idx: np.ndarray, # fold           train    validation
                                   n_splits: int = 3) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
         """
-        Build CV folds on a SUBSET (e.g., training) but RETURN GLOBAL indices.
-        If y/groups are provided, they should be arrays aligned to the ORIGINAL dataset.
+        Build CV folds on a subset of indices (e.g., from all training indices).
+
+        Parameters:
+        subset_idx: np.ndarray
+            1D array of indices to create CV splits from.
+        n_splits: int
+            Number of CV splits to create.
+
+        Returns:
+        Dict[str, Tuple[np.ndarray, np.ndarray]]:
+            Dictionary with keys 'fold_i' where i is the fold number (0 to n_splits-1).
+            Each value is a tuple (train_idx, val_idx) for that fold
         """
         assert n_splits >= 2, "n_splits must be at least 2."
         assert subset_idx.ndim == 1, "subset_idx must be 1-dimensional."
@@ -264,8 +274,6 @@ class EA(ABC):
         # return new set of indeces
         return splits
 
-    # data loader
-    # todo: add seperate seeds for data shuffling, may be different from evolver seed
     def data_loader(self,
                     path: str,
                     target_label: str = "y",
@@ -276,8 +284,8 @@ class EA(ABC):
         """
         Function to load data from a csv file into a pandas dataframe.
         We assume that the target label is 'y', unless otherwise specified.
-        At the end of the function, we partition the data into training and validation sets.
-        Additionally, we load the data into the ray object store and intialize hubs.
+        At the end of the function, we partition the data into training, validation, and test sets.
+        We load the data into the ray storage and store the object ID store within the hubs.
 
         Parameters:
         path: str
@@ -351,7 +359,7 @@ class EA(ABC):
         self.all_y = np.array(all_y, dtype=float32_t)
 
         # print the data after changing the encoding
-        print("Genotype data: ", all_x, flush=True)
+        print("Genotype data: \n", all_x, flush=True)
 
         # get number of samples from all_x
         n_samples = all_x.shape[0]
@@ -362,10 +370,9 @@ class EA(ABC):
                                                                                  train_ratio=train_split,
                                                                                  val_ratio=valid_split,
                                                                                  test_ratio=test_split)
-        # save the indices for ray calls
+        # save the original training and validation indices for ray calls
         self.train_idx_ray = ray.put(self.train_idx)
         self.val_idx_ray = ray.put(self.val_idx)
-        self.test_idx_ray = ray.put(self.test_idx)
 
         # k-fold cross validation on the training set
         self.train_fold_dict = self.make_cv_splits_for_subset(subset_idx=self.train_idx, n_splits=k)
@@ -378,7 +385,6 @@ class EA(ABC):
         print(flush=True)
         return
 
-    # data checker to check for validity of dataset
     def check_dataset(self, features, target):
         """
         Check if a dataset has a valid feature set and labels. If there are missing values, we will impute them with the mode of the column.
@@ -426,8 +432,6 @@ class EA(ABC):
         These specific hub classes must be implemented in the derived class folders.
         """
 
-    # evolve a population of pipelines for 'gens' generations
-    # must specify how to initialize the population and implement NSGA steps
     @abstractmethod
     def evolve(self, gens: uint16_t) -> None:
         """
@@ -443,56 +447,31 @@ class EA(ABC):
             e. Go to step 3.
 
         Args:
-            gens (int): Number of generations to evolve the population.
+            gens (uint16_t): Number of generations to evolve the population.
         """
         pass
 
-    def collapse_population_to_front_0(self):
-        front_0 = []
-        for i in nsga.front_zero(obj_scores=self.get_pipeline_scores(self.population, weights=(float32_t(1.0), int32_t(-1)))):
-            front_0.append(self.population[i])
-        self.population = front_0  # keep only the front 0 pipelines
-
-        # group all pipelines in self.population that have the same complexity
-        complexity_groups = {}
-        for i, pipeline in enumerate(self.population):
-            complexity = pipeline.get_trait_feature_cnt()
-            if complexity not in complexity_groups:
-                complexity_groups[complexity] = []
-            complexity_groups[complexity].append(i)
-
-        # for each complexity group, randomly sample one representative to keep
-        winner_ids = []
-        for group in complexity_groups.values():
-            winner_ids.append(self.rng.choice(group))
-
-        self.population = [self.population[i] for i in winner_ids]
-        return
-
-    def save_total_runtime(self, total_runtime: float) -> None:
-        """
-        Function to save the total runtime in minutes of the algorithm to a file.
-
-        Parameters:
-        total_runtime: float
-            Total runtime of the algorithm.
-        """
-        with open(os.path.join(self.save_directory, 'total_runtime.csv'), 'w') as f:
-            f.write(str(total_runtime))
-
-    # get list of pipeline scores (r2, complexity) by position
     def get_pipeline_scores(self, pipelines: List[Pipeline], weights: Tuple[float32_t, int32_t]) -> npt.NDArray:
         """
         Function to get the pipeline scores (r2, complexity) by position.
         Will also apply weights to the scores, so that we can use NSGA-II to get the pareto front.
+
+        Parameters:
+        pipelines: List[Pipeline]
+            List of pipelines to get scores for.
+        weights: Tuple[float32_t, int32_t]
+            Weights to apply to the scores (r2, complexity).
+
+        Returns:
+        npt.NDArray: Array of pipeline scores with shape (len(pipelines), 2).
         """
+
         scores = np.empty(len(pipelines), dtype=object)
         for i, pipeline in enumerate(pipelines):
             scores[i] = (float32_t(pipeline.get_trait_r2() * weights[0]), int32_t(pipeline.get_trait_feature_cnt() * weights[1]))
 
         return scores
 
-    # survival selection
     def survival_selection(self, offspring_pipelines: List[Pipeline]) -> List[Pipeline]:
         """
         Function to select the survivors from the offspring pipelines provided.
@@ -504,16 +483,14 @@ class EA(ABC):
         Returns:
         List[Pipeline]: List of survivor pipelines.
         """
+
         # make sure all population scores are positive
         assert all(pipeline.get_trait_r2() > 0.0 for pipeline in offspring_pipelines), "All offspring r2 scores must be positive."
         assert all(pipeline.get_trait_feature_cnt() > 0 for pipeline in offspring_pipelines), "All population complexity scores must be positive."
 
-        # combine both the population and offspring lists into one
-        pipelines_original = offspring_pipelines
-
         # iterate through the combined pipelines and remove duplicates with the same get_trait_feature_names
         best_pipelines = {}
-        for pipeline in pipelines_original:
+        for pipeline in offspring_pipelines:
             # Convert features to a frozenset so it can be used as a dict key
             feats = frozenset(pipeline.get_trait_feature_names())
 
@@ -562,22 +539,9 @@ class EA(ABC):
         pass
 
     @abstractmethod
-    def remove_bad_pipelines(self, pipelines: List[Pipeline]) -> List[Pipeline]:
+    def evaluation(self, pipelines: List[Pipeline], gen_info: int16_t) -> Tuple[List[Pipeline], Dict]:
         """
-        Function to remove pipelines that fail to meet certain criteria.
-
-        Args:
-            pipelines (List[Pipeline]): List of pipelines to evaluate.
-
-        Returns:
-            List[Pipeline]: List of pipelines that passed the evaluation.
-        """
-        pass
-
-    @abstractmethod
-    def evaluation(self, pipelines: List[Pipeline], gen_info: int16_t) -> List[Pipeline]:
-        """
-        Function to evaluate entire pipelines.
+        Function to evaluate pipelines.
         All of this should be done in asyncronous parallel jobs for maximum efficiency.
 
         Parameters:
@@ -588,11 +552,11 @@ class EA(ABC):
 
         Returns:
         List[Pipeline]: List of evaluated pipelines (pipelines updated with evaluation results).
+        Dict: Dictionary with evaluation details captured for logging within derived classes.
         """
         pass
 
     @abstractmethod
-    # evaluate all unevaluated branches and update
     def evaluate_unseen_branches(self, unseen_branches: Set, gen_seen: int16_t) -> None:
         """
         Function to evaluate all unseen branches and add their best R2 and Encoder type to the Hub.
@@ -602,10 +566,12 @@ class EA(ABC):
         Parameters:
         unseen_branches: Set
             Unseen branches in a set to evaluate.
+
+        gen_seen: int16_t
+            Generation number for logging purposes.
         """
         pass
 
-    # parent selection
     def parent_selection(self, parent_cnt: uint16_t) -> List[uint16_t]:
         """
         Function to return a List of parent ids based on Pareto dominance.
@@ -657,75 +623,16 @@ class EA(ABC):
         """
         pass
 
-    # record the pipeline r2 and complexity scores for the pareto front from the final population
-    def record_final_pareto_front(self) -> None:
-        """
-        Function to record the final pareto front from the population with complexity and r2 scores.
-        Must run collapse_population_to_front_0 before this function to ensure that the population is reduced to only front 0 pipelines.
-        """
-
-        # get all scores from the current population
-        # should only be front 0 pipelines
-        pop_scores = self.get_pipeline_scores(self.population, weights=(float32_t(1.0), int32_t(1)))
-
-        # sort front by feature count
-        pareto_front = sorted(pop_scores, key=lambda x: x[1])
-
-        # save the pareto front to a csv file and enumerate the pipelines
-        pareto_front_df = pd.DataFrame(pareto_front, columns=['R2', 'Feature Count'])
-        pareto_front_df.to_csv(self.save_directory + 'final_pareto_front.csv', index=False)
-        return
-
-    # plot the current pareto front from the population with complexity and r2 scores
-    def plot_pareto_front(self) -> None:
-        """
-        Function to plot the current pareto front from the population with complexity and r2 scores.
-        Must run collapse_population_to_front_0 before this function to ensure that the population is reduced to only front 0 pipelines.
-        """
-
-        # get all scores from the current population
-        pop_scores = self.get_pipeline_scores(self.population, weights=(float32_t(1.0), int32_t(1)))
-
-        # sort front by feature count
-        pareto_front = sorted(pop_scores, key=lambda x: x[1])
-
-        print('pareto front:', pareto_front, flush=True)
-
-        # plot the pareto front
-        plt.scatter([t[1] for t in pareto_front], [t[0] for t in pareto_front])
-        plt.xlabel('Feature Count')
-        plt.ylabel('R2 Score')
-        plt.title('Final Pareto Front')
-
-        # Annotate the points with pipeline numbers (indexes in pareto front)
-        for i, (r2_score, feature_count) in enumerate(pareto_front):
-            plt.annotate(
-                str(i + 1),  # Text label (pipeline number)
-                (feature_count, r2_score),  # The point where the annotation should be
-                textcoords="offset points",  # Use offset for better readability
-                xytext=(5, 5),  # Offset position (x, y)
-                ha='center',  # Horizontal alignment
-                fontsize=9,
-                color='red'
-            )
-
-        # show grid
-        plt.grid(True)
-        # save the plot
-        plt.savefig(self.save_directory + 'pareto_front.png')
-        plt.clf()
-
     @abstractmethod
     def post_analysis_with_good_snps(self) -> None:
         """
         Function to perform post analysis of the pipelines.
-        Must include
         """
 
     @abstractmethod
     def final_pipeline_test(self, pipeline_data: Dict, file_name: str, train_r2: float32_t, validation_r2: float32_t, size: int16_t) -> None:
         """
-        Function to perform the final validation on the test dataset.
+        Function to perform the final assessment on the test dataset.
         Combine the training and validation datasets to fit a linear regression model.
         Then, evaluate the model on the test dataset and save the results to a csv file.
         Also, perform permutation importance on the test dataset and save the results to a csv file.

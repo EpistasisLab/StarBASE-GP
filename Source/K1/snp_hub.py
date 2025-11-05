@@ -25,7 +25,7 @@ class K1_Hub(Hub):
         """
         Container to maintain snps that have not been been flagged as inactive throughout the evolutionary process.
         This is used to ensure that we do not select snps that have been pruned by and get a speedup when selecting random snps.
-        Hub in this classe is broken down by chromosome and and sorted positions for fast querying of snps within a given distance.
+        Hub in this class is broken down by chromosome and and sorted positions for fast querying of snps within a given distance.
         """
 
         def __init__(self, snps: List[snp_t]) -> None:
@@ -33,6 +33,9 @@ class K1_Hub(Hub):
             Create a dictionary with all snps broken down by chromosome and position.
             Then we save them in a dictionary with the chromosome as the key and the snps in a sorted list.
             The individual lists will be updated by removing snps that have been pruned.
+
+            Args:
+                snps (List[snp_t]): List of SNPs to be added to the considered hub.
             """
 
             # create a dictionary to hold all snps
@@ -57,6 +60,12 @@ class K1_Hub(Hub):
         def get_positions_in_chromosome(self, chrom: int32_t) -> List[int32_t]:
             """
             Get all snps in a given chromosome.
+
+            Args:
+                chrom (int32_t): chromosome number to get all snps from.
+
+            Returns:
+                List[int32_t]: List of positions in the given chromosome.
             """
 
             # make sure the chromosome exists
@@ -64,10 +73,17 @@ class K1_Hub(Hub):
             # return all positions in the chromosome
             return list(self.hub[chrom])
 
-        # collect all positions for a given chromosome that are not within a certain distance and given anchor position
         def get_positions_out_of_window(self, chrom: int32_t, distance: int32_t, anchor: int32_t) -> List[int32_t]:
             """
             Get all snps in a given chromosome that are outside the specified distance.
+
+            Args:
+                chrom (int32_t): chromosome number to get all snps from.
+                distance (int32_t): distance from the anchor position to exclude snps.
+                anchor (int32_t): anchor position to check against.
+
+            Returns:
+                List[int32_t]: List of positions in the given chromosome that are outside the specified distance.
             """
 
             # make sure the chromosome exists
@@ -80,9 +96,15 @@ class K1_Hub(Hub):
             # return all positions that are not within the distance
             return [pos for pos in pos_l if abs(pos - anchor) > distance]
 
-        # remove snp from the hub when it has been flagged as inactive
         def remove_snp(self, snp: snp_t) -> None:
-            assert False, "Debugging - remove this line later"
+            """
+            Remove a SNP from the considered hub.
+            Only happens when a SNP has been flagged as inactive: due to pruning or SNP marginal R2 < threshold.
+
+            Args:
+                snp (snp_t): SNP to be removed from the considered hub.
+            """
+
             # get chromosome and position
             chrom, pos = snp_chrm_pos(snp)
 
@@ -95,8 +117,21 @@ class K1_Hub(Hub):
 
             return
 
-        # get a random snp from the hub
         def get_ran_snp(self, rng: rng_t, anchor: snp_t, mutation_tries: uint16_t) -> snp_t:
+            """
+            Given an anchor SNP, return a random SNP.
+            First, find all chromosome keys that have at least one SNP position in them.
+            Second, randomly pick a chromosome key and pick a random SNP position.
+            Try this for mutation_tries number of attempts.
+
+            Args:
+                rng (rng_t): A numpy random number generator from the evolver
+                anchor (snp_t): The anchor SNP to avoid returning
+                mutation_tries (uint16_t): Number of attempts to find a random SNP that is not the anchor SNP.
+
+            Returns:
+                snp_t: A random SNP that is not the anchor SNP.
+            """
 
             # get all chromosomes with at least one snp
             chrom = []
@@ -120,15 +155,27 @@ class K1_Hub(Hub):
             # if we exhaust all tries, return the anchor
             return anchor
 
-        # get total number of items in the hub dictionary
         def get_total(self) -> uint32_t:
+            """
+            Get the total number of SNPs in the considered hub.
+
+            Returns:
+                uint32_t: Total number of SNPs in the considered hub.
+            """
+
             sum = uint32_t(0)
             for _, pos_l in self.hub.items():
                 sum += uint32_t(len(pos_l))
             return sum
 
-        # get list of keys with at least one snp
         def get_keys_with_snps(self) -> List[int32_t]:
+            """
+            Get a list of all chromosome keys that have at least one SNP position in them.
+
+            Returns:
+                List[int32_t]: List of chromosome keys with at least one SNP position.
+            """
+
             keys = []
             for k, v in self.hub.items():
                 if len(v) > 0:
@@ -185,7 +232,7 @@ class K1_Hub(Hub):
                        pager_1: float32_t = float32_t(-1.0),
                        pager_2: float32_t = float32_t(-1.0)) -> None:
             """
-            will take in a snp, sum, cnt, bin, and pos and add it to the hub
+            Process Args and add to hub.
 
             Args:
                 (k) snp (snp_t): chrm.pos string
@@ -211,21 +258,18 @@ class K1_Hub(Hub):
             self.hub[snp] = [res,idx,ori_rid,end_rid,enc,seen,active,gen_seen,gen_pruned,pruned_reason,ld_threshold,ld_genomic_distance,anchor_snp,pager_0,pager_1,pager_2]
             return
 
-        # get snp result r^2
         def get_r2(self, snp: snp_t) -> float32_t:
             # check for snp existence
             assert snp in self.hub
             # return data
             return self.hub[snp][0]
 
-        # get snp position idx in the ordered hub lists
         def get_idx(self, snp: snp_t) -> int32_t:
             # assert that snp is in hub
             assert snp in self.hub
             # return data
             return self.hub[snp][1]
 
-        # get ray id for the corresponding snp in the hub value list
         def get_ori_ray_id(self, snp: snp_t) -> ray.ObjectID:
             # assert that snp is in hub
             assert snp in self.hub
@@ -234,7 +278,6 @@ class K1_Hub(Hub):
             # return data
             return self.hub[snp][2]
 
-        # get ray id for the corresponding snp in the hub value list
         def get_enc_ray_id(self, snp: snp_t) -> ray.ObjectID:
             # assert that snp is in hub
             assert snp in self.hub
@@ -248,92 +291,86 @@ class K1_Hub(Hub):
             # return data
             return self.hub[snp][3]
 
-        # get snp encoder type
         def get_encoding(self, snp: snp_t) -> snp_t:
             # check snp exists in the hub
             assert snp in self.hub
             # return the type
             return self.hub[snp][4]
 
-        # has this snp been seen before
         def get_seen_flag(self, snp: snp_t) -> bool:
             # check snp exists in the hub
             assert snp in self.hub
             # return the type
             return self.hub[snp][5]
 
-        # is this snp still active (not prunned and r2 > snp_explainability_threshold)
         def get_active_flag(self, snp: snp_t) -> bool:
             # check snp exists in the hub
             assert snp in self.hub
             # return the type
             return self.hub[snp][6]
 
-        # get generation seen
         def get_gen_seen(self, snp: snp_t) -> int16_t:
             # check snp exists in the hub
             assert snp in self.hub
             # return the type
             return self.hub[snp][7]
 
-        # get generation pruned
         def get_gen_pruned(self, snp: snp_t) -> int16_t:
             # check snp exists in the hub
             assert snp in self.hub
             # return the type
             return self.hub[snp][8]
 
-        # get the reason for pruning
         def get_pruned_reason(self, snp: snp_t) -> snp_t:
             # check snp exists in the hub
             assert snp in self.hub
             # return the type
             return self.hub[snp][9]
 
-        # get the LD threshold
         def get_ld_threshold(self, snp: snp_t) -> float32_t:
             # check snp exists in the hub
             assert snp in self.hub
             # return the type
             return self.hub[snp][10]
 
-        # get the genomic distance for LD
         def get_ld_genomic_distance(self, snp: snp_t) -> int32_t:
             # check snp exists in the hub
             assert snp in self.hub
             # return the type
             return self.hub[snp][11]
 
-        # get the anchor snp that pruned this snp
         def get_anchor_snp(self, snp: snp_t) -> snp_t:
             # check snp exists in the hub
             assert snp in self.hub
             # return the type
             return self.hub[snp][12]
 
-        # get pager_0 value (LUT for genotype 0)
         def get_pager_0(self, snp: snp_t) -> float32_t:
             # check snp exists in the hub
             assert snp in self.hub
             # return the type
             return self.hub[snp][13]
 
-        # get pager_1 value (LUT for genotype 0.5)
         def get_pager_1(self, snp: snp_t) -> float32_t:
             # check snp exists in the hub
             assert snp in self.hub
             # return the type
             return self.hub[snp][14]
 
-        # get pager_2 value (LUT for genotype 1)
         def get_pager_2(self, snp: snp_t) -> float32_t:
             # check snp exists in the hub
             assert snp in self.hub
             # return the type
             return self.hub[snp][15]
 
-        # flip the active flag via r2
         def flip_activate_flag_r2(self, snp: snp_t) -> None:
+            """
+            Flip active flag via r2 thresholding.
+
+            Args:
+                snp (snp_t): SNP to flip the active flag for.
+            """
+
             # check snp exists in the hub
             assert snp in self.hub
             # make sure we have not seen this snp before
@@ -342,8 +379,15 @@ class K1_Hub(Hub):
             self.hub[snp][6] = False
             return
 
-        # flip active flag via pruned snps
         def flip_activate_flag_ld(self, snp: snp_t, gen_pruned: int16_t) -> None:
+            """
+            Flip activation flag of SNP via LD pruning
+
+            Args:
+                snp (snp_t): SNP to flip the active flag for.
+                gen_pruned (int16_t): Generation pruned.
+            """
+
             # check snp exists in the hub
             assert snp in self.hub
             # make sure we have not seen this snp before
@@ -359,8 +403,14 @@ class K1_Hub(Hub):
             self.hub[snp][6] = False
             return
 
-        # flip the seen flag
         def flip_seen_flag(self, snp: snp_t) -> None:
+            """
+            Flip seen flag of SNP once it has been evaluated
+
+            Args:
+                snp (snp_t): SNP to flip the seen flag for.
+            """
+
             # check snp exists in the hub
             assert snp in self.hub
             # make sure we have not seen this snp before
@@ -369,8 +419,14 @@ class K1_Hub(Hub):
             self.hub[snp][5] = True
             return
 
-        # delete the ray ids for ori_rid to save memory
         def delete_ori_ray_id(self, snp: snp_t) -> None:
+            """
+            Delete the ray ids for ori_rid to save memory
+
+            Args:
+                snp (snp_t): SNP to delete the original ray id for.
+            """
+
             # assert that snp is in hub
             assert snp in self.hub
             assert self.hub[snp][2] is not None
@@ -378,8 +434,14 @@ class K1_Hub(Hub):
             self.hub[snp][2] = None
             return
 
-        # delete the ray ids for enc_rid to save memory
         def delete_enc_ray_id(self, snp: snp_t) -> None:
+            """
+            Delete encoded array of SNP.
+
+            Args:
+                snp (snp_t): SNP to delete the encoded ray id for.
+            """
+
             # assert that snp is in hub
             assert snp in self.hub
             assert self.hub[snp][3] is not None
@@ -388,8 +450,6 @@ class K1_Hub(Hub):
             self.hub[snp][3] = None
             return
 
-        # update snp hub with the r2 and encoding type
-        # assuming that this only gets called once per snp
         def update_r2_enc(self,
                               snp: snp_t,
                               r2: float32_t,
@@ -398,6 +458,19 @@ class K1_Hub(Hub):
                               gen_seen: int16_t,
                               snp_explainability_threshold: float32_t,
                               pager_lut: np.ndarray | None = None) -> None:
+            """
+            Update SNP hub with the r2 and encoding type & array once evaluated for its R2.
+
+            Args:
+                snp (snp_t): SNP to update.
+                r2 (float32_t): R2 value to update.
+                encoding (snp_t): Encoding type to update.
+                enc_x (ray.ObjectID | None): Encoded ray Object ID to update.
+                gen_seen (int16_t): Generation seen to update.
+                snp_explainability_threshold (float32_t): SNP explainability threshold to determine if SNP is active.
+                pager_lut (np.ndarray | None): PAGER LUT values to update if encoding is 'pager'.
+            """
+
             # assert that snp is in hub
             assert snp in self.hub
             # make sure we have not seen this snp before
@@ -431,8 +504,18 @@ class K1_Hub(Hub):
                 self.hub[snp][3] = enc_x
             return
 
-        # to update the details of the snp after LD pruning - add the anchor snp
         def add_ld_details(self, snp: snp_t, reason: snp_t, threshold: float32_t, genomic_distance: int32_t, anchor_snp: snp_t) -> None:
+            """
+            Add LD details for a pruned SNP.
+
+            Args:
+                snp (snp_t): SNP to add LD details for.
+                reason (snp_t): What was the reason for pruning.
+                threshold (float32_t): LD threshold used for pruning.
+                genomic_distance (int32_t): Genomic distance used for pruning.
+                anchor_snp (snp_t): Anchor SNP used for pruning.
+            """
+
             # make sure the snp is in the hub
             assert snp in self.hub
             # update the details
@@ -443,6 +526,14 @@ class K1_Hub(Hub):
             return
 
     def __init__(self, snp_list: List[snp_t], snps_ray_ids:Dict[snp_t, ray.ObjectRef]) -> None:
+        """
+        Create all required Hubs: Ordered, Considered, and Interfact specific tools
+
+        Args:
+            snp_list (List[snp_t]): List of SNPs we need to keep track of in the hub.
+            snps_ray_ids (Dict[snp_t, ray.ObjectRef]): Dictionary mapping SNPs to their corresponding Ray Object IDs.
+        """
+
         # how many rolls do we try for mutations
         self.mutation_tries = uint16_t(20)
 
@@ -487,17 +578,20 @@ class K1_Hub(Hub):
         print('SNP Hub Initialized')
         return
 
-    # get best type of encoder for a given snp
     def get_encoding(self, snp: snp_t) -> snp_t:
+        # get best type of encoder for a given snp
         return self.db.get_encoding(snp)
 
-    # get r2 for a given snp from snp hub
     def get_r2(self, snp: snp_t) -> float32_t:
+        # get r2 for a given snp from snp hub
         return self.db.get_r2(snp)
 
     # save the epi_hub and snp_hub to a file
     def save_hubs(self, save_dir: str) -> None:
         """
+        Save the SNP hub to a CSV file.
+
+        Header positions:
                res_pos = 0 # position for r2 recived from evaluation
                bin_pos = 1 # id for bin assigned to
                idx_pos = 2 # position for bin number in hub value list
@@ -583,18 +677,40 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
                     f.write(f"{snp_with_chr},{row[1]},{row[5]}\n")
         return
 
-    # update snp hub with best univariate r2 result and corresponding encoder type
     def update_snp_hub_r2_enc(self, snp:snp_t, r2:float32_t, enc: snp_t, enc_x: ray.ObjectID | None, gen_seen: int16_t, snp_explainability_threshold: float32_t, pager_lut: np.ndarray | None = None) -> None:
+        """
+        Update SNP hub with the r2 and encoding type & vector (if applicable).
+
+        Args:
+            snp (snp_t): SNP to be updated.
+            r2 (float32_t): R2 value for the SNP.
+            enc (snp_t): Encoding type for the SNP.
+            enc_x (ray.ObjectID | None): Ray object ID for the encoded SNP values.
+            gen_seen (int16_t): Generation when the SNP was seen.
+            snp_explainability_threshold (float32_t): Threshold for SNP explainability.
+            pager_lut (np.ndarray | None): PAGER LUT values if encoding is 'pager'.
+        """
+
         # update Hub object: if r2 is negative, flip prunned flag
         self.db.update_r2_enc(snp, r2, enc, enc_x, gen_seen, snp_explainability_threshold, pager_lut)
         # update Consideration_Hub object: if r2 is less than threshold, remove snp from non prunned
         if r2 < snp_explainability_threshold and snp_explainability_threshold >= float32_t(0.0):
-            print('snp_explainability_threshold: ', snp_explainability_threshold, flush=True)
             self.consider.remove_snp(snp)
         return
 
-    # get a snp based on r2 performance from the same chromosome and within the same window distance
     def get_smt_snp_in_window(self, anchor: snp_t, rng: rng_t, window_distance: int32_t) -> snp_t:
+        """
+        Get random SNP within the same chromosome and window distance as anchor, based on r2.
+
+        Args:
+            anchor (snp_t): Anchor SNP in "chromosome.position" format.
+            rng (rng_t): Numpy random generator.
+            window_distance (int32_t): The genomic distance to consider around the anchor SNP.
+
+        Returns:
+            snp_t: A randomly selected SNP from the same chromosome and within the specified window distance
+        """
+
         # make sure there is a '.' inside the snp string
         assert '.' in anchor
 
@@ -621,8 +737,19 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         # get a random snp based on r2 scores as weights
         return self.get_random_snp_weighted_by_r2(rng, anchor, valid_snps, r2_list)
 
-    # randomly sample a snp from the same chromosome and within the same window distance
     def get_ran_snp_in_window(self, anchor: snp_t, rng: rng_t, window_distance: int32_t) -> snp_t:
+        """
+        Get a random SNP from the same chromosome and within the specified window distance.
+
+        Args:
+            anchor (snp_t): Anchor SNP in "chromosome.position" format.
+            rng (rng_t): Numpy random generator.
+            window_distance (int32_t): The genomic distance to consider around the anchor SNP.
+
+        Returns:
+            snp_t: A randomly selected SNP from the same chromosome and within the specified window distance
+        """
+
         # make sure there is a '-' inside the snp string
         assert '.' in anchor
 
@@ -648,8 +775,19 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         # roll a random snp from the list of snps
         return self.get_random_snp_from_list(rng, anchor, snps)
 
-    # geta snp from the same chromosome but different bin
     def get_smt_snp_in_chrm(self, anchor: snp_t, rng: rng_t, window_distance: int32_t) -> snp_t:
+        """
+        Get a SNP from the same chromosome and outside of the specified window distance based on R2 scores.
+
+        Args:
+            anchor (snp_t): Anchor SNP in "chromosome.position" format.
+            rng (rng_t): Numpy random generator.
+            window_distance (int32_t): The genomic distance to exclude around the anchor SNP.
+
+        Returns:
+            snp_t: A SNP from the same chromosome but outside the specified window distance.
+        """
+
         # make sure there is a '.' inside the snp string
         assert '.' in anchor
 
@@ -676,8 +814,19 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         # get a random snp based on r2 scores as weights
         return self.get_random_snp_weighted_by_r2(rng, anchor, snps, r2)
 
-    # get a random snp from the same chromosome but different bin
     def get_ran_snp_in_chrm(self, anchor: snp_t, rng: rng_t, window_distance: int32_t) -> snp_t:
+        """
+        Get a random SNP from the same chromosome but different bin.
+
+        Args:
+            anchor (snp_t): The anchor SNP in "chromosome.position" format.
+            rng (rng_t): Numpy random generator.
+            window_distance (int32_t): The genomic distance to exclude around the anchor SNP.
+
+        Returns:
+            snp_t: A randomly selected SNP from the same chromosome but outside the specified window distance.
+        """
+
         # make sure there is a '.' inside the snp string
         assert '.' in anchor
 
@@ -704,8 +853,18 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         # return same snp
         return self.get_random_snp_from_list(rng, anchor, snps)
 
-    # get a snp from outside the chromosome with r2 > 0.0 based on r2 weight
     def get_smt_snp_out_chrm(self, anchor: snp_t, rng: rng_t) -> snp_t:
+        """
+        Get a SNP from outside the chromosome based on R2 scores.
+
+        Args:
+            anchor (snp_t): The anchor SNP in "chromosome.position" format.
+            rng (rng_t): Numpy random generator.
+
+        Returns:
+            snp_t: A randomly selected SNP from a different chromosome based on R2 scores.
+        """
+
         # make sure there is a '.' inside the snp string
         assert '.' in anchor
 
@@ -740,8 +899,18 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         # get a random snp based on r2 scores as weights
         return self.get_random_snp_weighted_by_r2(rng, anchor, snps, r2)
 
-    # get random snp from outside the chromosome
     def get_ran_snp_out_chrm(self, anchor: snp_t, rng: rng_t) -> snp_t:
+        """
+        Get a random SNP from outside the chromosome.
+
+        Args:
+            anchor (snp_t): The anchor SNP in "chromosome.position" format.
+            rng (rng_t): Numpy random generator.
+
+        Returns:
+            snp_t: A randomly selected SNP from a different chromosome.
+        """
+
         # make sure there is a '.' inside the snp string
         assert '.' in anchor
 
@@ -776,6 +945,17 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         return self.get_random_snp_from_list(rng, anchor, snps)
 
     def get_k_snps_from_chrom(self, rng:rng_t, chrom:int32_t, k:uint16_t) -> Set[snp_t]:
+        """"
+        Get k random SNPs from a specified chromosome.
+
+        Args:
+            rng (rng_t): Numpy random generator.
+            chrom (int32_t): Chromosome number to sample SNPs from.
+            k (uint16_t): Number of SNPs to sample.
+        Returns:
+            Set[snp_t]: A set of k randomly sampled SNPs from the specified chromosome.
+        """
+
         k_snps = set()
 
         # make sure the chrom is not out of bound
@@ -788,12 +968,20 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         # return the snp set
         return k_snps
 
-    # is this snp active?
     def get_active_flag(self, snp: snp_t) -> bool:
+        # is this snp active?
         return self.db.get_active_flag(snp)
 
-    # process the prunned snps
     def process_pruned_snps(self, snps: Set[snp_t], snp_details_after_ld: Dict[snp_t, Dict], gen_pruned: int16_t) -> None:
+        """
+        Process pruned SNPs by updating their status in the SNP hub and removing them from the consideration hub.
+
+        Args:
+            snps (Set[snp_t]): Set of SNPs that have been pruned.
+            snp_details_after_ld (Dict[snp_t, Dict]): Dictionary containing details for each pruned SNP, including reason, threshold, genomic distance, and anchor SNP.
+            gen_pruned (int16_t): Generation number when the SNPs were pruned.
+        """
+
         # go through each snp and update the hub
         for snp in snps:
             # check to make sure we have not prunned this snp before
@@ -813,15 +1001,33 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
             # delete snp from non pruned
             self.consider.remove_snp(snp)
 
-    # function to take in a list of snps and generate a dictionary of snps and their corresponding r2 values
     def generate_r2_dict(self, snps: Set[snp_t]) -> List:
+        """
+        Generate a dictionary of SNPs and their corresponding r2 values.
+
+        Args:
+            snps (Set[snp_t]): Set of SNPs to generate r2 values for.
+
+        Returns:
+            List: A list of tuples containing SNPs and their r2 values.
+        """
+
         # make sure
         assert len(snps) > 0
 
         return [(snp, self.get_r2(snp)) for snp in snps]
 
-    # check if there is at least one active snp in the set
     def at_least_one_active_snp(self, snps: List[snp_t]) -> bool:
+        """
+        Function to check if at least one snp in the list is active.
+
+        Parameters:
+            snps (List[snp_t]): List of snps to check
+
+        Returns:
+            bool: True if at least one snp is active, False otherwise
+        """
+
         # if one snp is active return true
         for snp in snps:
             if self.db.get_active_flag(snp):
@@ -829,16 +1035,27 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         # return false if all snps are inactive
         return False
 
-    # print size of non pruned hub
     def consideration_hub_size(self) -> uint32_t:
+        # print size of consideration hub
         return self.consider.get_total()
 
-    # return a random snp from the consideration hub
     def get_random_considered_snp(self, rng: rng_t, anchor: snp_t) -> snp_t:
+        # return a random snp from the consideration hub
         return self.consider.get_ran_snp(rng, anchor, self.mutation_tries)
 
-    # return random snp from a list of choices
     def get_random_snp_from_list(self, rng: rng_t, anchor: snp_t, snps: List[snp_t]) -> snp_t:
+        """
+        Given a set of SNPs to pick from, this function returns a random SNP.
+
+        Args:
+            rng (rng_t): Numpy random generator
+            anchor (snp_t): The anchor SNP to avoid selecting
+            snps (List[snp_t]): List of SNPs to choose from
+
+        Returns:
+            snp_t: A randomly selected SNP from the list, weighted by r2 values
+        """
+
         # if no snps were collected, return a random snp from consideration hub
         if len(snps) == 0:
             return self.get_random_considered_snp(rng, anchor)
@@ -848,8 +1065,20 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         assert choice != anchor, "SNP should not be the same as the anchor SNP"
         return choice
 
-    # return a random snp weighted by r2 from a list of choices
     def get_random_snp_weighted_by_r2(self, rng: rng_t, anchor: snp_t, snps: List[snp_t], r2_list: List[float32_t]) -> snp_t:
+        """
+        Given a set of SNPs to pick from, this function returns a random SNP weighted by its r2 value.
+
+        Args:
+            rng (rng_t): Numpy random generator
+            anchor (snp_t): The anchor SNP to avoid selecting
+            snps (List[snp_t]): List of SNPs to choose from
+            r2_list (List[float32_t]): List of r2 values corresponding to the SNPs
+
+        Returns:
+            snp_t: A randomly selected SNP from the list, weighted by r2 values
+        """
+
         # make sure the snps and r2_list are the same length
         assert len(snps) == len(r2_list)
         assert '.' in anchor
@@ -864,18 +1093,22 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         return choice
 
     def get_keys_with_snps(self) -> List[int32_t]:
+        # get chromosomes with snps in consideration hub
         return self.consider.get_keys_with_snps()
 
-    # get original feature from the snp hub (ray id)
     def get_ori_ray_id(self, snp: snp_t) -> ray.ObjectID:
+        # get original feature from the snp hub (ray id)
         return self.db.get_ori_ray_id(snp)
 
-    # get encoded feature from the snp hub (ray id)
     def get_enc_ray_id(self, snp: snp_t) -> ray.ObjectID:
+        # get encoded feature from the snp hub (ray id)
         return self.db.get_enc_ray_id(snp)
 
-    # count number of unseen snps in the hub from non_pruned object
     def seen_snps_proportion(self) -> None:
+        """
+        Function to print the proportion of unseen snps in the hub and the proportion of snps
+        """
+
         unseen_count = 0
         for chrm in self.consider.hub:
             for pos in self.consider.hub[chrm]:
@@ -893,10 +1126,10 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         Function to get all unseen snps from the pipelines.
 
         Parameters:
-        snps: Set of univariate snps
+            snps (Set[snp_t]): Set of univariate snps
 
         Returns:
-        Set: A set of unseen univariate snps
+            Set[snp_t]: A set of unseen univariate snps
         """
         unseen_univariates = set()
         for snp_name in snps:
@@ -909,12 +1142,12 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         Function to remove inactive branches from a given set of branches.
 
         Parameters:
-        branches: Set of branches (univariate snps or interactions (K2, K3, ...))
-        hub: An interface to a branch hub to get branch specific information
+            branches: Set of branches (univariate snps or interactions (K2, K3, ...))
 
         Returns:
-        Set: An updated set of active branches
+            Set: An updated set of active branches
         """
+
         good_branches = set()
         for branch in branches:
             if self.db.get_active_flag(branch):

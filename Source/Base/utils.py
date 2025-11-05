@@ -7,8 +7,17 @@
 from .types import (snp_t, int32_t)
 from typing import Tuple
 
-# helper to generate chromosome number and snp position
 def snp_chrm_pos(snp: snp_t) -> Tuple[int32_t, int32_t]:
+    """
+    Given a SNP in the format 'chrom.position', return the chromosome and position as integers.
+
+    Args:
+        snp (snp_t): SNP in the format 'chrom.position' (e.g. 1.12345)
+
+    Returns:
+        Tuple[int32_t, int32_t]: A tuple containing the chromosome and position as integers.
+    """
+
     assert '.' in snp, "SNP must be in the format 'chrom.position' (e.g. 1.12345)."
     chrom, pos = snp.split('.')
     chrom, pos = int32_t(chrom), int32_t(pos)

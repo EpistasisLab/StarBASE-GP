@@ -7,9 +7,9 @@
 
 from abc import ABC, abstractmethod
 import numpy as np
-from sklearn.feature_selection import VarianceThreshold, SelectPercentile, SelectFwe, SelectFromModel, SequentialFeatureSelector, f_regression
+from sklearn.feature_selection import VarianceThreshold, SelectPercentile, SelectFwe, SelectFromModel, f_regression
 from sklearn.linear_model import Lasso
-from sklearn.ensemble import RandomForestRegressor, ExtraTreesRegressor
+from sklearn.ensemble import ExtraTreesRegressor
 from typeguard import typechecked
 from .types import (rng_t, snp_t, float32_t, int8_t)
 
@@ -28,14 +28,14 @@ class SelectorNode(ABC):
 
     def transform(self, X):
         return self.selector.transform(X)
-    
+
     def get_params(self):
         """Return the parameters of the selector."""
         return getattr(self, 'params', {})  # Return params if it exists, otherwise empty dict
 
     @abstractmethod
     def mutate(self, rng: rng_t):
-        ...
+        pass
 
     def get_feature_names(self, feature_names):
         # ensure feature_names is a NumPy array
@@ -56,7 +56,6 @@ class SelectorNode(ABC):
 ########################## the feature selector classes ##################################
 ##########################################################################################
 
-# variance threshold
 @typechecked
 class VarianceThresholdNode(SelectorNode):
     def __init__(self, rng: rng_t):
@@ -86,7 +85,7 @@ class VarianceThresholdNode(SelectorNode):
         # new selector configuration
         self.selector = VarianceThreshold(threshold=self.params['threshold'])
 
-# select percentile
+@typechecked
 class SelectPercentileNode(SelectorNode):
     def __init__(self, rng: rng_t):
         self.name = 'SelectPercentile'
@@ -112,7 +111,7 @@ class SelectPercentileNode(SelectorNode):
         # new selector configuration
         self.selector = SelectPercentile(score_func=self.params['score_func'], percentile=self.params['percentile'])
 
-# select fwe
+@typechecked
 class SelectFweNode(SelectorNode):
     def __init__(self, rng: rng_t):
         self.name = 'SelectFwe'
@@ -138,7 +137,7 @@ class SelectFweNode(SelectorNode):
         # new selector configuration
         self.selector = SelectFwe(score_func=self.params['score_func'], alpha=self.params['alpha'])
 
-# select from model using L1-based feature selection (model is lasso regression)
+@typechecked
 class SelectFromModelLasso(SelectorNode):
     def __init__(self, rng: rng_t, seed: int):
         self.name = 'SelectFromModelLasso'
@@ -153,8 +152,9 @@ class SelectFromModelLasso(SelectorNode):
         # new selector configuration
         self.selector = SelectFromModel(estimator = self.params['estimator'], threshold=self.params['threshold'])
 
-# select from model using tree-based feature selection (model is ExtraTreesRegressor)
+@typechecked
 class SelectFromModelTree(SelectorNode):
+    # select from model using tree-based feature selection (model is ExtraTreesRegressor)
     def __init__(self, rng: rng_t, seed: int):
         self.name = 'SelectFromModelTree'
         # threshold is either 'mean' or 'median', ExtraTreesRegressor with random_state = seed
@@ -168,38 +168,15 @@ class SelectFromModelTree(SelectorNode):
         # new selector configuration
         self.selector = SelectFromModel(estimator = self.params['estimator'], threshold=self.params['threshold'])
 
-# sequential feature selector, model = RandomForestRegressor
-class SequentialFeatureSelectorNode(SelectorNode):
-    def __init__(self, rng: rng_t, seed: int):
-        self.name = 'SequentialFeatureSelector'
-        # tol is a float between 1e-5 and 0.5, RandomForestRegressor with random_state = seed
-        self.params = {'estimator': RandomForestRegressor(random_state=seed), 'tol': float32_t(rng.uniform(low=1e-5, high=0.5))}
-        # pass super class the initialized selector
-        super().__init__(SequentialFeatureSelector(estimator=self.params['estimator'], tol=self.params['tol'], cv=5))
-
-    def mutate(self, rng: rng_t):
-        # get a random number from a normal distribution
-        shift = float32_t(rng.normal(loc=0.0, scale=0.05))
-
-        # check if the tol is going to be less than 1e-5
-        if self.params['tol'] + shift < float32_t(1e-5):
-            self.params['tol'] = float32_t(1e-5)
-        # check if the tol is going to be greater than 0.5
-        elif self.params['tol'] + shift > float32_t(0.5):
-            self.params['tol'] = float32_t(0.5)
-        # if neither of the above, then we can just add the shift
-        else:
-            self.params['tol'] = self.params['tol'] + shift
-
-        # new selector configuration
-        self.selector = SequentialFeatureSelector(estimator=self.params['estimator'], tol=self.params['tol'], cv=5)
-
-# custom feature selector based on feature encoding frequency
-# todo: check to make sure this selector works as intended
+@typechecked
 class FeatureEncodingFrequencySelector(SelectorNode):
-    """Feature selector based on Encoding Frequency. Encoding frequency is the frequency of each unique element(0/1/2/3) present in a feature set.
-     Features are selected on the basis of a threshold assigned for encoding frequency. If frequency of any unique element is less than or equal to threshold,
-     the feature is removed.  """
+    """
+    Feature selector based on Encoding Frequency.
+    Encoding frequency is the frequency of each unique element(0/1/2/3) present in a feature set.
+    Features are selected on the basis of a threshold assigned for encoding frequency.
+    If frequency of any unique element is less than or equal to threshold, the feature is removed.
+    """
+
     def __init__(self, rng: rng_t):
         self.name = 'FeatureEncodingFrequencySelector'
         # threshold is a float between 0.01 and 0.3
@@ -211,12 +188,15 @@ class FeatureEncodingFrequencySelector(SelectorNode):
     def fit(self, X, y=None):
         """
         Fit the feature selector to the data.
+
         Parameters:
-        - X (array-like): The input features (2D array of shape [n_samples, n_features]).
-        - y (ignored): The target variable (not used in this selector).
+            X (array-like): The input features (2D array of shape [n_samples, n_features]).
+            y (ignored): The target variable (not used in this selector).
+
         Returns:
-        - self: The fitted selector.
+            self: The fitted selector.
         """
+
         X = np.asarray(X)  # Ensure input is a numpy array
         n_samples, n_features = X.shape
         selected_features = []
@@ -235,11 +215,13 @@ class FeatureEncodingFrequencySelector(SelectorNode):
     def transform(self, X):
         """
         Transform the data to include only the selected features.
+
         Parameters:
-        - X (array-like): The input features (2D array of shape [n_samples, n_features]).
+            X (array-like): The input features (2D array of shape [n_samples, n_features]).
         Returns:
-        - X_transformed (array-like): The transformed array with only selected features.
+            X_transformed (array-like): The transformed array with only selected features.
         """
+
         if self.selected_features_ is None:
             raise RuntimeError("FeatureEncodingFrequencySelector has not been fitted yet.")
         X = np.asarray(X)  # Ensure input is a numpy array
@@ -250,9 +232,7 @@ class FeatureEncodingFrequencySelector(SelectorNode):
         return X[:, self.boolean_mask]
 
     def mutate(self, rng: rng_t):
-
         # shift is a rng from normal distribution with a change in 2nd decimal place
-        # todo: increments of 0.05?
         shift = float32_t(rng.normal(loc=0.01, scale=0.01))
         # check if the threshold is going to be less than 0.0
         if self.threshold + shift < float32_t(0.01):
@@ -263,29 +243,33 @@ class FeatureEncodingFrequencySelector(SelectorNode):
         # if neither of the above, then we can just add the shift
         else:
             self.threshold = self.threshold + shift
-        
+
         # Update params dict to stay in sync
         self.params['threshold'] = self.threshold
 
     def get_feature_count(self):
         """
-            Get the number of features selected by the selector.
-            Returns:
-            - int: The number of features selected. If the selector has not been fitted yet,
-           raises a RuntimeError.
+        Get the number of features selected by the selector.
+
+        Returns:
+            int: The number of features selected. If the selector has not been fitted yet, raises a RuntimeError.
         """
+
         if self.selected_features_ is None:
             raise RuntimeError("FeatureEncodingFrequencySelector has not been fitted yet.")
         return len(self.selected_features_)
 
     def get_feature_names(self, feature_names):
         """
-            Get the names of the features selected by the selector.
-            Parameters:
-            - feature_names (array-like): The names of the features.
-            Returns:
-            - array-like: The names of the selected features.
+        Get the names of the features selected by the selector.
+
+        Parameters:
+            feature_names (array-like): The names of the features.
+
+        Returns:
+            array-like: The names of the selected features.
         """
+
         if self.selected_features_ is None:
             raise RuntimeError("FeatureEncodingFrequencySelector has not been fitted yet.")
 
@@ -309,13 +293,13 @@ class OLSRegressor:
     """
     def __init__(self):
         self.model = None
-        
+
     def fit(self, X, y):
         """Fit OLS model to training data."""
         import statsmodels.api as sm
         self.model = sm.OLS(y, X).fit()
         return self
-        
+
     def predict(self, X):
         """Predict using the fitted OLS model."""
         return self.model.predict(X)

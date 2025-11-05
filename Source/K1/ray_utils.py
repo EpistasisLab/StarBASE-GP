@@ -1,6 +1,5 @@
-import time
 from ..Base.selectors import SelectorNode
-from ..Base.types import (float32_t, int16_t, prob_t, int32_t, snp_t, uint16_t)
+from ..Base.types import (float32_t, int16_t, snp_t, uint16_t)
 
 import ray
 import numpy as np
@@ -21,7 +20,6 @@ LUT_UNDERDOMINANT = np.array([0.5, 0.0, 1.0], dtype=float32_t)
 LUT_OVERDOMINANT = np.array([0.0, 1.0, 0.5], dtype=float32_t)
 LUT_SUBADDITIVE = np.array([0.0, 0.25, 1.0], dtype=float32_t)
 LUT_SUPERADDITIVE = np.array([0.0, 0.75, 1.0], dtype=float32_t)
-# LUT not needed for additive encoding as the data should already be in the correct format (0.0, 0.5, 1.0)
 
 # Ultra-optimized numba encoding functions
 @numba.njit(cache=True)
@@ -30,6 +28,7 @@ def _encode_with_lut_fast(X, lut):
     Ultra-fast vectorized encoding using lookup table.
     Uses fastmath for SIMD optimization and cache=True to cache compiled code.
     """
+
     n = X.shape[0]
     out = np.empty(n, dtype=np.float32)
     for i in range(n):
@@ -66,8 +65,6 @@ def encode_subadditive(X):
 def encode_superadditive(X):
     return _encode_with_lut_fast(X, LUT_SUPERADDITIVE)
 
-# No encode function needed for additive encoding
-
 @numba.njit(cache=True)
 def build_pager_lut(X, y):
     """
@@ -75,6 +72,7 @@ def build_pager_lut(X, y):
     based on phenotype means normalized relative to genotype 0 mean (anchor).
     Optimized with fastmath and cache for repeated calls.
     """
+
     means = np.zeros(3, dtype=float32_t)
     present = np.zeros(3, dtype=float32_t)
     geno_keys = np.array([0.0, 0.5, 1.0], dtype=float32_t)
@@ -113,7 +111,7 @@ def build_pager_lut(X, y):
             for i in range(3):
                 scaled[i] = (rel[i] - mn) / (mx - mn) if present[i] else 0.5 # if a genotype is not present, assign 0.5
     else:
-        scaled = np.full(3, 0.5, dtype=float32_t) 
+        scaled = np.full(3, 0.5, dtype=float32_t)
 
     return scaled  # shape (3,)
 
@@ -123,6 +121,7 @@ def encode_pager(X, lut):
     Encode genotypes using a precomputed PAGER LUT.
     Ultra-fast with fastmath and cache optimizations.
     """
+
     n = X.shape[0]
     out = np.empty(n, dtype=np.float32)
     for i in range(n):
@@ -134,6 +133,22 @@ def encode_pager(X, lut):
 # Generic Ray worker template
 # -----------------------------
 def _ray_snp_eval_template(X, y, train_idx, valid_idx, snp, lo, encoder_func=None):
+    """
+    Template to call other encoders ray made functions
+
+    Args:
+        X (np.ndarray): genotype data
+        y (np.ndarray): phenotype data
+        train_idx (np.ndarray): training indices
+        valid_idx (np.ndarray): validation indices
+        snp (snp_t): snp name
+        lo (snp_t): encoder being used
+        encoder_func (Callable[[np.ndarray], np.ndarray], optional): function to encode the genotype data. Defaults to None.
+
+    Returns:
+        Tuple[float, str, str, float, Optional[np.ndarray]]: evaluation results
+    """
+
     assert isinstance(X, np.ndarray), "X should be a numpy array"
 
     # Special case: if encoder_func is None, data is already in correct format (e.g., additive)
@@ -205,9 +220,22 @@ def ray_snp_eval_pager(X, y, train_idx, valid_idx, snp, lo=snp_t('pager')):
     return _ray_snp_eval_template(X, y, train_idx, valid_idx, snp, lo,
                                  lambda X_data: encode_pager(X_data, build_pager_lut(X_data[train_idx], y[train_idx])))
 
-# permuation feature importance
 @ray.remote
-def ray_pfi(X, y, train_idx, valid_idx, new_column_names, root_node, random_state, pop_id) -> None:
+def ray_pfi(X, y, train_idx, valid_idx, new_column_names, root_node, random_state, pop_id):
+    """
+    Compute permutation feature importance (PFI) for a fitted model using validation data.
+
+    Args:
+        X (List[ray.ObjectID]): List of Ray ObjectIDs for feature data arrays.
+        y (np.ndarray): Phenotype data array.
+        train_idx (np.ndarray): Indices for training data.
+        valid_idx (np.ndarray): Indices for validation data.
+        new_column_names (List[snp_t]): Names of the features corresponding to X.
+        root_node (SelectorNode): Fitted model node to evaluate.
+        random_state (int): Random state for reproducibility.
+        pop_id (uint16_t): Population ID for tracking.
+    """
+
 
     # create dataset
     X_train = np.column_stack([ray.get(x)[train_idx] for x in X])
@@ -230,7 +258,6 @@ def ray_pfi(X, y, train_idx, valid_idx, new_column_names, root_node, random_stat
 
     return pfi_results, pop_id
 
-# evaluate unseen snps and encode them efficiently using numba
 @ray.remote
 def ray_snp_encoder(X, y, train_idx, enc: snp_t, snp: snp_t) -> Tuple[np.ndarray, snp_t]:
     """
@@ -238,17 +265,18 @@ def ray_snp_encoder(X, y, train_idx, enc: snp_t, snp: snp_t) -> Tuple[np.ndarray
     For PAGER encoding, builds LUT from training data and applies to entire X.
     Optimized for maximum speed with direct LUT access.
     """
+
     assert isinstance(X, np.ndarray), "X should be a numpy array"
     assert isinstance(y, np.ndarray), "y should be a numpy array"
     assert isinstance(enc, snp_t), "enc should be a numpy string"
 
     # Get the encoding string (convert from numpy string if needed)
     enc_str = str(enc) if isinstance(enc, np.str_) else enc
-    
+
     # Special case: additive - data is already in correct format
     if enc_str == 'additive':
         return X, snp
-    
+
     # Special case: PAGER - build LUT from training data, apply to all data
     if enc_str == 'pager':
         lut = build_pager_lut(X[train_idx], y[train_idx])
@@ -265,7 +293,7 @@ def ray_snp_encoder(X, y, train_idx, enc: snp_t, snp: snp_t) -> Tuple[np.ndarray
         'subadditive': LUT_SUBADDITIVE,
         'superadditive': LUT_SUPERADDITIVE,
     }
-    
+
     if enc_str in lut_map:
         # Direct encoding with pre-allocated LUT (fastest path)
         X_encoded = _encode_with_lut_fast(X, lut_map[enc_str])
@@ -274,7 +302,6 @@ def ray_snp_encoder(X, y, train_idx, enc: snp_t, snp: snp_t) -> Tuple[np.ndarray
         logging.error(f"Encoding {enc} not recognized for SNP {snp}.")
         return X, snp
 
-# all univariate snps with their best lo goes to the LD operator, then the feature selector
 @ray.remote
 def ray_eval_pipeline_ld_fs(snp_names: List[snp_t],
                             x_train_ori: List[ray.ObjectID],
@@ -283,8 +310,30 @@ def ray_eval_pipeline_ld_fs(snp_names: List[snp_t],
                             train_idx: npt.NDArray,
                             selector_node: SelectorNode,
                             ld_node: SelectorNode,
-                            pop_id: uint16_t,        # error. feature count. pop_id. details after ld node. snp_after_ld
+                            pop_id: uint16_t,
                             snp_r2_set: Set) -> Tuple[float32_t, int16_t, uint16_t, List[snp_t], Dict[snp_t, Dict]]:
+    """
+    Evaluate a pipeline with LD and feature selection nodes using Ray.
+
+    Parameters:
+        snp_names (List[snp_t]): List of SNP names in the pipeline.
+        x_train_ori (List[ray.ObjectID]): List of Ray ObjectIDs for original SNP data.
+        x_train_enc (List[ray.ObjectID]): List of Ray ObjectIDs for encoded SNP data.
+        y_train (npt.NDArray): Phenotype data array.
+        train_idx (npt.NDArray): Indices for training data.
+        selector_node (SelectorNode): Fitted feature selector node.
+        ld_node (SelectorNode): Fitted LD node.
+        pop_id (uint16_t): Population ID for tracking.
+        snp_r2_set (Set): Set of tuples (snp_name, lo_r2) for SNPs in the pipeline.
+
+    Returns:
+        Tuple containing:
+            float32_t: Error value (-1.0 if failure, 1.0 if success).
+            int16_t: Feature count after selection.
+            uint16_t: Population ID.
+            List[snp_t]: List of selected SNP names after LD and feature selection.
+            Dict[snp_t, Dict]: Details of SNPs after LD node.
+    """
 
     # make dictionary to hold the snp r2 scores
     snp_r2_dict = {p[0]: p[1] for p in snp_r2_set}
@@ -333,7 +382,6 @@ def ray_eval_pipeline_ld_fs(snp_names: List[snp_t],
     # return features that made it passed ld and fs for this pipeline
     return float32_t(1.0), int16_t(feature_count), pop_id, [snp_t(feature) for feature in features_final], ld_node.snp_details_after_ld
 
-# all univariate snps/nodes with their best lo go straight to the feature selector
 @ray.remote
 def ray_eval_pipeline_fs(snp_names: List[snp_t],
                          x_train_enc: List[ray.ObjectID],
@@ -341,7 +389,25 @@ def ray_eval_pipeline_fs(snp_names: List[snp_t],
                          train_idx: npt.NDArray,
                          selector_node: SelectorNode,   # error. feature count. pop_id. details after ld node. snp_after_ld (ignore for this one)
                          pop_id: uint16_t) ->     Tuple[float32_t, int16_t, uint16_t, List[snp_t], Dict[snp_t, Dict]]:
+    """
+    Evaluate a pipeline with only a feature selection node using Ray.
 
+    Parameters:
+        snp_names (List[snp_t]): List of SNP names in the pipeline.
+        x_train_enc (List[ray.ObjectID]): List of Ray ObjectIDs for encoded SNP data.
+        y_train (npt.NDArray): Phenotype data array.
+        train_idx (npt.NDArray): Indices for training data.
+        selector_node (SelectorNode): Fitted feature selector node.
+        pop_id (uint16_t): Population ID for tracking.
+
+    Returns:
+        Tuple containing:
+            float32_t: Error value (-1.0 if failure, 1.0 if success).
+            int16_t: Feature count after selection.
+            uint16_t: Population ID.
+            List[snp_t]: List of selected SNP names after feature selection.
+            Dict[snp_t, Dict]: Empty dictionary (no LD node details).
+    """
 
     # hold feature counts across all folds
     feature_count = 0
@@ -373,13 +439,28 @@ def ray_eval_pipeline_fs(snp_names: List[snp_t],
     # return features that made it passed ld and fs for this pipeline
     return float32_t(1.0), int16_t(feature_count), pop_id, [snp_t(feature) for feature in features_final], {}
 
-# evaluate piepline with only snps that make it passed ld and feature selector
 @ray.remote
 def ray_eval_pipeline_r2(X: List[ray.ObjectID],
                       y: ray.ObjectID,
                       train_idx,
                       valid_idx,                  #r2.       #id.     # error?
                       pop_id: uint16_t) -> Tuple[float32_t, uint16_t, float32_t]:
+    """
+    Evaluate a pipeline with only a regression node using Ray.
+
+    Parameters:
+        X (List[ray.ObjectID]): List of Ray ObjectIDs for feature data arrays.
+        y (ray.ObjectID): Ray ObjectID for phenotype data array.
+        train_idx (np.ndarray): Indices for training data.
+        valid_idx (np.ndarray): Indices for validation data.
+        pop_id (uint16_t): Population ID for tracking.
+
+    Returns:
+        Tuple containing:
+            float32_t: R² score on validation data.
+            uint16_t: Population ID.
+            float32_t: Error value (1.0 if success, -1.0 if failure).
+    """
 
     # create dataset
     X_matrix = np.column_stack([ray.get(x) for x in X])
@@ -403,22 +484,21 @@ def ray_eval_pipeline_r2(X: List[ray.ObjectID],
 
     return float32_t(r2_score(y[valid_idx], y_pred)), pop_id, float32_t(1.0)
 
-# Optimized: Evaluate all 9 encodings in a single Ray call
 @ray.remote
 def ray_snp_eval_all_encodings(X, y, train_idx, valid_idx, snp):
     """
     Evaluate all 9 encoding types for a single SNP in one Ray call.
     This dramatically reduces Ray scheduling overhead by batching all encodings together.
-    
+
     Returns:
-        Dict[str, Tuple[float, str, str, float, np.ndarray|None]]: 
+        Dict[str, Tuple[float, str, str, float, np.ndarray|None]]:
             Dictionary mapping encoding name to (r2_score, snp, encoding, error_flag, pager_lut)
             pager_lut is only populated for 'pager' encoding, None for others
     """
     assert isinstance(X, np.ndarray), "X should be a numpy array"
-    
+
     results = {}
-    
+
     # Define all encodings to evaluate
     encodings = [
         ('additive', None),  # No transformation needed
@@ -431,10 +511,10 @@ def ray_snp_eval_all_encodings(X, y, train_idx, valid_idx, snp):
         ('superadditive', encode_superadditive),
         ('pager', lambda X_data: encode_pager(X_data, build_pager_lut(X_data[train_idx], y[train_idx])))
     ]
-    
+
     for enc_name, encoder_func in encodings:
         pager_lut = None  # Default: no PAGER LUT
-        
+
         try:
             # Encode the data
             if encoder_func is None:
@@ -446,19 +526,19 @@ def ray_snp_eval_all_encodings(X, y, train_idx, valid_idx, snp):
                     X_encoded = encode_pager(X, pager_lut)
                 else:
                     X_encoded = encoder_func(X)
-            
+
             # Fit OLS model
             regressor = sm.OLS(y[train_idx], sm.add_constant(X_encoded[train_idx], has_constant='add'))
             fit_results = regressor.fit()
-            
+
             # Score on validation set
             y_pred = fit_results.predict(sm.add_constant(X_encoded[valid_idx], has_constant='add'))
             score = r2_score(y[valid_idx], y_pred)
-            
+
             results[enc_name] = (float32_t(score), snp, snp_t(enc_name), float32_t(1.0), pager_lut)
-            
+
         except Exception as e:
             logging.error(f"Error evaluating {enc_name} for SNP {snp}: {e}")
             results[enc_name] = (float32_t(0.0), snp, snp_t(enc_name), float32_t(-1.0), None)
-    
+
     return results

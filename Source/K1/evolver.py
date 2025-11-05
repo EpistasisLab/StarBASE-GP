@@ -23,8 +23,6 @@ from typing import List, Tuple
 import numpy.typing as npt
 import matplotlib.pyplot as plt
 import time
-from sklearn.metrics import r2_score
-import statsmodels.api as sm
 
 @typechecked
 class K1_Evolver(EA):
@@ -76,7 +74,6 @@ class K1_Evolver(EA):
                          ld_flag=ld_flag)
         self.regression = regression
 
-        # todo: add pager encoder once done
         self.encoder_types = [ snp_t('additive'), snp_t('dominant'), snp_t('recessive'),
                               snp_t('heterosis'), snp_t('underdominant'), snp_t('overdominant'),
                               snp_t('subadditive'), snp_t('superadditive'),
@@ -115,15 +112,31 @@ class K1_Evolver(EA):
         return
 
     def evolve(self, gens: uint16_t) -> None:
+        """
+        Evolve the population of pipelines for a given number of generations.
+        Should follow the NSGA-II algorithm steps:
+        1. Initialize the population.
+        2. Evaluate the population.
+        3. While generation < gens:
+            a. Select parents.
+            b. Generate offspring through variation (crossover and mutation).
+            c. Evaluate offspring.
+            d. Select survivors to form the new population.
+            e. Go to step 3.
+
+        Args:
+            gens (uint16_t): Number of generations to evolve the population.
+        """
+
+        # quick check
+        assert gens >= 0, "Number of generations must be non-negative."
+
         # print initial hub stats
         print('Initial Hub details:')
         self.hub.seen_snps_proportion()
         print('', flush=True)
-
         # list to store the generation details - front zero size, still consider snp set size, number of snps pruned
         generation_details = []
-        # start the timer for the entire process
-        total_gp_run = time.time()
         # create the initial population
         print('Initializing population...', flush=True)
         start_time = time.time()
@@ -142,7 +155,7 @@ class K1_Evolver(EA):
             # get the size of the front 0 after each generation
             count = 0
             if len(self.population) >= 2:
-                _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(float32_t(1.0), int32_t(-1))))
+                _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(pipelines=self.population, weights=(float32_t(1.0), int32_t(-1))))
                 count = 0
                 for r in rank:
                     if r == 0:
@@ -159,6 +172,7 @@ class K1_Evolver(EA):
                 'consideration_set_size': self.hub.consideration_hub_size()
             }
 
+            # start generation timer
             start_time = time.time()
 
             # get order of mutation/crossover to do with the extra offspring
@@ -179,8 +193,8 @@ class K1_Evolver(EA):
                                                            parent_ids = parent_ids,
                                                            population = self.population,
                                                            order = var_order)
-            # make sure we have the correct number of competing solutions
-            assert len(offspring) + len(self.population) <= 3 * self.pop_size
+            # make sure we have the correct number of offspring solutions
+            assert 0 < len(offspring) <= 2 * self.pop_size
 
             # process offspring: evaluation interactions and remove bad interactions
             offspring = self.process_offspring(offspring, int16_t(g))
@@ -234,6 +248,7 @@ class K1_Evolver(EA):
         Function to initialize the population of pipelines for self.population.
         Size of self.population must be self.pop_size.
         """
+
         # quick check to make sure hub is initialized
         assert self.hub is not None, "Hub must be initialized before initializing population."
         assert len(self.population) == 0, "Population must be empty before initializing."
@@ -290,7 +305,7 @@ class K1_Evolver(EA):
 
     def evaluation(self, pipelines: List[Pipeline], gen_info: int16_t) -> Tuple[List[Pipeline], Dict]:
         """
-        Function to evaluate entire pipelines.
+        Function to evaluate pipelines.
         All of this should be done in asyncronous parallel jobs for maximum efficiency.
 
         Parameters:
@@ -302,26 +317,21 @@ class K1_Evolver(EA):
         Returns:
         Tuple[List[Pipeline], Dict]:
             - List of evaluated pipelines (pipelines updated with evaluation results)
-            - Dictionary containing evaluation statistics (fs_only_count, ld_fs_count, sequential_selector_count, fs_time)
+            - Dictionary containing evaluation statistics (fs_only_count, pipelines_evaluated)
         """
+
         # quick checks
         assert len(pipelines) > 0, "No pipelines to evaluate."
 
         # keep a count of number of pipelines that are calling only fs vs ld+fs
         fs_only_count = 0
-        ld_fs_count = 0
-        sequential_selector_count = 0
 
         # create ray jobs for each pipeline evaluation depending on if ld is needed or not
         ray_jobs = []
         pipeline_evaluation_details = {}
         for i, pipeline in enumerate(pipelines):
-            # Count SequentialFeatureSelector usage
-            if pipeline.get_selector_node().name == 'SequentialFeatureSelector':
-                sequential_selector_count += 1
             pipeline_evaluation_details[i] = {snp_t('r2'): float32_t(0.0), snp_t('feature_cnt'): None, snp_t('features'): None,
                                               snp_t('ld_used'): False, snp_t('error'): False, snp_t('count'): uint16_t(0)}
-
             # Check if LD pruning should be applied:
             # 1. ld_flag must be True
             # 2. Pipeline must contain SNPs from the same chromosome
@@ -336,7 +346,6 @@ class K1_Evolver(EA):
                                                                          pop_id=uint16_t(i),
                                                                          snp_r2_set=self.hub.generate_r2_dict(pipeline.get_branch_set())))
                 pipeline_evaluation_details[i][snp_t('ld_used')] = True
-                ld_fs_count += 1
             # else, no need for ld pruner (either ld_flag is False or SNPs are not on same chromosome)
             else:
                 ray_jobs.append(ray_utils.ray_eval_pipeline_fs.remote(snp_names=[snp for snp in pipeline.get_branch_set()],
@@ -350,9 +359,6 @@ class K1_Evolver(EA):
         pruned_snps = set()
         # will hold the snp details after LD for each pipeline
         snp_details_per_snp = {}
-        # Track LD timing separately
-        ld_start_time = time.time()
-        ld_jobs_completed = 0
         # process results as they come in
         start_time = time.time()
         while len(ray_jobs) > 0:
@@ -368,23 +374,16 @@ class K1_Evolver(EA):
 
             # Track if this was an LD job (has ld_details)
             if ld_details is not None and len(ld_details) > 0:
-                ld_jobs_completed += 1
                 # update the pruned snps based on the snp details after LD
                 for snp, details in ld_details.items():
                     if details['pruned'] == True:
                         pruned_snps.add(snp)
                         snp_details_per_snp[snp] = details
 
-        # Calculate LD time (only for LD jobs)
-        ld_time = 0.0
-        if ld_jobs_completed > 0:
-            ld_time = (time.time() - ld_start_time) / 60  # in minutes
-
-        # timing print and save
-        fs_time = (time.time() - start_time) / 60  # in minutes
-        print(f"Feature selection (ld->fs | fs) took {fs_time} mins", flush=True)
-        if ld_time > 0:
-            print(f"LD processing for {ld_jobs_completed} pipelines took {ld_time} mins", flush=True)
+        # if self.ld_flag is False, pruned_snps should be empty
+        assert (len(pruned_snps) == 0) if self.ld_flag == False else True, "Pruned SNPs should be empty when LD flag is False."
+        # timing print
+        print(f"Feature selection (ld->fs | fs) took {(time.time() - start_time) / 60} mins", flush=True)
 
         # send pipelines with no error to be evaluated for r2 across k-folds (only pipelines with error == False)
         ray_jobs = []
@@ -434,24 +433,25 @@ class K1_Evolver(EA):
             # add to evaluated pipelines
             evaluated_pipelines.append(pipelines[pipeline_id])
 
-        # Create statistics dictionary
-        eval_stats = {
-            'fs_only_count': fs_only_count,
-            'ld_fs_count': ld_fs_count,
-            'sequential_selector_count': sequential_selector_count,
-            'fs_time': fs_time,
-            'ld_time': ld_time,
-            'pipelines_evaluated': len(evaluated_pipelines)
-        }
-
-        return evaluated_pipelines, eval_stats
+        return evaluated_pipelines, {'fs_only_count': fs_only_count, 'pipelines_evaluated': len(evaluated_pipelines)}
 
     def process_offspring(self, pipelines: List[Pipeline], gen_info: int16_t) -> List[Pipeline]:
+        """
+        Function to process the offspring pipelines after they have been generated.
+        This includes branch set updates, pipeline evaluation, removal of bad pipelines, etc.
+
+        Args:
+            pipelines (List[Pipeline]): List of offspring pipelines to process.
+            gen_info (int16_t): Generation information for logging purposes.
+
+        Returns:
+            List[Pipeline]: List of processed pipelines.
+        """
+
         # quick checks
         assert len(pipelines) > 0, "No pipelines to process."
         assert len(pipelines) <= self.pop_size * 2, "Number of pipelines exceeds maximum offspring size."
         assert gen_info >= 0, "Generation info must be non-negative."
-
 
         print('Processing offspring pipelines: evaluating unseen branches and removing inactive branches...', flush=True)
         # collect all snps from each pipeline and send to hub to find unseen snps
@@ -480,17 +480,15 @@ class K1_Evolver(EA):
             ))
         return updated_pipelines
 
-    # function to check is a branch set has snps on the same chromosome: will return True if so
     def snps_on_the_same_chromosome(self, branch_set: Set[snp_t]) -> bool:
         """
         Function to check if a branch set has SNPs on the same chromosome.
 
         Parameters:
-        branch_set: Set[snp_t]
-            A set of SNPs to check.
+            branch_set (Set[snp_t]): Set of SNPs to check.
 
         Returns:
-        bool: True if any SNPs are on the same chromosome, False otherwise.
+            bool: True if any SNPs are on the same chromosome, False otherwise.
         """
         assert len(branch_set) > 0, "Branch set must not be empty."
         assert len(branch_set) <= self.branch_max, "Branch set size exceeds maximum allowed branches."
@@ -505,16 +503,18 @@ class K1_Evolver(EA):
             chromosomes.add(chrom)
         return False
 
-    def evaluate_unseen_branches(self, unseen_branches: Set, gen_seen: int16_t) -> None:
+    def evaluate_unseen_branches(self, unseen_branches: Set[snp_t], gen_seen: int16_t) -> None:
         """
         Function to evaluate all unseen branches and add their best R2 and Encoder type to the Hub.
         All of this should be done in asyncronous parallel jobs.
-        Only SNPs with r2 > self.branch_explainability_threshold will have their encoded version stored in the hub.
+        We update the Hub with the results as they come in.
 
         Parameters:
-        unseen_branches: Set
-            Unseen branches in a set to evaluate.
+            unseen_branches (Set[snp_t]): Set of unseen branches (SNPs) to evaluate.
+
+            gen_seen (int16_t): Generation number when these branches were first seen.
         """
+
         # quick checks
         assert len(unseen_branches) > 0, "No unseen branches to evaluate."
         assert gen_seen >= 0, "Generation seen must be non-negative."
@@ -599,7 +599,6 @@ class K1_Evolver(EA):
                                                                  train_idx = self.train_idx_ray,
                                                                  enc = best_encoder,
                                                                  snp = snp_name))
-
         # process encoded snp results
         start_time = time.time()
         count = 0
@@ -644,11 +643,13 @@ class K1_Evolver(EA):
         Note that the chrom_num index is mapped to the chromosome keys provided by the hub.
 
         Parameters:
-        cnt: uint16_t
-            total number of snps to sample based on each pipeline's randomized init
-        chrom_num: uint16_t
-            total number of chromosomes based on snp hub
+            cnt (uint16_t): Total number of snps to sample.
+            chrom_num (uint16_t): Number of chromosomes to sample from.
+
+        Returns:
+            npt.NDArray[uint16_t]: Array of size chrom_num with the number of snps to sample from each chromosome.
         """
+
         assert cnt > 0
         assert chrom_num > 0
 
@@ -671,6 +672,7 @@ class K1_Evolver(EA):
         """
         Function to perform analysis on all the Pareto front pipelines using the validation set using only the good snps seen during evolution.
         """
+
         # get the Pareto front pipelines
         _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(float32_t(1.0), int32_t(-1))))
         pareto_front_pipelines = []
@@ -681,15 +683,6 @@ class K1_Evolver(EA):
 
         # Sort the Pareto front by feature count (MUST match save_and_plot_pareto_front ordering)
         pareto_front_pipelines = sorted(pareto_front_pipelines, key=lambda x: x.get_trait_feature_cnt())
-
-        # # print all the pipelines in the Pareto front
-        # for pid, pipeline in enumerate(pareto_front_pipelines):
-        #     print(f"Pipeline ID: {pid}", flush=True)
-        #     print(f"Train R2: {pipeline.get_trait_r2()}", flush=True)
-        #     print(f"Feature Count: {pipeline.get_trait_feature_cnt()}", flush=True)
-        #     print(f"Feature Set: {pipeline.get_trait_feature_names()}", flush=True)
-        #     print(f"Selector: {pipeline.get_selector_node().name} with params {pipeline.get_selector_node().get_params()}", flush=True)
-        #     print('-'*30, flush=True)
 
         # collect all the parallel jobs for evaluating the pipelines on the validation set
         ray_jobs = []
@@ -843,16 +836,23 @@ class K1_Evolver(EA):
                                  pareto_validation_r2[utopia_point_pipeline_id]['feature_cnt'])
         return
 
-    # function to take in a set of snp names and perform final test on the test dataset
     def final_pipeline_test(self, pipeline_data: Dict, file_name: str, train_r2: float32_t, validation_r2: float32_t, size: int16_t) -> None:
         """
-        Function to perform the final test on the test dataset.
+        Function to perform the final assessment on the test dataset.
         Combines training and validation datasets to fit a linear regression model.
         Then, evaluates the model on the test dataset and computes PFI using ray_pfi.
         Saves results to a CSV file.
+
+        Args:
+            pipeline_data (Dict): Dictionary containing pipeline information including 'feature_set'.
+            file_name (str): Name of the output CSV file to save results.
+            train_r2 (float32_t): Cross-validated training R² score.
+            validation_r2 (float32_t): Validation R² score.
+            size (int16_t): Number of features in the pipeline.
+
         """
         snp_names = list(pipeline_data['feature_set'])  # Get features from pipeline_data
-        print(f"Performing final test on {len(snp_names)} SNPs...", flush=True)
+        print(f"Performing final assessment on {len(snp_names)} SNPs...", flush=True)
 
         # Combine training and validation indices for final model training
         combined_train_idx = np.concatenate([ray.get(self.train_idx_ray), ray.get(self.val_idx_ray)])
@@ -943,7 +943,7 @@ class K1_Evolver(EA):
         # Create DataFrame with PFI results
         pfi_df = pd.DataFrame(list(pfi_results.items()), columns=['SNP', 'Importance'])
         pfi_df = pfi_df.sort_values(by='Importance', ascending=False)
-        pfi_df['Cross-validated Train R2'] = train_val_r2
+        pfi_df['Cross-validated Train R2'] = train_r2
         pfi_df['Validation R2'] = validation_r2
         pfi_df['Train+Valid R2'] = train_val_r2
         pfi_df['Test R2'] = test_r2
@@ -954,12 +954,12 @@ class K1_Evolver(EA):
         pfi_df.to_csv(output_path, index=False)
         print(f"Results saved to {file_name}", flush=True)
 
-    # function to save and plot Pareto front at the end of evolution
     def save_and_plot_pareto_front(self):
         """
         Function to save and plot the Pareto front at the end of evolution.
         Saves the Pareto front pipelines to a CSV file and generates a plot.
         """
+
         # get the front 0 pipelines
         _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(float32_t(1.0), int32_t(-1))))
         pareto_front_pipelines = []
