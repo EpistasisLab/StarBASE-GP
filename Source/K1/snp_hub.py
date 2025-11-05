@@ -882,8 +882,8 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
                     unseen_count += 1
 
         # print proportion of unseen snps
-        print(f"% of unseen SNPs: {unseen_count/len(self.db.hub):.2%}", flush=True)
-        print(f"% of SNPs still considered: {self.consider.get_total()/len(self.db.hub):.2%}", flush=True)
+        print(f"{unseen_count/len(self.db.hub):.2%} of unseen SNPs: {unseen_count} of {len(self.db.hub)}", flush=True)
+        print(f"{self.consider.get_total()/len(self.db.hub):.2%}% of SNPs still considered: {self.consider.get_total()} of {len(self.db.hub)}", flush=True)
         return
 
     def get_unseen_snps(self, snps: Set[snp_t]) -> Set[snp_t]:
