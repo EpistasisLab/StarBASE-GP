@@ -422,7 +422,7 @@ class K1_Hub(Hub):
                 self.hub[snp][15] = float32_t(pager_lut[2])  # pager_2
 
             # if r2 is negative, flip to inactive
-            if r2 < snp_explainability_threshold:
+            if snp_explainability_threshold >= float32_t(0.0) and r2 < snp_explainability_threshold:
                 self.flip_activate_flag_r2(snp)
                 self.delete_ori_ray_id(snp)
             else:
@@ -540,7 +540,7 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         # Write snp hub to file
         with open(save_dir+"snp_hub.csv", 'w') as f:
             # Write the headers for the snp_file (removed bin_idx column)
-            f.write("snp,chr,bp,r2,bin_num,encoding,seen,pruned,gen_seen,gen_pruned,pruned_reason,ld_threshold,ld_genomic_distance,anchor_snp,pager_0,pager_1,pager_2\n")
+            f.write("snp,chr,bp,r2,bin_num,encoding,seen,active,gen_seen,gen_pruned,pruned_reason,ld_threshold,ld_genomic_distance,anchor_snp,pager_0,pager_1,pager_2\n")
             for row in snp_data:
                 # split snp into chromosome and position
                 chrom, pos = row[0].split('.')
@@ -554,19 +554,19 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
                     pager_0 = '' if pager_0_val < 0 else str(pager_0_val)
                 except (ValueError, TypeError):
                     pager_0 = ''
-                
+
                 try:
                     pager_1_val = float(row[15])
                     pager_1 = '' if pager_1_val < 0 else str(pager_1_val)
                 except (ValueError, TypeError):
                     pager_1 = ''
-                
+
                 try:
                     pager_2_val = float(row[16])
                     pager_2 = '' if pager_2_val < 0 else str(pager_2_val)
                 except (ValueError, TypeError):
                     pager_2 = ''
-                
+
                 # Write all columns (removed bin_idx which was row[4]): row[13] is anchor_snp, then pager_0, pager_1, pager_2
                 f.write(f"{snp_with_chr},{chrom},{pos},{row[1]},{row[2]},{row[5]},{row[6]},{row[7]},{row[8]},{row[9]},{row[10]},{row[11]},{row[12]},{row[13]},{pager_0},{pager_1},{pager_2}\n")
 
