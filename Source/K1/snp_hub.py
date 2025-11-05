@@ -589,6 +589,7 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         self.db.update_r2_enc(snp, r2, enc, enc_x, gen_seen, snp_explainability_threshold, pager_lut)
         # update Consideration_Hub object: if r2 is less than threshold, remove snp from non prunned
         if r2 < snp_explainability_threshold and snp_explainability_threshold >= float32_t(0.0):
+            print('snp_explainability_threshold: ', snp_explainability_threshold, flush=True)
             self.consider.remove_snp(snp)
         return
 
