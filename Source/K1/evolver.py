@@ -1,7 +1,7 @@
 
 # import base EA class and types
 from ..Base.evovler import EA
-from ..Base.types import (float32_t, int16_t, prob_t, int32_t, snp_t, uint16_t)
+from ..Base.types import (float32_t, int16_t, prob_t, int32_t, snp_t, uint16_t, uint32_t)
 from ..Base.pipeline import Pipeline
 from ..Base.utils import snp_chrm_pos
 from ..Base import nsga_tool as nsga
@@ -28,7 +28,7 @@ import time
 class K1_Evolver(EA):
     def __init__(self,
                  seed: int,
-                 pop_size: uint16_t,
+                 pop_size: uint32_t,
                  branch_max: uint16_t,
                  branch_min: uint16_t,
                  cores: int,
@@ -180,16 +180,16 @@ class K1_Evolver(EA):
             parent_cnt = None
             parent_ids = None
             if len(self.population) == 1:
-                var_order, parent_cnt = [snp_t('m')] * uint16_t(2*self.pop_size), uint16_t(2*self.pop_size)
+                var_order, parent_cnt = [snp_t('m')] * uint32_t(2*self.pop_size), uint32_t(2*self.pop_size)
                 parent_ids = [uint16_t(0)] * parent_cnt
             else:
-                var_order, parent_cnt = self.reproduction.variation_order(self.rng, uint16_t(2*self.pop_size))
+                var_order, parent_cnt = self.reproduction.variation_order(self.rng, uint32_t(2*self.pop_size))
                 parent_ids = self.parent_selection(parent_cnt)
 
             # generate offspring
             offspring = self.reproduction.produce_offspring(rng = self.rng,
                                                            hub = self.hub,
-                                                           offspring_cnt = uint16_t(2*self.pop_size),
+                                                           offspring_cnt = uint32_t(2*self.pop_size),
                                                            parent_ids = parent_ids,
                                                            population = self.population,
                                                            order = var_order)
