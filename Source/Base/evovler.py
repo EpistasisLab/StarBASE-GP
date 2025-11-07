@@ -20,7 +20,7 @@ from . import nsga_tool as nsga
 import datatable as dt
 from datatable import f
 import warnings
-from .types import (float32_t, int16_t, prob_t, int32_t, snp_t, uint16_t)
+from .types import (float32_t, int16_t, prob_t, int32_t, snp_t, uint16_t, uint32_t)
 from abc import ABC, abstractmethod
 from .pipeline import Pipeline
 
@@ -31,7 +31,7 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 class EA(ABC):
     def __init__(self,
                  seed: int,
-                 pop_size: uint16_t,
+                 pop_size: uint32_t,
                  branch_max: uint16_t,
                  branch_min: uint16_t,
                  cores: int,
