@@ -1,5 +1,5 @@
 from ..Base.selectors import SelectorNode
-from ..Base.types import (float32_t, int16_t, snp_t, uint16_t)
+from ..Base.types import (float32_t, int16_t, snp_t, uint32_t, uint32_t)
 
 import ray
 import numpy as np
@@ -233,7 +233,7 @@ def ray_pfi(X, y, train_idx, valid_idx, new_column_names, root_node, random_stat
         new_column_names (List[snp_t]): Names of the features corresponding to X.
         root_node (SelectorNode): Fitted model node to evaluate.
         random_state (int): Random state for reproducibility.
-        pop_id (uint16_t): Population ID for tracking.
+        pop_id (uint32_t): Population ID for tracking.
     """
 
 
@@ -310,8 +310,8 @@ def ray_eval_pipeline_ld_fs(snp_names: List[snp_t],
                             train_idx: npt.NDArray,
                             selector_node: SelectorNode,
                             ld_node: SelectorNode,
-                            pop_id: uint16_t,
-                            snp_r2_set: Set) -> Tuple[float32_t, int16_t, uint16_t, List[snp_t], Dict[snp_t, Dict]]:
+                            pop_id: uint32_t,
+                            snp_r2_set: Set) -> Tuple[float32_t, int16_t, uint32_t, List[snp_t], Dict[snp_t, Dict]]:
     """
     Evaluate a pipeline with LD and feature selection nodes using Ray.
 
@@ -323,14 +323,14 @@ def ray_eval_pipeline_ld_fs(snp_names: List[snp_t],
         train_idx (npt.NDArray): Indices for training data.
         selector_node (SelectorNode): Fitted feature selector node.
         ld_node (SelectorNode): Fitted LD node.
-        pop_id (uint16_t): Population ID for tracking.
+        pop_id (uint32_t): Population ID for tracking.
         snp_r2_set (Set): Set of tuples (snp_name, lo_r2) for SNPs in the pipeline.
 
     Returns:
         Tuple containing:
             float32_t: Error value (-1.0 if failure, 1.0 if success).
             int16_t: Feature count after selection.
-            uint16_t: Population ID.
+            uint32_t: Population ID.
             List[snp_t]: List of selected SNP names after LD and feature selection.
             Dict[snp_t, Dict]: Details of SNPs after LD node.
     """
@@ -388,7 +388,7 @@ def ray_eval_pipeline_fs(snp_names: List[snp_t],
                          y_train: npt.NDArray,
                          train_idx: npt.NDArray,
                          selector_node: SelectorNode,   # error. feature count. pop_id. details after ld node. snp_after_ld (ignore for this one)
-                         pop_id: uint16_t) ->     Tuple[float32_t, int16_t, uint16_t, List[snp_t], Dict[snp_t, Dict]]:
+                         pop_id: uint32_t) ->     Tuple[float32_t, int16_t, uint32_t, List[snp_t], Dict[snp_t, Dict]]:
     """
     Evaluate a pipeline with only a feature selection node using Ray.
 
@@ -398,13 +398,13 @@ def ray_eval_pipeline_fs(snp_names: List[snp_t],
         y_train (npt.NDArray): Phenotype data array.
         train_idx (npt.NDArray): Indices for training data.
         selector_node (SelectorNode): Fitted feature selector node.
-        pop_id (uint16_t): Population ID for tracking.
+        pop_id (uint32_t): Population ID for tracking.
 
     Returns:
         Tuple containing:
             float32_t: Error value (-1.0 if failure, 1.0 if success).
             int16_t: Feature count after selection.
-            uint16_t: Population ID.
+            uint32_t: Population ID.
             List[snp_t]: List of selected SNP names after feature selection.
             Dict[snp_t, Dict]: Empty dictionary (no LD node details).
     """
@@ -444,7 +444,7 @@ def ray_eval_pipeline_r2(X: List[ray.ObjectID],
                       y: ray.ObjectID,
                       train_idx,
                       valid_idx,                  #r2.       #id.     # error?
-                      pop_id: uint16_t) -> Tuple[float32_t, uint16_t, float32_t]:
+                      pop_id: uint32_t) -> Tuple[float32_t, uint32_t, float32_t]:
     """
     Evaluate a pipeline with only a regression node using Ray.
 
@@ -453,12 +453,12 @@ def ray_eval_pipeline_r2(X: List[ray.ObjectID],
         y (ray.ObjectID): Ray ObjectID for phenotype data array.
         train_idx (np.ndarray): Indices for training data.
         valid_idx (np.ndarray): Indices for validation data.
-        pop_id (uint16_t): Population ID for tracking.
+        pop_id (uint32_t): Population ID for tracking.
 
     Returns:
         Tuple containing:
             float32_t: R² score on validation data.
-            uint16_t: Population ID.
+            uint32_t: Population ID.
             float32_t: Error value (1.0 if success, -1.0 if failure).
     """
 

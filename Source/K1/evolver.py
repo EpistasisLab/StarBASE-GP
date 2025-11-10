@@ -397,7 +397,7 @@ class K1_Evolver(EA):
                                                                       y = self.all_y_ray_id,
                                                                       train_idx = fold_data['train_idx'],
                                                                       valid_idx = fold_data['val_idx'],
-                                                                      pop_id = uint16_t(pipeline_id)))
+                                                                      pop_id = uint32_t(pipeline_id)))
         # process results as they come in
         start_time = time.time()
         while len(ray_jobs) > 0:
@@ -707,7 +707,7 @@ class K1_Evolver(EA):
                                                                    y=self.all_y_ray_id,
                                                                    train_idx=self.train_idx_ray,
                                                                    valid_idx=self.val_idx_ray,
-                                                                   pop_id=uint16_t(pipeline_id)))
+                                                                   pop_id=uint32_t(pipeline_id)))
             # process results as they come in
             while len(ray_jobs) > 0:
                 finished, ray_jobs = ray.wait(ray_jobs)
@@ -891,7 +891,7 @@ class K1_Evolver(EA):
             y=self.all_y_ray_id,
             train_idx=combined_idx_ray_id,
             valid_idx=combined_idx_ray_id,
-            pop_id=uint16_t(0)
+            pop_id=uint32_t(0)
         )
         train_val_r2, _, error = ray.get(train_valid_r2_job)
         if error < float32_t(0.0):
@@ -906,7 +906,7 @@ class K1_Evolver(EA):
             y=self.all_y_ray_id,
             train_idx=combined_idx_ray_id,
             valid_idx=test_idx_ray_id,
-            pop_id=uint16_t(0)
+            pop_id=uint32_t(0)
         )
 
         test_r2, _, error = ray.get(test_r2_job)
@@ -933,7 +933,7 @@ class K1_Evolver(EA):
             new_column_names=column_names_with_encoding,
             root_node=ols_regressor,
             random_state=self.rng.integers(0, 100000),
-            pop_id=uint16_t(0)
+            pop_id=uint32_t(0)
         )
 
         pfi_results, _ = ray.get(pfi_job)
