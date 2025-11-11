@@ -9,7 +9,7 @@ import numpy as np
 from typeguard import typechecked
 from typing import List, Tuple
 import numpy.typing as npt
-from .types import (float32_t, int16_t, rng_t, uint16_t, int32_t)
+from .types import (float32_t, int16_t, rng_t, uint32_t, int32_t, uint32_t)
 
 @typechecked
 def non_dominated_sorting(obj_scores: npt.NDArray) -> Tuple[List[npt.NDArray[int32_t]],npt.NDArray[int32_t]]:
@@ -160,7 +160,7 @@ def dominates(solution1: Tuple[float32_t, int32_t], solution2: Tuple[float32_t, 
     return bool(greater_or_equal and better_in_at_least_one)
 
 @typechecked
-def non_dominated_binary_tournament(ranks: npt.NDArray[int32_t], distances: npt.NDArray[float32_t], rng: rng_t) -> uint16_t:
+def non_dominated_binary_tournament(ranks: npt.NDArray[int32_t], distances: npt.NDArray[float32_t], rng: rng_t) -> uint32_t:
     """
     Perform a binary tournament selection based on non-dominated sorting and crowding distance.
     First, two individuals are randomly selected from the population.
@@ -173,7 +173,7 @@ def non_dominated_binary_tournament(ranks: npt.NDArray[int32_t], distances: npt.
         rng (rng_t): Random number generator.
 
     Returns:
-        uint16_t: The index of the winning individual.
+        uint32_t: The index of the winning individual.
     """
 
     # make sure that ranks and distances are the same size
@@ -181,7 +181,7 @@ def non_dominated_binary_tournament(ranks: npt.NDArray[int32_t], distances: npt.
 
     # get two random number between 0 and the population size
     t1,t2 = rng.choice(len(ranks), size=2, replace=False)
-    t1, t2 = uint16_t(t1), uint16_t(t2)
+    t1, t2 = uint32_t(t1), uint32_t(t2)
 
     assert t1 != t2
     assert 0 <= t1 < len(ranks)

@@ -343,7 +343,7 @@ class K1_Evolver(EA):
                                                                          train_idx=self.train_idx_ray,
                                                                          selector_node=pipeline.get_selector_node(),
                                                                          ld_node=pipeline.get_ld_node(),
-                                                                         pop_id=uint16_t(i),
+                                                                         pop_id=uint32_t(i),
                                                                          snp_r2_set=self.hub.generate_r2_dict(pipeline.get_branch_set())))
                 pipeline_evaluation_details[i][snp_t('ld_used')] = True
             # else, no need for ld pruner (either ld_flag is False or SNPs are not on same chromosome)
@@ -353,7 +353,7 @@ class K1_Evolver(EA):
                                                                      y_train=self.all_y_ray_id,
                                                                      train_idx=self.train_idx_ray,
                                                                      selector_node=pipeline.get_selector_node(),
-                                                                     pop_id=uint16_t(i)))
+                                                                     pop_id=uint32_t(i)))
                 fs_only_count += 1
         # keep track of LD prunned snps
         pruned_snps = set()
@@ -408,7 +408,7 @@ class K1_Evolver(EA):
 
             # update r2 and count
             pipeline_evaluation_details[pop_id][snp_t('r2')] += r2
-            pipeline_evaluation_details[pop_id][snp_t('count')] += uint16_t(1)
+            pipeline_evaluation_details[pop_id][snp_t('count')] += uint32_t(1)
         # timing print
         print(f"R2 evaluation took {(time.time() - start_time) / 60} mins", flush=True)
 
