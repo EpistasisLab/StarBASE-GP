@@ -572,7 +572,7 @@ class EA(ABC):
         """
         pass
 
-    def parent_selection(self, parent_cnt: uint16_t) -> List[uint32_t]:
+    def parent_selection(self, parent_cnt: uint32_t) -> List[uint32_t]:
         """
         Function to return a List of parent ids based on Pareto dominance.
         Parent selection only considers pipelines in the current population.

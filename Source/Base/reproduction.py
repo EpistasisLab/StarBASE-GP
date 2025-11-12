@@ -10,7 +10,7 @@
 from typeguard import typechecked
 from typing import List, Tuple, Set
 from .pipeline import Pipeline
-from .types import (rng_t, prob_t, int32_t, uint16_t, snp_t)
+from .types import (rng_t, prob_t, int32_t, uint16_t, snp_t, uint32_t)
 from abc import ABC, abstractmethod
 from .hub import Hub
 
@@ -60,7 +60,7 @@ class Reproduction(ABC):
         """
         pass
 
-    def variation_order(self, rng: rng_t, offspring_cnt: uint16_t) -> Tuple[List[snp_t], uint16_t]:
+    def variation_order(self, rng: rng_t, offspring_cnt: uint32_t) -> Tuple[List[snp_t], uint32_t]:
         """
         Generate the order of variation operators to be applied to generate offspring.
         The order is determined by the probabilities of mutation and crossover.
@@ -89,14 +89,14 @@ class Reproduction(ABC):
         assert len(order) == offspring_cnt
 
         # return the order and number of parents needed
-        return order, uint16_t(sum(parent_count[op] for op in order))
+        return order, uint32_t(sum(parent_count[op] for op in order))
 
     def produce_offspring(self,
                           rng: rng_t,
                           hub: Hub,
-                          offspring_cnt: uint16_t,
+                          offspring_cnt: uint32_t,
                           population: List[Pipeline],
-                          parent_ids: List[uint16_t],
+                          parent_ids: List[uint32_t],
                           order: List[snp_t]) -> List[Pipeline]:
         """
         Generate offspring pipelines based on the given order of variation operations.
