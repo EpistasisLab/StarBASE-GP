@@ -48,6 +48,7 @@ class EA(ABC):
                  save_directory: str = "",
                  window_distance: int32_t = int32_t(1000000),
                  branch_explainability_threshold: float32_t = float32_t(0.0),
+                 encoding_flag: bool = True,
                  ld_flag: bool = True,
                  ) -> None:
         """
@@ -90,6 +91,8 @@ class EA(ABC):
             Threshold for branch explainability for a branch to be considered important.
         ld_flag: bool
             Flag to indicate whether to use LD pruning or not.
+        encoding_flag: bool
+            Flag to indicate whether to use all encodings or not (only additive encoding).
         """
         # initial population
         self.population: List[Pipeline] = []
@@ -145,6 +148,9 @@ class EA(ABC):
 
         assert isinstance(ld_flag, bool), "ld_flag must be a boolean."
         self.ld_flag = ld_flag
+
+        assert isinstance(encoding_flag, bool), "encoding_flag must be a boolean."
+        self.encoding_flag = encoding_flag
 
         # random number generator to be passed to all other stochastic functions
         self.rng = np.random.default_rng(seed)

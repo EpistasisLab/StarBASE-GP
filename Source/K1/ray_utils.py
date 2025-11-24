@@ -1,5 +1,5 @@
 from ..Base.selectors import SelectorNode
-from ..Base.types import (float32_t, int16_t, snp_t, uint32_t, uint32_t)
+from ..Base.types import (float32_t, int16_t, snp_t, uint16_t, uint32_t)
 
 import ray
 import numpy as np

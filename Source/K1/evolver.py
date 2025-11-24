@@ -46,6 +46,7 @@ class K1_Evolver(EA):
                  window_distance: int32_t = int32_t(1000000),
                  branch_explainability_threshold: float32_t = float32_t(0.0),
                  ld_flag: bool = True,
+                 encoding_flag: bool = True,
                  regression: bool = True
                  ) -> None:
         """
@@ -73,6 +74,7 @@ class K1_Evolver(EA):
                          branch_explainability_threshold=branch_explainability_threshold,
                          ld_flag=ld_flag)
         self.regression = regression
+        self.encoding_flag = encoding_flag
 
         self.encoder_types = [ snp_t('additive'), snp_t('dominant'), snp_t('recessive'),
                               snp_t('heterosis'), snp_t('underdominant'), snp_t('overdominant'),
@@ -525,25 +527,43 @@ class K1_Evolver(EA):
             assert isinstance(snp, snp_t), "SNP must be of type snp_t."
             assert '.' in snp, "SNP must be a string with chromosome and position separated by a dot."
 
-            # Launch one Ray job per SNP per fold that evaluates ALL 9 encodings
-            for _, fold_data in self.train_fold_dict_ray.items():
-                ray_jobs.append(ray_utils.ray_snp_eval_all_encodings.remote(
-                    X = self.hub.get_ori_ray_id(snp),
-                    y = self.all_y_ray_id,
-                    train_idx = fold_data['train_idx'],
-                    valid_idx = fold_data['val_idx'],
-                    snp = snp
-                ))
-        assert len(ray_jobs) == len(unseen_branches) * self.k  # k folds for each unseen snp (all encodings in one call)
+            # Check encoding_flag to determine which encodings to evaluate
+            if self.encoding_flag:
+                # Launch one Ray job per SNP per fold that evaluates ALL 9 encodings
+                for _, fold_data in self.train_fold_dict_ray.items():
+                    ray_jobs.append(ray_utils.ray_snp_eval_all_encodings.remote(
+                        X = self.hub.get_ori_ray_id(snp),
+                        y = self.all_y_ray_id,
+                        train_idx = fold_data['train_idx'],
+                        valid_idx = fold_data['val_idx'],
+                        snp = snp
+                    ))
+            else:
+                # Only evaluate additive encoding
+                for _, fold_data in self.train_fold_dict_ray.items():
+                    ray_jobs.append(ray_utils.ray_snp_eval_add.remote(
+                        X = self.hub.get_ori_ray_id(snp),
+                        y = self.all_y_ray_id,
+                        train_idx = fold_data['train_idx'],
+                        valid_idx = fold_data['val_idx'],
+                        snp = snp,
+                        lo = snp_t('additive')
+                    ))
+        assert len(ray_jobs) == len(unseen_branches) * self.k  # k folds for each unseen snp
 
         # container to hold snp performance (accumulated r2, count, error flag, encoder type, encoded_x ray id(depending on r2 / count >= threshold))
         snp_perf = {}
         for snp_name in unseen_branches:
             # initialize with best encoder as None, encoded_x as None, and pager_lut_sum as zeros array
             snp_perf[snp_name] = {snp_t('b_encoder'): None, snp_t('encoded_x'): None, snp_t('pager_lut_sum'): np.zeros(3, dtype=float32_t), snp_t('pager_lut_cnt'): 0}
-            for encoder in self.encoder_types:
-                # extend snp_perf with r2 and count for each of the encoders
-                snp_perf[snp_name][encoder] = {snp_t('r2'): float32_t(0.0), snp_t('cnt'): float32_t(0.0)}
+            if self.encoding_flag:
+                # Include all encoder types
+                for encoder in self.encoder_types:
+                    # extend snp_perf with r2 and count for each of the encoders
+                    snp_perf[snp_name][encoder] = {snp_t('r2'): float32_t(0.0), snp_t('cnt'): float32_t(0.0)}
+            else:
+                # Only additive encoding
+                snp_perf[snp_name][snp_t('additive')] = {snp_t('r2'): float32_t(0.0), snp_t('cnt'): float32_t(0.0)}
         assert len(snp_perf) == len(unseen_branches), "SNP performance dictionary size does not match unseen branches."
 
         # process results as they come in
@@ -551,18 +571,27 @@ class K1_Evolver(EA):
         while len(ray_jobs) > 0:
             # collect results
             finished, ray_jobs = ray.wait(ray_jobs)
-            encoding_results = ray.get(finished)[0]  # Returns dict of {encoding_name: (r2, snp, enc, error, pager_lut)}
-
-            # Process results for all encodings from this single job
-            for enc_name, (r2, snp_name, lo, error, pager_lut) in encoding_results.items():
-                assert error >= 0.0, f"Error flag must be non-negative for {enc_name}. Error during SNP evaluation cannot occur."
+            
+            if self.encoding_flag:
+                # ray_snp_eval_all_encodings returns dict of {encoding_name: (r2, snp, enc, error, pager_lut)}
+                encoding_results = ray.get(finished)[0]
+                # Process results for all encodings from this single job
+                for enc_name, (r2, snp_name, lo, error, pager_lut) in encoding_results.items():
+                    assert error >= 0.0, f"Error flag must be non-negative for {enc_name}. Error during SNP evaluation cannot occur."
+                    # add them up
+                    snp_perf[snp_name][lo][snp_t('r2')] += r2
+                    snp_perf[snp_name][lo][snp_t('cnt')] += float32_t(1.0)
+                    # Accumulate PAGER LUT values across all folds for averaging
+                    if enc_name == 'pager' and pager_lut is not None:
+                        snp_perf[snp_name][snp_t('pager_lut_sum')] += pager_lut
+                        snp_perf[snp_name][snp_t('pager_lut_cnt')] += 1
+            else:
+                # ray_snp_eval_add returns (r2, snp, enc, error)
+                r2, snp_name, lo, error = ray.get(finished)[0]
+                assert error >= 0.0, f"Error flag must be non-negative for additive. Error during SNP evaluation cannot occur."
                 # add them up
                 snp_perf[snp_name][lo][snp_t('r2')] += r2
                 snp_perf[snp_name][lo][snp_t('cnt')] += float32_t(1.0)
-                # Accumulate PAGER LUT values across all folds for averaging
-                if enc_name == 'pager' and pager_lut is not None:
-                    snp_perf[snp_name][snp_t('pager_lut_sum')] += pager_lut
-                    snp_perf[snp_name][snp_t('pager_lut_cnt')] += 1
         # timing print
         print(f"Evaluating {len(unseen_branches)} unseen branches took {(time.time() - start_time) / 60} mins", flush=True)
 
@@ -574,19 +603,29 @@ class K1_Evolver(EA):
             best_encoder = None
 
             # go through each encoder and find the best average r2
-            for encoder in self.encoder_types:
+            if self.encoding_flag:
+                # Check all encoder types
+                for encoder in self.encoder_types:
+                    # make sure we have at least k-folds of results
+                    assert int(snp_perf[snp_name][encoder][snp_t('cnt')]) == float32_t(self.k), "SNP performance count does not match k-folds."
+
+                    # only care about largest aggregated r2 up to this point
+                    if snp_perf[snp_name][encoder][snp_t('r2')] > best_r2:
+                        best_r2 = snp_perf[snp_name][encoder][snp_t('r2')]
+                        best_encoder = encoder
+            else:
+                # Only additive encoding
+                encoder = snp_t('additive')
                 # make sure we have at least k-folds of results
                 assert int(snp_perf[snp_name][encoder][snp_t('cnt')]) == float32_t(self.k), "SNP performance count does not match k-folds."
-
-                # only care about largest aggregated r2 up to this point
-                if snp_perf[snp_name][encoder][snp_t('r2')] > best_r2:
-                    best_r2 = snp_perf[snp_name][encoder][snp_t('r2')]
-                    best_encoder = encoder
+                best_r2 = snp_perf[snp_name][encoder][snp_t('r2')]
+                best_encoder = encoder
 
             # save best encoder for the snp
             snp_perf[snp_t(snp_name)][snp_t('b_encoder')] = snp_t(best_encoder)
 
             # if we have an average r2 greater or equal than the threshold, get the encoded snp ray id
+            # Note: For additive encoding, no need to encode since data is already in additive format
             if best_r2 / float32_t(self.k) >= self.branch_explainability_threshold and best_encoder != snp_t('additive'):
                 ray_jobs.append(ray_utils.ray_snp_encoder.remote(X = self.hub.get_ori_ray_id(snp_name),
                                                                  y = self.all_y_ray_id,
