@@ -607,7 +607,7 @@ class K1_Evolver(EA):
                 # Check all encoder types
                 for encoder in self.encoder_types:
                     # make sure we have at least k-folds of results
-                    assert int(snp_perf[snp_name][encoder][snp_t('cnt')]) == float32_t(self.k), "SNP performance count does not match k-folds."
+                    assert float32_t(snp_perf[snp_name][encoder][snp_t('cnt')]) == float32_t(self.k), "SNP performance count does not match k-folds."
 
                     # only care about largest aggregated r2 up to this point
                     if snp_perf[snp_name][encoder][snp_t('r2')] > best_r2:
@@ -617,7 +617,7 @@ class K1_Evolver(EA):
                 # Only additive encoding
                 encoder = snp_t('additive')
                 # make sure we have at least k-folds of results
-                assert int(snp_perf[snp_name][encoder][snp_t('cnt')]) == float32_t(self.k), "SNP performance count does not match k-folds."
+                assert float32_t(snp_perf[snp_name][encoder][snp_t('cnt')]) == float32_t(self.k), "SNP performance count does not match k-folds."
                 best_r2 = snp_perf[snp_name][encoder][snp_t('r2')]
                 best_encoder = encoder
 
