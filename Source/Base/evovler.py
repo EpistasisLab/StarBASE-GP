@@ -40,8 +40,8 @@ class EA(ABC):
                  mut_selector_p: prob_t = prob_t(.5), # probability of mutating the feature selector
                  mut_ld_p: prob_t = prob_t(.5), # probability of mutating the ld pruner
                  mut_root_p: prob_t = prob_t(.5), # probability of mutating the root node (regressor or classifier)
-                 mut_ran_p: prob_t = prob_t(.5), # probability of random mutation
-                 mut_smt_p: prob_t = prob_t(.5), # probability of smart mutation
+                 mut_ran_p: prob_t = prob_t(0.0), # probability of random mutation
+                 mut_smt_p: prob_t = prob_t(1.0), # probability of smart mutation
                  m_in_win_p: prob_t = prob_t(.33), # probability for smart in window mutation
                  m_out_win_p: prob_t = prob_t(.33), # probability for smart out window mutation
                  m_out_chr_p: prob_t = prob_t(.33), # probability for smart out of chromosome mutation
