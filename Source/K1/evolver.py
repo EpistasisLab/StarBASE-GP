@@ -37,8 +37,8 @@ class K1_Evolver(EA):
                  mut_selector_p: prob_t = prob_t(.5), # probability of mutating the feature selector
                  mut_ld_p: prob_t = prob_t(.5), # probability of mutating the ld pruner
                  mut_root_p: prob_t = prob_t(.5), # probability of mutating the root node (regressor or classifier)
-                 mut_ran_p: prob_t = prob_t(.5), # probability of random mutation
-                 mut_smt_p: prob_t = prob_t(.5), # probability of smart mutation
+                 mut_ran_p: prob_t = prob_t(0.0), # probability of random mutation
+                 mut_smt_p: prob_t = prob_t(1.0), # probability of smart mutation
                  m_in_win_p: prob_t = prob_t(.33), # probability for smart in window mutation
                  m_out_win_p: prob_t = prob_t(.33), # probability for smart out window mutation
                  m_out_chr_p: prob_t = prob_t(.33), # probability for smart out of chromosome mutation
@@ -571,7 +571,7 @@ class K1_Evolver(EA):
         while len(ray_jobs) > 0:
             # collect results
             finished, ray_jobs = ray.wait(ray_jobs)
-            
+
             if self.encoding_flag:
                 # ray_snp_eval_all_encodings returns dict of {encoding_name: (r2, snp, enc, error, pager_lut)}
                 encoding_results = ray.get(finished)[0]
