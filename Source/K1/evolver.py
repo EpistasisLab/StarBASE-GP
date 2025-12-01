@@ -281,8 +281,12 @@ class K1_Evolver(EA):
             # add the current branch set to the population list
             pop_branch_sets.append(branches)
 
-        # evaluate all unseen branches and update the hub
-        self.evaluate_unseen_branches(unseen_branches, gen_seen=int16_t(0))
+        # break up unseen_branches into chunks of 2000 to avoid ray overload and then run evaluate_unseen_branches on each chunk
+        unseen_branches_list = list(unseen_branches)
+        for i in range(0, len(unseen_branches_list), 2000):
+            print(f"Evaluating unseen branches chunk {i // 2000 + 1} / {(len(unseen_branches_list) - 1) // 2000 + 1}", flush=True)
+            chunk = set(unseen_branches_list[i:i+2000])
+            self.evaluate_unseen_branches(chunk, gen_seen=int16_t(0))
 
         # remove inactive branches from each branch set for the initial population
         assert len(pop_branch_sets) == self.pop_size, "Population branch sets size does not match population size."
@@ -464,7 +468,12 @@ class K1_Evolver(EA):
 
         # evaluate all unseen snps if we have any to evaluate
         if len(unseen_snps) > 0:
-            self.evaluate_unseen_branches(unseen_snps, gen_info)
+            # break up unseen_branches into chunks of 2000 to avoid ray overload and then run evaluate_unseen_branches on each chunk
+            unseen_branches_list = list(unseen_snps)
+            for i in range(0, len(unseen_branches_list), 2000):
+                print(f"Evaluating unseen branches chunk {i // 2000 + 1} / {(len(unseen_branches_list) - 1) // 2000 + 1}", flush=True)
+                chunk = set(unseen_branches_list[i:i+2000])
+                self.evaluate_unseen_branches(chunk, gen_seen=int16_t(0))
 
         # offspring pipelines with no good snps
         updated_pipelines = []
