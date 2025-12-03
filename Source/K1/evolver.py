@@ -473,7 +473,7 @@ class K1_Evolver(EA):
             for i in range(0, len(unseen_branches_list), 2000):
                 print(f"Evaluating unseen branches chunk {i // 2000 + 1} / {(len(unseen_branches_list) - 1) // 2000 + 1}", flush=True)
                 chunk = set(unseen_branches_list[i:i+2000])
-                self.evaluate_unseen_branches(chunk, gen_seen=int16_t(0))
+                self.evaluate_unseen_branches(chunk, gen_seen=int16_t(gen_info))
 
         # offspring pipelines with no good snps
         updated_pipelines = []
