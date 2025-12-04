@@ -232,6 +232,9 @@ class K1_Evolver(EA):
         print('Final run/population details')
         print('Final population size:', len(self.population), flush=True)
 
+        # collect all the population ids that belong to front 0
+        self.front_zero_ids = nsga.front_zero(obj_scores=self.get_pipeline_scores(pipelines=self.population, weights=(float32_t(1.0), int32_t(-1))))
+
         # save Pareto front details and plot Pareto front
         self.save_and_plot_pareto_front()
         # save the hubs details
@@ -722,11 +725,9 @@ class K1_Evolver(EA):
         """
 
         # get the Pareto front pipelines
-        _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(float32_t(1.0), int32_t(-1))))
         pareto_front_pipelines = []
-        for i, r in enumerate(rank):
-            if r == 0: # rank 0 is the Pareto front
-                pareto_front_pipelines.append(self.population[i])
+        for i in self.front_zero_ids:
+            pareto_front_pipelines.append(self.population[i])
         print(f"Number of pipelines in Pareto front for post analysis: {len(pareto_front_pipelines)}", flush=True)
 
         # Sort the Pareto front by feature count (MUST match save_and_plot_pareto_front ordering)
@@ -1009,11 +1010,9 @@ class K1_Evolver(EA):
         """
 
         # get the front 0 pipelines
-        _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, weights=(float32_t(1.0), int32_t(-1))))
         pareto_front_pipelines = []
-        for i, r in enumerate(rank):
-            if r == 0: # rank 0 is the Pareto front
-                pareto_front_pipelines.append(self.population[i])
+        for i in self.front_zero_ids:
+            pareto_front_pipelines.append(self.population[i])
         print(f"Number of pipelines in Pareto front at the end of evolution:{len(pareto_front_pipelines)}", flush=True)
         # sort the Pareto front by feature count
         pareto_front_pipelines = sorted(pareto_front_pipelines, key=lambda x: x.get_trait_feature_cnt())

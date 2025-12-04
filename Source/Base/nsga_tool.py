@@ -12,6 +12,48 @@ import numpy.typing as npt
 from .types import (float32_t, int16_t, rng_t, uint32_t, int32_t, uint32_t)
 
 @typechecked
+def front_zero(obj_scores: npt.NDArray) -> List[int32_t]:
+    """
+    Identify the indices of solutions in the first Pareto front (non-dominated solutions)
+    for a maximization problem using NumPy arrays of type float32.
+
+    Parameters:
+    obj_scores (np.ndarray): A 2D array where each row represents the objective values for a solution.
+
+    Returns:
+    np.ndarray: An array of indices corresponding to the non-dominated solutions.
+    """
+
+    # quick check to make sure that elements in scores are numpy arrays with float32_t
+    assert all(isinstance(x, tuple) for x in obj_scores)
+    # make sure all elements are of the correct type
+    assert all(isinstance(x[0], float32_t) for x in obj_scores)
+    assert all(isinstance(x[1], int32_t) for x in obj_scores)
+    # make sure all [0] elements are non-negative (maximization)
+    assert all(x[0] > 0.0 for x in obj_scores)
+    # make sure all [1] elements are negative (minimization)
+    assert all(x[1] < 0 for x in obj_scores)
+
+    pop_size = obj_scores.shape[0]
+    # final fronts returned
+    front_zero = []
+    # what 'q' solutions dominate 'p' solution
+    domination_count = np.zeros(pop_size, dtype=int16_t)
+
+    for p in range(pop_size):
+        for q in range(pop_size):
+            # if q dominates p break because we only care about front zero
+            if dominates(obj_scores[q], obj_scores[p]):
+                domination_count[p] += 1
+                break
+
+        # will only add p to front zero if it is not dominated by any other solution
+        if domination_count[p] == 0:
+            front_zero.append(int32_t(p))
+
+    return front_zero
+
+@typechecked
 def non_dominated_sorting(obj_scores: npt.NDArray) -> Tuple[List[npt.NDArray[int32_t]],npt.NDArray[int32_t]]:
     """
     Perform non-dominated sorting for a maximization problem using NumPy arrays of type float32.
