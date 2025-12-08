@@ -207,9 +207,11 @@ class K1_Hub(Hub):
                 (13) pager_0 (float32_t): PAGER LUT value for genotype 0, default = -1
                 (14) pager_1 (float32_t): PAGER LUT value for genotype 0.5, default = -1
                 (15) pager_2 (float32_t): PAGER LUT value for genotype 1, default = -1
+                (16) left window index (int32_t): left window index for fast querying, default = -1
+                (17) right window index (int32_t): right window index for fast querying, default = -1
             """
 
-            # {snp: [res, idx, ori_rid, end_rid, enc, seen, active, gen_seen, gen_pruned, pruned_reason, ld_threshold, ld_genomic_distance, anchor_snp, pager_0, pager_1, pager_2]}
+            # {snp: [res, idx, ori_rid, end_rid, enc, seen, active, gen_seen, gen_pruned, pruned_reason, ld_threshold, ld_genomic_distance, anchor_snp, pager_0, pager_1, pager_2, left_window_idx, right_window_idx]}
             self.hub = {}
 
         # will add snp, sum, bin, pos， idx, res, typ to the hub
@@ -230,7 +232,10 @@ class K1_Hub(Hub):
                        anchor_snp: snp_t = snp_t(''),
                        pager_0: float32_t = float32_t(-1.0),
                        pager_1: float32_t = float32_t(-1.0),
-                       pager_2: float32_t = float32_t(-1.0)) -> None:
+                       pager_2: float32_t = float32_t(-1.0),
+                       left_window_idx: int32_t = int32_t(-1),
+                       right_window_idx: int32_t = int32_t(-1),
+                       ) -> None:
             """
             Process Args and add to hub.
 
@@ -252,10 +257,12 @@ class K1_Hub(Hub):
                 (13) pager_0 (float32_t): PAGER LUT value for genotype 0, default = -1
                 (14) pager_1 (float32_t): PAGER LUT value for genotype 0.5, default = -1
                 (15) pager_2 (float32_t): PAGER LUT value for genotype 1, default = -1
+                (16) left_window_idx (int32_t): left window index for fast querying, default = -1
+                (17) right_window_idx (int32_t): right window index for fast querying, default = -1
             """
 
             # add to hub
-            self.hub[snp] = [res,idx,ori_rid,end_rid,enc,seen,active,gen_seen,gen_pruned,pruned_reason,ld_threshold,ld_genomic_distance,anchor_snp,pager_0,pager_1,pager_2]
+            self.hub[snp] = [res,idx,ori_rid,end_rid,enc,seen,active,gen_seen,gen_pruned,pruned_reason,ld_threshold,ld_genomic_distance,anchor_snp,pager_0,pager_1,pager_2,left_window_idx,right_window_idx]
             return
 
         def get_r2(self, snp: snp_t) -> float32_t:
@@ -362,6 +369,18 @@ class K1_Hub(Hub):
             assert snp in self.hub
             # return the type
             return self.hub[snp][15]
+
+        def get_left_window_idx(self, snp: snp_t) -> int32_t:
+            # check snp exists in the hub
+            assert snp in self.hub
+            # return the type
+            return self.hub[snp][16]
+
+        def get_right_window_idx(self, snp: snp_t) -> int32_t:
+            # check snp exists in the hub
+            assert snp in self.hub
+            # return the type
+            return self.hub[snp][17]
 
         def flip_activate_flag_r2(self, snp: snp_t) -> None:
             """
@@ -525,7 +544,7 @@ class K1_Hub(Hub):
             self.hub[snp][12] = anchor_snp
             return
 
-    def __init__(self, snp_list: List[snp_t], snps_ray_ids:Dict[snp_t, ray.ObjectRef]) -> None:
+    def __init__(self, snp_list: List[snp_t], snps_ray_ids:Dict[snp_t, ray.ObjectRef], window_distance:int32_t) -> None:
         """
         Create all required Hubs: Ordered, Considered, and Interfact specific tools
 
@@ -560,6 +579,11 @@ class K1_Hub(Hub):
             # make sure the snp bin poisition is correct
             assert snp_chrm_pos(s[0])[1] == self.order.order[snp_chrm_pos(s[0])[0]][s[1]]
 
+            # break snp up into chrom and pos
+            chrom, pos = snp_chrm_pos(s[0])
+            # get left and right window indices for fast querying
+            left_window_idx, right_window_idx = self.order.get_window_indices(chrom, pos, s[1], window_distance)
+
             # add snp to hub with all its data
             self.db.add_to_hub(snp=s[0],
                                 res=float32_t(-1.0),
@@ -574,7 +598,9 @@ class K1_Hub(Hub):
                                 pruned_reason=snp_t(''),
                                 ld_threshold=float32_t(-1.0),
                                 ld_genomic_distance=int32_t(-1),
-                                anchor_snp=snp_t(''))
+                                anchor_snp=snp_t(''),
+                                left_window_idx=left_window_idx,
+                                right_window_idx=right_window_idx,)
         print('SNP Hub Initialized')
         return
 
@@ -698,14 +724,14 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
             self.consider.remove_snp(snp)
         return
 
-    def get_smt_snp_in_window(self, anchor: snp_t, rng: rng_t, window_distance: int32_t) -> snp_t:
+    def get_smt_snp_in_window(self, anchor: snp_t, rng: rng_t, in_window: List[int32_t]) -> snp_t:
         """
         Get random SNP within the same chromosome and window distance as anchor, based on r2.
 
         Args:
             anchor (snp_t): Anchor SNP in "chromosome.position" format.
             rng (rng_t): Numpy random generator.
-            window_distance (int32_t): The genomic distance to consider around the anchor SNP.
+            in_window (List[int32_t]): List of positions within the window distance.
 
         Returns:
             snp_t: A randomly selected SNP from the same chromosome and within the specified window distance
@@ -715,13 +741,11 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         assert '.' in anchor
 
         # break snp into chromosome and position
-        chrom, position = snp_chrm_pos(anchor)
-        # get window for the snp
-        window = self.order.get_window(chrom, position, self.db.get_idx(anchor), window_distance)
+        chrom, _ = snp_chrm_pos(anchor)
         # reduce the window to only active snps
         valid_snps, r2_list = [], []
 
-        for pos in window:
+        for pos in in_window:
             s = snp_t(f"{chrom}.{pos}")
 
             # must be seen and active to use
@@ -732,19 +756,19 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
 
         # if no valid snps were found, attempt to get a random snp in window
         if len(valid_snps) == 0:
-            return self.get_ran_snp_in_window(anchor, rng, window_distance)
+            return self.get_ran_snp_in_window(anchor, rng, in_window)
 
         # get a random snp based on r2 scores as weights
         return self.get_random_snp_weighted_by_r2(rng, anchor, valid_snps, r2_list)
 
-    def get_ran_snp_in_window(self, anchor: snp_t, rng: rng_t, window_distance: int32_t) -> snp_t:
+    def get_ran_snp_in_window(self, anchor: snp_t, rng: rng_t, in_window: List[int32_t]) -> snp_t:
         """
         Get a random SNP from the same chromosome and within the specified window distance.
 
         Args:
             anchor (snp_t): Anchor SNP in "chromosome.position" format.
             rng (rng_t): Numpy random generator.
-            window_distance (int32_t): The genomic distance to consider around the anchor SNP.
+            in_window (List[int32_t]): List of positions within the window distance.
 
         Returns:
             snp_t: A randomly selected SNP from the same chromosome and within the specified window distance
@@ -754,13 +778,11 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         assert '.' in anchor
 
         # break snp into chromosome and position
-        chrom, position = snp_chrm_pos(anchor)
-        # get window for the snp
-        window = self.order.get_window(chrom, position, self.db.get_idx(anchor), window_distance)
+        chrom, _ = snp_chrm_pos(anchor)
         # collect all snps that have (not pruned and seen) or (r2 > 0.0 and seen)
         snps = []
 
-        for p in window:
+        for p in in_window:
             # make snp
             s = snp_t(f"{chrom}.{p}")
             # if not seen, we can use it
@@ -775,14 +797,14 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         # roll a random snp from the list of snps
         return self.get_random_snp_from_list(rng, anchor, snps)
 
-    def get_smt_snp_in_chrm(self, anchor: snp_t, rng: rng_t, window_distance: int32_t) -> snp_t:
+    def get_smt_snp_in_chrm(self, anchor: snp_t, rng: rng_t, out_window: List[int32_t]) -> snp_t:
         """
         Get a SNP from the same chromosome and outside of the specified window distance based on R2 scores.
 
         Args:
             anchor (snp_t): Anchor SNP in "chromosome.position" format.
             rng (rng_t): Numpy random generator.
-            window_distance (int32_t): The genomic distance to exclude around the anchor SNP.
+            out_window (List[int32_t]): List of positions outside the window distance.
 
         Returns:
             snp_t: A SNP from the same chromosome but outside the specified window distance.
@@ -792,14 +814,12 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         assert '.' in anchor
 
         # break snp into chromosome and position
-        chrom, position = snp_chrm_pos(anchor)
-        # get bin id for the snp
-        snps_in_chrom = self.consider.get_positions_out_of_window(chrom, window_distance, position)
+        chrom, _ = snp_chrm_pos(anchor)
         # collect all snps that have not been pruned and have r2 > 0.0
         snps, r2 = [], []
 
         # loop through all non prunned snps and collect the ones with r2 > 0.0 and not pruned
-        for pos in snps_in_chrom:
+        for pos in out_window:
             s = snp_t(f"{chrom}.{pos}")
 
             assert s != anchor, "SNP should not be the same as the input SNP"
@@ -809,19 +829,19 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
 
         # if no snps were returned, attempt to get a random snp out of chromosome
         if len(snps) == 0:
-            return self.get_ran_snp_in_chrm(anchor, rng, window_distance)
+            return self.get_ran_snp_in_chrm(anchor, rng, out_window)
 
         # get a random snp based on r2 scores as weights
         return self.get_random_snp_weighted_by_r2(rng, anchor, snps, r2)
 
-    def get_ran_snp_in_chrm(self, anchor: snp_t, rng: rng_t, window_distance: int32_t) -> snp_t:
+    def get_ran_snp_in_chrm(self, anchor: snp_t, rng: rng_t, out_window: List[int32_t]) -> snp_t:
         """
         Get a random SNP from the same chromosome but different bin.
 
         Args:
             anchor (snp_t): The anchor SNP in "chromosome.position" format.
             rng (rng_t): Numpy random generator.
-            window_distance (int32_t): The genomic distance to exclude around the anchor SNP.
+            out_window (List[int32_t]): List of positions outside the window distance.
 
         Returns:
             snp_t: A randomly selected SNP from the same chromosome but outside the specified window distance.
@@ -831,14 +851,12 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         assert '.' in anchor
 
         # break snp into chromosome and position
-        chrom, position = snp_chrm_pos(anchor)
-        # get bin id for the snp
-        snps_in_chrom = self.consider.get_positions_out_of_window(chrom, window_distance, position)
+        chrom, _ = snp_chrm_pos(anchor)
         # collect all snps that have not been pruned and have r2 > 0.0
         snps = []
 
         # loop through all non prunned snps and collect the ones with r2 > 0.0 and not pruned
-        for pos in snps_in_chrom:
+        for pos in out_window:
             # make snps
             s = snp_t(f"{chrom}.{pos}")
             # if not seen, we can use it
@@ -1153,3 +1171,39 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
             if self.db.get_active_flag(branch):
                 good_branches.add(branch)
         return good_branches
+
+    def get_in_window_positions(self, snp: snp_t) -> List[int32_t]:
+        """
+        Get the positions of SNPs within the window of a given SNP.
+
+        Args:
+            snp (snp_t): The SNP for which to get window positions.
+
+        Returns:
+            List[int32_t]: A list of positions within the window of the given SNP.
+        """
+
+        # make sure the snp is in the hub
+        assert snp in self.db.hub
+        # break snp into chromosome and position
+        chrom, pos = snp_chrm_pos(snp)
+        # get all positions in the window
+        return self.order.get_in_window_positions(chrom, pos, self.db.get_idx(snp), self.db.get_left_window_idx(snp), self.db.get_right_window_idx(snp))
+
+    def get_out_of_window_positions(self, snp: snp_t) -> List[int32_t]:
+        """
+        Get the positions of SNPs outside the window of a given SNP.
+
+        Args:
+            snp (snp_t): The SNP for which to get out-of-window positions.
+
+        Returns:
+            List[int32_t]: A list of positions outside the window of the given SNP.
+        """
+
+        # make sure the snp is in the hub
+        assert snp in self.db.hub
+        # break snp into chromosome and position
+        chrom, pos = snp_chrm_pos(snp)
+        # get all positions out of the window
+        return self.order.get_out_window_positions(chrom, pos, self.db.get_idx(snp), self.db.get_left_window_idx(snp), self.db.get_right_window_idx(snp))

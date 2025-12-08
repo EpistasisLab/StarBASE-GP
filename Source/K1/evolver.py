@@ -110,7 +110,7 @@ class K1_Evolver(EA):
         self.all_y_ray_id = ray.put(self.all_y)
 
         # initialize the hubs
-        self.hub = K1_Hub(snp_list=self.snp_labels, snps_ray_ids=feature_ray_ids)
+        self.hub = K1_Hub(snp_list=self.snp_labels, snps_ray_ids=feature_ray_ids, window_distance=self.window_distance)
         return
 
     def evolve(self, gens: uint16_t) -> None:
