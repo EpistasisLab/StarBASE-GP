@@ -72,6 +72,39 @@ class K1_Hub(Hub):
             assert chrom in self.hub
             # return all positions in the chromosome
             return list(self.hub[chrom])
+        
+        # function to get all snps outside a given window
+        def get_positions_in_window(self, chrom: int32_t, distance: int32_t, anchor: int32_t) -> List[int32_t]:
+            """
+            Get all snps in a given chromosome that are within the specified distance.
+
+            Args:
+                chrom (int32_t): chromosome number to get all snps from.
+                distance (int32_t): distance from the anchor position to include snps.
+                anchor (int32_t): anchor position to check against.
+            Returns:
+                List[int32_t]: List of positions in the given chromosome that are within the specified distance."""
+
+            # make sure the chromosome exists
+            assert chrom in self.hub
+            assert anchor in self.hub[chrom]
+            
+            # Optimize: Use SortedList's bisect methods for efficient range queries
+            pos_l = self.hub[chrom]
+            # Calculate the window boundaries
+            left_bound = anchor - distance
+            right_bound = anchor + distance
+            
+            # Use bisect_left and bisect_right for O(log n) lookups
+            left_idx = pos_l.bisect_left(left_bound)
+            right_idx = pos_l.bisect_right(right_bound)
+            
+            # Find anchor index and construct result without it (avoids O(n) remove operation)
+            anchor_idx = pos_l.bisect_left(anchor)
+            # Split around the anchor position to exclude it
+            result = list(pos_l[left_idx:anchor_idx])
+            result += list(pos_l[anchor_idx + 1:right_idx])
+            return result
 
         def get_positions_out_of_window(self, chrom: int32_t, distance: int32_t, anchor: int32_t) -> List[int32_t]:
             """
@@ -90,11 +123,20 @@ class K1_Hub(Hub):
             assert chrom in self.hub
             assert anchor in self.hub[chrom]
 
-            # get all positions in the chromosome
+            # Optimize: Use SortedList's bisect methods for efficient range queries
             pos_l = self.hub[chrom]
-
-            # return all positions that are not within the distance
-            return [pos for pos in pos_l if abs(pos - anchor) > distance]
+            # Calculate the window boundaries
+            left_bound = anchor - distance
+            right_bound = anchor + distance
+            
+            # Use bisect_left and bisect_right for O(log n) lookups
+            left_idx = pos_l.bisect_left(left_bound)
+            right_idx = pos_l.bisect_right(right_bound)
+            
+            # Return positions before left_bound and after right_bound
+            result = list(pos_l[0:left_idx])
+            result += list(pos_l[right_idx:])
+            return result
 
         def remove_snp(self, snp: snp_t) -> None:
             """
@@ -1172,7 +1214,7 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
                 good_branches.add(branch)
         return good_branches
 
-    def get_in_window_positions(self, snp: snp_t) -> List[int32_t]:
+    def get_in_window_positions(self, snp: snp_t, window_distance: int32_t) -> List[int32_t]:
         """
         Get the positions of SNPs within the window of a given SNP.
 
@@ -1188,9 +1230,9 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         # break snp into chromosome and position
         chrom, pos = snp_chrm_pos(snp)
         # get all positions in the window
-        return self.order.get_in_window_positions(chrom, pos, self.db.get_idx(snp), self.db.get_left_window_idx(snp), self.db.get_right_window_idx(snp))
+        return self.consider.get_positions_in_window(chrom, window_distance, pos)
 
-    def get_out_of_window_positions(self, snp: snp_t) -> List[int32_t]:
+    def get_out_of_window_positions(self, snp: snp_t, window_distance: int32_t) -> List[int32_t]:
         """
         Get the positions of SNPs outside the window of a given SNP.
 
@@ -1206,4 +1248,4 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         # break snp into chromosome and position
         chrom, pos = snp_chrm_pos(snp)
         # get all positions out of the window
-        return self.order.get_out_window_positions(chrom, pos, self.db.get_idx(snp), self.db.get_left_window_idx(snp), self.db.get_right_window_idx(snp))
+        return self.consider.get_positions_out_of_window(chrom, window_distance, pos)

@@ -8,11 +8,12 @@
 #####################################################################################################
 
 from typeguard import typechecked
-from typing import List, Tuple, Set
+from typing import List, Tuple, Set, Dict
 from .pipeline import Pipeline
 from .types import (rng_t, prob_t, int32_t, uint16_t, snp_t, uint32_t)
 from abc import ABC, abstractmethod
 from .hub import Hub
+import time
 
 @typechecked
 class Reproduction(ABC):
@@ -45,6 +46,13 @@ class Reproduction(ABC):
         self.m_out_win_p = m_out_win_p
         self.m_out_chr_p = m_out_chr_p
         self.window_distance = window_distance
+
+        # Dictionary to track mutation timing statistics
+        self.mutation_timings: Dict[str, List[float]] = {
+            'in_window': [],
+            'out_window': [],
+            'out_chrom': []
+        }
 
         return
 
@@ -145,6 +153,15 @@ class Reproduction(ABC):
         # make sure we have the right number of offspring
         assert len(offspring) == offspring_cnt
         assert p_id == len(parent_ids)
+
+        # Print average timing statistics for mutation types
+        if any(len(times) > 0 for times in self.mutation_timings.values()):
+            print("\n=== Mutation Timing Statistics ===")
+            for mutation_type, times in self.mutation_timings.items():
+                if len(times) > 0:
+                    avg_time = sum(times) / len(times)
+                    print(f"{mutation_type}: {avg_time*1000:.4f} ms (n={len(times)})")
+            print("==================================\n", flush=True)
 
         # return the offspring
         return offspring
