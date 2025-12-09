@@ -822,22 +822,22 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         # break snp into chromosome and position
         chrom, _ = snp_chrm_pos(anchor)
         # collect all snps that have (not pruned and seen) or (r2 > 0.0 and seen)
-        snps = []
+        # snps = []
 
-        for p in in_window:
-            # make snp
-            s = snp_t(f"{chrom}.{p}")
-            # if not seen, we can use it
-            not_seen = self.db.get_seen_flag(s) == False
-            # if seen, must be active to use it
-            seen_and_active = self.db.get_seen_flag(s) and self.db.get_active_flag(s)
+        # for p in in_window:
+        #     # make snp
+        #     s = snp_t(f"{chrom}.{p}")
+        #     # if not seen, we can use it
+        #     not_seen = self.db.get_seen_flag(s) == False
+        #     # if seen, must be active to use it
+        #     seen_and_active = self.db.get_seen_flag(s) and self.db.get_active_flag(s)
 
-            assert s != anchor, "SNP should not be the same as the input SNP"
-            if not_seen or seen_and_active:
-                snps.append(s)
+        #     assert s != anchor, "SNP should not be the same as the input SNP"
+        #     if not_seen or seen_and_active:
+        #         snps.append(s)
 
         # roll a random snp from the list of snps
-        return self.get_random_snp_from_list(rng, anchor, snps)
+        return self.get_random_snp_from_list(rng, anchor, [snp_t(f"{chrom}.{p}") for p in in_window])
 
     def get_smt_snp_in_chrm(self, anchor: snp_t, rng: rng_t, out_window: List[int32_t]) -> snp_t:
         """
@@ -898,20 +898,20 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         snps = []
 
         # loop through all non prunned snps and collect the ones with r2 > 0.0 and not pruned
-        for pos in out_window:
-            # make snps
-            s = snp_t(f"{chrom}.{pos}")
-            # if not seen, we can use it
-            not_seen = self.db.get_seen_flag(s) == False
-            # if seen, must be active to use it
-            seen_and_active = self.db.get_seen_flag(s) == True and self.db.get_active_flag(s) == True
+        # for pos in out_window:
+        #     # make snps
+        #     s = snp_t(f"{chrom}.{pos}")
+        #     # if not seen, we can use it
+        #     not_seen = self.db.get_seen_flag(s) == False
+        #     # if seen, must be active to use it
+        #     seen_and_active = self.db.get_seen_flag(s) == True and self.db.get_active_flag(s) == True
 
-            assert s != anchor, "SNP should not be the same as the input SNP"
-            if not_seen or seen_and_active:
-                snps.append(s)
+        #     assert s != anchor, "SNP should not be the same as the input SNP"
+        #     if not_seen or seen_and_active:
+        #         snps.append(s)
 
         # return same snp
-        return self.get_random_snp_from_list(rng, anchor, snps)
+        return self.get_random_snp_from_list(rng, anchor, [snp_t(f"{chrom}.{p}") for p in out_window])
 
     def get_smt_snp_out_chrm(self, anchor: snp_t, rng: rng_t) -> snp_t:
         """
@@ -987,22 +987,22 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         # randomly select a chromosome
         c_pic = rng.choice(chrom_keys)
         # collect all snps that have not been pruned and have r2 > 0.0
-        snps = []
+        # snps = []
 
-        # loop through all non pruned snps and collect them
-        for pos in self.consider.get_positions_in_chromosome(c_pic):
-            # make snps
-            s = snp_t(f"{c_pic}.{pos}")
-            # not seen
-            not_seen = self.db.get_seen_flag(s) == False
-            # seen and active
-            seen_r2_np = self.db.get_seen_flag(s) and self.db.get_active_flag(s)
+        # # loop through all non pruned snps and collect them
+        # for pos in self.consider.get_positions_in_chromosome(c_pic):
+        #     # make snps
+        #     s = snp_t(f"{c_pic}.{pos}")
+        #     # not seen
+        #     not_seen = self.db.get_seen_flag(s) == False
+        #     # seen and active
+        #     seen_r2_np = self.db.get_seen_flag(s) and self.db.get_active_flag(s)
 
-            if not_seen or seen_r2_np:
-                snps.append(s)
+        #     if not_seen or seen_r2_np:
+        #         snps.append(s)
 
         # roll a random snp from the list of snps
-        return self.get_random_snp_from_list(rng, anchor, snps)
+        return self.get_random_snp_from_list(rng, anchor, [snp_t(f"{c_pic}.{p}") for p in self.consider.get_positions_in_chromosome(c_pic)])
 
     def get_k_snps_from_chrom(self, rng:rng_t, chrom:int32_t, k:uint16_t) -> Set[snp_t]:
         """"
