@@ -6,10 +6,71 @@
 #####################################################################################################
 
 import numpy as np
+from numba import njit
 from typeguard import typechecked
 from typing import List, Tuple
 import numpy.typing as npt
 from .types import (float32_t, int16_t, rng_t, uint32_t, int32_t, uint32_t)
+
+@njit(cache=True, fastmath=True)
+def _dominates_numba(sol1_r2, sol1_feat, sol2_r2, sol2_feat):
+    """Numba-compiled dominance check."""
+    greater_or_equal = sol1_r2 >= sol2_r2 and sol1_feat >= sol2_feat
+    better_in_at_least_one = sol1_r2 > sol2_r2 or sol1_feat > sol2_feat
+    return greater_or_equal and better_in_at_least_one
+
+def _front_zero_core(r2_scores, feat_counts):
+    """Core logic for front zero identification using Numba for dominance checks."""
+    pop_size = len(r2_scores)
+    front_zero = []
+    
+    for p in range(pop_size):
+        dominated = False
+        for q in range(pop_size):
+            if q != p and _dominates_numba(r2_scores[q], feat_counts[q], r2_scores[p], feat_counts[p]):
+                dominated = True
+                break
+        if not dominated:
+            front_zero.append(p)
+    
+    return front_zero
+
+def _non_dominated_sorting_core(r2_scores, feat_counts):
+    """Core logic for non-dominated sorting using Numba for dominance checks."""
+    pop_size = len(r2_scores)
+    rank = np.zeros(pop_size, dtype=np.int32)
+    domination_count = np.zeros(pop_size, dtype=np.int16)
+    dominated_solutions = [[] for _ in range(pop_size)]
+    fronts = [[]]
+    
+    for p in range(pop_size):
+        for q in range(pop_size):
+            if p != q:
+                if _dominates_numba(r2_scores[p], feat_counts[p], r2_scores[q], feat_counts[q]):
+                    dominated_solutions[p].append(q)
+                elif _dominates_numba(r2_scores[q], feat_counts[q], r2_scores[p], feat_counts[p]):
+                    domination_count[p] += 1
+        
+        if domination_count[p] == 0:
+            rank[p] = 0
+            fronts[0].append(p)
+    
+    i = 0
+    while len(fronts[i]) > 0:
+        next_front = []
+        for p in fronts[i]:
+            for q in dominated_solutions[p]:
+                domination_count[q] -= 1
+                if domination_count[q] == 0:
+                    rank[q] = i + 1
+                    next_front.append(q)
+        i += 1
+        fronts.append(next_front)
+    
+    if len(fronts[-1]) == 0:
+        fronts.pop()
+    
+    return fronts, rank
 
 @typechecked
 def front_zero(obj_scores: npt.NDArray) -> List[int32_t]:
@@ -34,24 +95,14 @@ def front_zero(obj_scores: npt.NDArray) -> List[int32_t]:
     # make sure all [1] elements are negative (minimization)
     assert all(x[1] < 0 for x in obj_scores)
 
-    pop_size = obj_scores.shape[0]
-    # final fronts returned
-    front_zero = []
-    # what 'q' solutions dominate 'p' solution
-    domination_count = np.zeros(pop_size, dtype=int16_t)
-
-    for p in range(pop_size):
-        for q in range(pop_size):
-            # if q dominates p break because we only care about front zero
-            if dominates(obj_scores[q], obj_scores[p]):
-                domination_count[p] += 1
-                break
-
-        # will only add p to front zero if it is not dominated by any other solution
-        if domination_count[p] == 0:
-            front_zero.append(int32_t(p))
-
-    return front_zero
+    # Extract arrays for Numba
+    r2_scores = np.array([x[0] for x in obj_scores], dtype=np.float32)
+    feat_counts = np.array([x[1] for x in obj_scores], dtype=np.int32)
+    
+    # Call Numba-compiled core function
+    front_zero_list = _front_zero_core(r2_scores, feat_counts)
+    
+    return [int32_t(x) for x in front_zero_list]
 
 @typechecked
 def non_dominated_sorting(obj_scores: npt.NDArray) -> Tuple[List[npt.NDArray[int32_t]],npt.NDArray[int32_t]]:
@@ -77,43 +128,16 @@ def non_dominated_sorting(obj_scores: npt.NDArray) -> Tuple[List[npt.NDArray[int
     # make sure all [1] elements are negative (minimization)
     assert all(x[1] < 0 for x in obj_scores)
 
-    pop_size = obj_scores.shape[0]
-    # final fronts returned
-    fronts = [[]]
-    # what front is solutions 'p' in
-    rank = np.zeros(pop_size, dtype=int32_t)
-    # what 'q' solutions dominate 'p' solution
-    domination_count = np.zeros(pop_size, dtype=int16_t)
-    # what 'q' solutions are dominated by 'p' solution
-    dominated_solutions = [[] for _ in range(pop_size)]
-
-    for p in range(pop_size):
-        for q in range(pop_size):
-            if dominates(obj_scores[p], obj_scores[q]):
-                dominated_solutions[p].append(q)
-            elif dominates(obj_scores[q], obj_scores[p]):
-                domination_count[p] += 1
-
-        if domination_count[p] == 0:
-            rank[p] = int32_t(0)
-            fronts[0].append(p)
-
-    i = 0
-    while len(fronts[i]) > 0:
-        next_front = []
-        for p in fronts[i]:
-            for q in dominated_solutions[p]:
-                domination_count[q] -= 1
-                assert domination_count[q] >= 0 #check that it's always positive
-                if domination_count[q] == 0:
-                    rank[q] = int32_t(i + 1)
-                    next_front.append(q)
-        i += 1
-        fronts.append(next_front)
-    fronts.pop()
-
-    fronts = [np.array(front, dtype=int32_t) for front in fronts]
-    return fronts, rank
+    # Extract arrays for Numba
+    r2_scores = np.array([x[0] for x in obj_scores], dtype=np.float32)
+    feat_counts = np.array([x[1] for x in obj_scores], dtype=np.int32)
+    
+    # Call Numba-compiled core function
+    fronts_list, rank = _non_dominated_sorting_core(r2_scores, feat_counts)
+    
+    # Convert to numpy arrays
+    fronts = [np.array(front, dtype=int32_t) for front in fronts_list]
+    return fronts, rank.astype(int32_t)
 
 @typechecked
 def crowding_distance(obj_scores: npt.NDArray, front_map, count = int16_t(2)) -> npt.NDArray[float32_t]:

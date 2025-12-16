@@ -489,11 +489,15 @@ class EA(ABC):
         Returns:
         List[Pipeline]: List of survivor pipelines.
         """
+        import time
+        survival_start = time.time()
 
         # make sure all population scores are positive
         assert all(pipeline.get_trait_r2() > 0.0 for pipeline in offspring_pipelines), "All offspring r2 scores must be positive."
         assert all(pipeline.get_trait_feature_cnt() > 0 for pipeline in offspring_pipelines), "All population complexity scores must be positive."
 
+        # NSGA Step 1: Remove duplicates
+        dedup_start = time.time()
         # iterate through the combined pipelines and remove duplicates with the same get_trait_feature_names
         best_pipelines = {}
         for pipeline in offspring_pipelines:
@@ -514,15 +518,27 @@ class EA(ABC):
 
         # get the best pipelines
         non_dup_pipelines = list(best_pipelines.values())
+        dedup_time = time.time() - dedup_start
+        print(f"  NSGA - Deduplication: {dedup_time:.4f}s ({len(offspring_pipelines)} -> {len(non_dup_pipelines)} pipelines)", flush=True)
 
-        # get the fronts and rank
+        # NSGA Step 2: Non-dominated sorting
+        sorting_start = time.time()
         fronts, _ = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(non_dup_pipelines, (float32_t(1.0), int32_t(-1))))
+        sorting_time = time.time() - sorting_start
+        print(f"  NSGA - Non-dominated sorting: {sorting_time:.4f}s ({len(fronts)} fronts)", flush=True)
 
-        # get crowding distance for each solution
+        # NSGA Step 3: Crowding distance
+        crowding_start = time.time()
         crowding_distance = nsga.crowding_distance(self.get_pipeline_scores(non_dup_pipelines, (float32_t(1.0), int32_t(1))), fronts)
+        crowding_time = time.time() - crowding_start
+        print(f"  NSGA - Crowding distance: {crowding_time:.4f}s", flush=True)
 
-        # truncate the population to the population size with nsga ii
+        # NSGA Step 4: Truncate to population size
+        truncate_start = time.time()
         survivor_ids = nsga.non_dominated_truncate(fronts, crowding_distance, int16_t(self.pop_size))
+        truncate_time = time.time() - truncate_start
+        print(f"  NSGA - Truncation: {truncate_time:.4f}s (selected {len(survivor_ids)} survivors)", flush=True)
+        
         # make sure that the number of survivors is correct
         assert len(survivor_ids) <= self.pop_size
 
@@ -533,6 +549,9 @@ class EA(ABC):
             # make sure we are within the bounds of the candidates
             assert 0 <= i < len(non_dup_pipelines)
             new_pop.append(non_dup_pipelines[i])
+
+        total_time = time.time() - survival_start
+        print(f"  NSGA - TOTAL survival selection: {total_time:.4f}s", flush=True)
 
         return new_pop
 
@@ -591,26 +610,42 @@ class EA(ABC):
         Returns:
         List[uint16_t]: List of parent ids
         """
+        import time
+        parent_sel_start = time.time()
 
         # will hold the parent ids
         parent_ids = []
 
-        # get the fronts and rank
+        # NSGA Step 1: Non-dominated sorting
+        sorting_start = time.time()
         fronts, ranks = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(self.population, (float32_t(1.0), int32_t(-1))))
+        sorting_time = time.time() - sorting_start
+        print(f"  NSGA - Parent selection sorting: {sorting_time:.4f}s ({len(fronts)} fronts)", flush=True)
+        
         # make sure that the number of fronts is correct
         assert sum([len(f) for f in fronts]) == len(ranks)
 
-        # get crowding distance for each solution
+        # NSGA Step 2: Crowding distance
+        crowding_start = time.time()
         crowding_distance = nsga.crowding_distance(self.get_pipeline_scores(self.population, weights=(float32_t(1.0), int32_t(1))), fronts)
+        crowding_time = time.time() - crowding_start
+        print(f"  NSGA - Parent selection crowding: {crowding_time:.4f}s", flush=True)
 
-        # get parent_cnt number of parents
+        # NSGA Step 3: Binary tournament selection (repeated)
+        tournament_start = time.time()
         for _ in range(parent_cnt):
             parent = nsga.non_dominated_binary_tournament(rng=self.rng, ranks=ranks, distances=crowding_distance)
             # make sure we are within the bounds of the candidates
             assert 0 <= parent < len(self.population)
             parent_ids.append(parent)
+        tournament_time = time.time() - tournament_start
+        print(f"  NSGA - Binary tournament: {tournament_time:.4f}s ({parent_cnt} selections)", flush=True)
+        
         # make sure that the number of parents is correct
         assert len(parent_ids) == parent_cnt
+
+        total_time = time.time() - parent_sel_start
+        print(f"  NSGA - TOTAL parent selection: {total_time:.4f}s", flush=True)
 
         return parent_ids
 

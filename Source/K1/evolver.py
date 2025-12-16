@@ -175,7 +175,10 @@ class K1_Evolver(EA):
             }
 
             # start generation timer
-            start_time = time.time()
+            gen_start_time = time.time()
+            
+            # Timing for parent selection and offspring generation
+            selection_start = time.time()
 
             # get order of mutation/crossover to do with the extra offspring
             var_order = None
@@ -195,32 +198,54 @@ class K1_Evolver(EA):
                                                            parent_ids = parent_ids,
                                                            population = self.population,
                                                            order = var_order)
+            selection_time = (time.time() - selection_start) / 60
+            print(f"Parent selection + offspring generation: {selection_time:.2f} mins", flush=True)
+            
             # make sure we have the correct number of offspring solutions
             assert 0 < len(offspring) <= 2 * self.pop_size
 
+            # Timing for processing offspring
+            process_start = time.time()
             # process offspring: evaluation interactions and remove bad interactions
             offspring = self.process_offspring(offspring, int16_t(g))
+            process_time = (time.time() - process_start) / 60
+            print(f"Process offspring (unseen branches eval): {process_time:.2f} mins", flush=True)
 
+            # Timing for offspring evaluation
+            eval_start = time.time()
             # evaluate the offspring
             print('Evaluating offspring pipelines...', flush=True)
             offspring, eval_stats = self.evaluation(offspring, int16_t(g))
+            eval_time = (time.time() - eval_start) / 60
+            print(f"Offspring evaluation (LD+FS+R2): {eval_time:.2f} mins", flush=True)
 
             # must be less than or equal because of potential negative r2 offspring pipelines
             assert (0 < len(offspring) + len(self.population) <= 3 * self.pop_size)
 
+            # Timing for survival selection
+            survival_start = time.time()
             # survival selection
             self.population = self.survival_selection(offspring)
+            survival_time = (time.time() - survival_start) / 60
+            print(f"Survival selection: {survival_time:.2f} mins", flush=True)
 
             # make sure we have the correct number of pipelines
             assert len(self.population) <= self.pop_size
 
             # Calculate total generation time
-            gen_time = (time.time() - start_time) / 60  # in minutes
-            print(f"Time to finish generation: {gen_time} minutes", flush=True)
+            gen_time = (time.time() - gen_start_time) / 60  # in minutes
+            print(f"TOTAL generation time: {gen_time:.2f} minutes", flush=True)
+            
+            # Print breakdown percentages
+            print(f"Time breakdown - Selection: {(selection_time/gen_time)*100:.1f}%, Process: {(process_time/gen_time)*100:.1f}%, Eval: {(eval_time/gen_time)*100:.1f}%, Survival: {(survival_time/gen_time)*100:.1f}%", flush=True)
 
             # Add evaluation stats and timing to generation details
             gen_stats.update({
                 'total_time_mins': gen_time,
+                'selection_time_mins': selection_time,
+                'process_time_mins': process_time,
+                'eval_time_mins': eval_time,
+                'survival_time_mins': survival_time,
                 'fs_only_count': eval_stats['fs_only_count'],
                 'pipelines_evaluated': eval_stats['pipelines_evaluated']
             })
@@ -456,6 +481,7 @@ class K1_Evolver(EA):
         Returns:
             List[Pipeline]: List of processed pipelines.
         """
+        process_start = time.time()
 
         # quick checks
         assert len(pipelines) > 0, "No pipelines to process."
@@ -463,22 +489,31 @@ class K1_Evolver(EA):
         assert gen_info >= 0, "Generation info must be non-negative."
 
         print('Processing offspring pipelines: evaluating unseen branches and removing inactive branches...', flush=True)
-        # collect all snps from each pipeline and send to hub to find unseen snps
+        
+        # Step 1: Collect all SNPs and identify unseen ones
+        collect_start = time.time()
         all_snps = set()
         for pipeline in pipelines:
             all_snps.update(pipeline.get_branch_set())
         unseen_snps = self.hub.get_unseen_snps(all_snps)
+        collect_time = time.time() - collect_start
+        print(f"  Process - Collect SNPs & identify unseen: {collect_time:.4f}s ({len(all_snps)} total, {len(unseen_snps)} unseen)", flush=True)
 
-        # evaluate all unseen snps if we have any to evaluate
+        # Step 2: Evaluate all unseen snps if we have any to evaluate
+        eval_unseen_time = 0.0
         if len(unseen_snps) > 0:
+            eval_unseen_start = time.time()
             # break up unseen_branches into chunks of 2000 to avoid ray overload and then run evaluate_unseen_branches on each chunk
             unseen_branches_list = list(unseen_snps)
             for i in range(0, len(unseen_branches_list), 2000):
                 print(f"Evaluating unseen branches chunk {i // 2000 + 1} / {(len(unseen_branches_list) - 1) // 2000 + 1}", flush=True)
                 chunk = set(unseen_branches_list[i:i+2000])
                 self.evaluate_unseen_branches(chunk, gen_seen=int16_t(gen_info))
+            eval_unseen_time = time.time() - eval_unseen_start
+            print(f"  Process - Evaluate unseen branches: {eval_unseen_time:.4f}s", flush=True)
 
-        # offspring pipelines with no good snps
+        # Step 3: Filter pipelines and remove inactive branches
+        filter_start = time.time()
         updated_pipelines = []
 
         for pipeline in pipelines:
@@ -492,6 +527,12 @@ class K1_Evolver(EA):
                 selector_node=pipeline.get_selector_node(),
                 ld_node=pipeline.get_ld_node()
             ))
+        filter_time = time.time() - filter_start
+        print(f"  Process - Filter inactive branches: {filter_time:.4f}s ({len(pipelines)} -> {len(updated_pipelines)} pipelines)", flush=True)
+        
+        total_process_time = time.time() - process_start
+        print(f"  Process - TOTAL: {total_process_time:.4f}s", flush=True)
+        
         return updated_pipelines
 
     def snps_on_the_same_chromosome(self, branch_set: Set[snp_t]) -> bool:
@@ -528,12 +569,14 @@ class K1_Evolver(EA):
 
             gen_seen (int16_t): Generation number when these branches were first seen.
         """
+        eval_unseen_total_start = time.time()
 
         # quick checks
         assert len(unseen_branches) > 0, "No unseen branches to evaluate."
         assert gen_seen >= 0, "Generation seen must be non-negative."
 
-        # container for ray object ids
+        # Step 1: Launch Ray jobs for SNP evaluation
+        launch_jobs_start = time.time()
         ray_jobs = []
         for snp in unseen_branches:
             assert isinstance(snp, snp_t), "SNP must be of type snp_t."
@@ -562,8 +605,11 @@ class K1_Evolver(EA):
                         lo = snp_t('additive')
                     ))
         assert len(ray_jobs) == len(unseen_branches) * self.k  # k folds for each unseen snp
+        launch_jobs_time = time.time() - launch_jobs_start
+        print(f"    Unseen - Launch R² eval jobs: {launch_jobs_time:.4f}s ({len(ray_jobs)} jobs)", flush=True)
 
-        # container to hold snp performance (accumulated r2, count, error flag, encoder type, encoded_x ray id(depending on r2 / count >= threshold))
+        # Step 2: Initialize performance tracking
+        init_perf_start = time.time()
         snp_perf = {}
         for snp_name in unseen_branches:
             # initialize with best encoder as None, encoded_x as None, and pager_lut_sum as zeros array
@@ -577,9 +623,11 @@ class K1_Evolver(EA):
                 # Only additive encoding
                 snp_perf[snp_name][snp_t('additive')] = {snp_t('r2'): float32_t(0.0), snp_t('cnt'): float32_t(0.0)}
         assert len(snp_perf) == len(unseen_branches), "SNP performance dictionary size does not match unseen branches."
+        init_perf_time = time.time() - init_perf_start
+        print(f"    Unseen - Initialize perf tracking: {init_perf_time:.4f}s", flush=True)
 
-        # process results as they come in
-        start_time = time.time()
+        # Step 3: Process R² evaluation results
+        r2_eval_start = time.time()
         while len(ray_jobs) > 0:
             # collect results
             finished, ray_jobs = ray.wait(ray_jobs)
@@ -604,10 +652,11 @@ class K1_Evolver(EA):
                 # add them up
                 snp_perf[snp_name][lo][snp_t('r2')] += r2
                 snp_perf[snp_name][lo][snp_t('cnt')] += float32_t(1.0)
-        # timing print
-        print(f"Evaluating {len(unseen_branches)} unseen branches took {(time.time() - start_time) / 60} mins", flush=True)
+        r2_eval_time = time.time() - r2_eval_start
+        print(f"    Unseen - Process R² results: {r2_eval_time:.4f}s", flush=True)
 
-        # obtain encoded snp for each unseen branch with a best positve r2
+        # Step 4: Find best encoder and launch encoding jobs
+        best_encoder_start = time.time()
         ray_jobs = []
         for snp_name in unseen_branches:
             # find best encoder for the snp
@@ -650,8 +699,11 @@ class K1_Evolver(EA):
                                                                  train_idx = self.train_idx_ray,
                                                                  enc = best_encoder,
                                                                  snp = snp_name))
-        # process encoded snp results
-        start_time = time.time()
+        best_encoder_time = time.time() - best_encoder_start
+        print(f"    Unseen - Find best encoder & launch encoding: {best_encoder_time:.4f}s ({len(ray_jobs)} encoding jobs)", flush=True)
+
+        # Step 5: Process encoding results
+        encoding_start = time.time()
         count = 0
         while len(ray_jobs) > 0:
             # collect results and store encoded snp
@@ -659,10 +711,11 @@ class K1_Evolver(EA):
             encoded_snp, snp_name = ray.get(finished)[0]
             snp_perf[snp_name][snp_t('encoded_x')] = encoded_snp
             count += 1
-        # timing print
-        print(f"Encoding {count} unseen branches took {(time.time() - start_time) / 60} mins", flush=True)
+        encoding_time = time.time() - encoding_start
+        print(f"    Unseen - Process encoding results: {encoding_time:.4f}s ({count} encodings)", flush=True)
 
-        # update the hub with best r2 and encoded snp ray id (if r2 >= threshold)
+        # Step 6: Update hub with results
+        hub_update_start = time.time()
         for snp_name in unseen_branches:
             enc_id = None
             # set enc_id to those snps with r2 / k >= threshold
@@ -687,6 +740,11 @@ class K1_Evolver(EA):
                                           gen_seen=gen_seen,
                                           snp_explainability_threshold=self.branch_explainability_threshold,
                                           pager_lut=pager_lut)
+        hub_update_time = time.time() - hub_update_start
+        print(f"    Unseen - Update hub: {hub_update_time:.4f}s", flush=True)
+
+        total_unseen_time = time.time() - eval_unseen_total_start
+        print(f"    Unseen - TOTAL evaluate_unseen_branches: {total_unseen_time:.4f}s", flush=True)
 
     def get_sampling(self, cnt:uint16_t, chrom_num:uint16_t) -> npt.NDArray[uint16_t]:
         """
