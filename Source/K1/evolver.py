@@ -805,14 +805,19 @@ class K1_Evolver(EA):
 
         # update the hub with best r2 and encoded snp ray id (if r2 >= threshold)
         hub_update_start = time.time()
+        ray_put_total = 0.0
+        hub_call_total = 0.0
+        
         for snp_name in unseen_branches:
             enc_id = None
             # set enc_id to those snps with r2 / k >= threshold
+            ray_put_start = time.time()
             if snp_perf[snp_name][snp_perf[snp_name][snp_t('b_encoder')]][snp_t('r2')] / float32_t(self.k) >= self.branch_explainability_threshold:
                 enc_id = ray.put(snp_perf[snp_name][snp_t('encoded_x')])
             # or set enc_id to those snps if threshold < 0.0
             elif float32_t(0.0) > self.branch_explainability_threshold and snp_perf[snp_name][snp_t('b_encoder')] != snp_t('additive'):
                 enc_id = ray.put(snp_perf[snp_name][snp_t('encoded_x')])
+            ray_put_total += time.time() - ray_put_start
 
             # Get averaged PAGER LUT if encoding is pager
             pager_lut = None
@@ -822,6 +827,7 @@ class K1_Evolver(EA):
                     # Average PAGER LUT values across all k-folds
                     pager_lut = snp_perf[snp_name][snp_t('pager_lut_sum')] / float32_t(pager_lut_cnt)
 
+            hub_call_start = time.time()
             self.hub.update_snp_hub_r2_enc(snp=snp_name,
                                           r2=snp_perf[snp_name][snp_perf[snp_name][snp_t('b_encoder')]][snp_t('r2')] / float32_t(self.k),
                                           enc=snp_perf[snp_name][snp_t('b_encoder')],
@@ -829,8 +835,17 @@ class K1_Evolver(EA):
                                           gen_seen=gen_seen,
                                           snp_explainability_threshold=self.branch_explainability_threshold,
                                           pager_lut=pager_lut)
+            hub_call_total += time.time() - hub_call_start
+            
         hub_update_time = time.time() - hub_update_start
-        print(f"  - Hub updates for unseen branches: {hub_update_time:.4f}s", flush=True)
+        
+        # Calculate percentages for hub update breakdown
+        pct_ray_put = (ray_put_total / hub_update_time * 100) if hub_update_time > 0 else 0
+        pct_hub_call = (hub_call_total / hub_update_time * 100) if hub_update_time > 0 else 0
+        
+        print(f"  - Hub updates ({len(unseen_branches)} SNPs): {hub_update_time:.4f}s", flush=True)
+        print(f"    • ray.put():    {ray_put_total:.4f}s ({pct_ray_put:5.1f}%)", flush=True)
+        print(f"    • hub updates:  {hub_call_total:.4f}s ({pct_hub_call:5.1f}%)", flush=True)
         
         total_unseen_time = time.time() - unseen_eval_start
         print(f"[Timing] Total unseen branch evaluation: {total_unseen_time:.4f}s ({total_unseen_time/60:.2f} mins)", flush=True)
