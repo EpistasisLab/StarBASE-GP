@@ -13,6 +13,7 @@ from typeguard import typechecked
 from typing import List, Dict, Set
 import numpy as np
 import ray
+import time
 
 # SortedList is a sorted list implementation in Python for fast insertion and deletion
 # https://grantjenks.com/docs/sortedcontainers/sortedlist.html
@@ -38,6 +39,7 @@ class K1_Hub(Hub):
                 snps (List[snp_t]): List of SNPs to be added to the considered hub.
             """
 
+            start_time = time.time()
             # create a dictionary to hold all snps
             self.hub = {}
             for snp in snps:
@@ -49,12 +51,18 @@ class K1_Hub(Hub):
                     self.hub[chrom] = [pos]
                 else:
                     self.hub[chrom].append(pos)
+            
+            dict_build_time = time.time() - start_time
+            print(f"  - Considered Hub dictionary building: {dict_build_time:.4f} seconds", flush=True)
 
             # sort all lists within dictionary
+            sort_start = time.time()
             for chrom, pos_l in self.hub.items():
                 # sort the list and store in SortedList and update the dictionary
                 pos_l.sort()
                 self.hub[chrom] = SortedList(pos_l)
+            sort_time = time.time() - sort_start
+            print(f"  - Considered Hub sorting and SortedList creation: {sort_time:.4f} seconds", flush=True)
             return
 
         def get_positions_in_chromosome(self, chrom: int32_t) -> List[int32_t]:
@@ -595,24 +603,36 @@ class K1_Hub(Hub):
             snps_ray_ids (Dict[snp_t, ray.ObjectRef]): Dictionary mapping SNPs to their corresponding Ray Object IDs.
         """
 
+        hub_init_start = time.time()
+        
         # how many rolls do we try for mutations
         self.mutation_tries = uint16_t(20)
 
         # initialize non pruned hub
         print('Initializing Considered Hub')
+        consider_start = time.time()
         self.consider = self.Considered(snp_list)
-        print('Considered Hub Initialized')
+        consider_time = time.time() - consider_start
+        print(f'Considered Hub Initialized in {consider_time:.4f} seconds\n')
 
         # order hub stuff
         print('Initializing Ordered Hub')
+        order_start = time.time()
         self.order = Ordered_Hub()
         # get snps and their bin id
         snp_bin = self.order.generate_order(snp_list)
-        print('Ordered Hub Initialized')
+        order_time = time.time() - order_start
+        print(f'Ordered Hub Initialized in {order_time:.4f} seconds\n')
 
         # snp db hub stuff
+        print('Initializing SNP Database Hub')
+        db_start = time.time()
         self.db = self.DB()
+        db_create_time = time.time() - db_start
+        print(f"  - DB object creation: {db_create_time:.4f} seconds", flush=True)
+        
         # update snp_hub with snp_bin and snp header positions
+        populate_start = time.time()
         for s in snp_bin:
             # make sure that the snp is in the correct format
             assert isinstance(s[0], snp_t)
@@ -643,7 +663,12 @@ class K1_Hub(Hub):
                                 anchor_snp=snp_t(''),
                                 left_window_idx=left_window_idx,
                                 right_window_idx=right_window_idx,)
-        print('SNP Hub Initialized')
+        populate_time = time.time() - populate_start
+        print(f"  - DB population with {len(snp_bin)} SNPs: {populate_time:.4f} seconds", flush=True)
+        print(f'SNP Hub Initialized in {time.time() - db_start:.4f} seconds\n')
+        
+        total_time = time.time() - hub_init_start
+        print(f'=== Total K1_Hub Initialization Time: {total_time:.4f} seconds ===\n', flush=True)
         return
 
     def get_encoding(self, snp: snp_t) -> snp_t:
@@ -675,7 +700,11 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
          anchor_snp_pos = 12 # position for the anchor snp in hub value list
         """
 
+        save_start = time.time()
+        print(f"[Timing] Starting save_hubs to {save_dir}...", flush=True)
+        
         # Save snp hub with headers
+        collect_start = time.time()
         snp_data = []
         for k, v in self.db.hub.items():
             # k: snp (row[0])
@@ -696,11 +725,18 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
             # v[14]: pager_1 (row[15])
             # v[15]: pager_2 (row[16])
             snp_data.append([k, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13], v[14], v[15]])
+        
+        collect_time = time.time() - collect_start
+        print(f"  - Data collection: {collect_time:.4f}s for {len(snp_data)} SNPs", flush=True)
 
         # Sort snp_data by the second column (AVG_R2)
+        sort_start = time.time()
         snp_data.sort(key=lambda x: x[1], reverse=True)  # reverse=True for descending order
+        sort_time = time.time() - sort_start
+        print(f"  - Data sorting: {sort_time:.4f}s", flush=True)
 
         # Write snp hub to file
+        write_start = time.time()
         with open(save_dir+"snp_hub.csv", 'w') as f:
             # Write the headers for the snp_file (removed bin_idx column)
             f.write("snp,chr,bp,r2,bin_num,encoding,seen,active,gen_seen,gen_pruned,pruned_reason,ld_threshold,ld_genomic_distance,anchor_snp,pager_0,pager_1,pager_2\n")
@@ -732,9 +768,13 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
 
                 # Write all columns (removed bin_idx which was row[4]): row[13] is anchor_snp, then pager_0, pager_1, pager_2
                 f.write(f"{snp_with_chr},{chrom},{pos},{row[1]},{row[2]},{row[5]},{row[6]},{row[7]},{row[8]},{row[9]},{row[10]},{row[11]},{row[12]},{row[13]},{pager_0},{pager_1},{pager_2}\n")
+        
+        write_snp_time = time.time() - write_start
+        print(f"  - Writing snp_hub.csv: {write_snp_time:.4f}s", flush=True)
 
         # save csv with both seen and not prunned snps
         # Write consideration hub to file
+        consider_write_start = time.time()
         with open(save_dir+"consideration_hub.csv", 'w') as f:
             # Write the headers for the snp_file
             f.write("snp,r2,encoding\n")
@@ -743,6 +783,12 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
                     # Add 'chr' prefix to SNP name
                     snp_with_chr = f"chr{row[0]}"
                     f.write(f"{snp_with_chr},{row[1]},{row[5]}\n")
+        
+        consider_write_time = time.time() - consider_write_start
+        print(f"  - Writing consideration_hub.csv: {consider_write_time:.4f}s", flush=True)
+        
+        total_save_time = time.time() - save_start
+        print(f"[Timing] save_hubs completed in {total_save_time:.4f}s\n", flush=True)
         return
 
     def update_snp_hub_r2_enc(self, snp:snp_t, r2:float32_t, enc: snp_t, enc_x: ray.ObjectID | None, gen_seen: int16_t, snp_explainability_threshold: float32_t, pager_lut: np.ndarray | None = None) -> None:
@@ -1042,14 +1088,25 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
             gen_pruned (int16_t): Generation number when the SNPs were pruned.
         """
 
+        process_start = time.time()
+        print(f"[Timing] Processing {len(snps)} pruned SNPs...", flush=True)
+        
         # go through each snp and update the hub
+        flip_total = 0.0
+        add_details_total = 0.0
+        remove_total = 0.0
+        
         for snp in snps:
             # check to make sure we have not prunned this snp before
             assert self.db.get_gen_pruned(snp) == int16_t(-1)
 
             # flip snp to pruned
+            flip_start = time.time()
             self.db.flip_activate_flag_ld(snp, gen_pruned)
+            flip_total += time.time() - flip_start
+            
             # add ld details to the snp hub
+            add_start = time.time()
             self.db.add_ld_details(
                 snp,
                 snp_details_after_ld[snp]["reason"],
@@ -1057,9 +1114,15 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
                 snp_details_after_ld[snp]["genomic_distance"],
                 snp_details_after_ld[snp]["anchor_snp"]
             )
+            add_details_total += time.time() - add_start
 
             # delete snp from non pruned
+            remove_start = time.time()
             self.consider.remove_snp(snp)
+            remove_total += time.time() - remove_start
+        
+        total_time = time.time() - process_start
+        print(f"[Timing] process_pruned_snps completed: Flip flags={flip_total:.4f}s, Add LD details={add_details_total:.4f}s, Remove from consider={remove_total:.4f}s, Total={total_time:.4f}s", flush=True)
 
     def generate_r2_dict(self, snps: Set[snp_t]) -> List:
         """

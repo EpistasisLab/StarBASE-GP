@@ -103,14 +103,30 @@ class K1_Evolver(EA):
         Initialize the hubs needed for the run.
         These specific hub classes must be implemented in the derived class folders.
         """
+        print("[Timing] Initializing hubs...", flush=True)
+        hub_init_start = time.time()
+        
         # dictionary of feature names and ray_ids for each specific column put into ray
+        ray_put_start = time.time()
         feature_ray_ids = {}
         for feature in self.snp_labels:
             feature_ray_ids[feature] = ray.put(self.all_x[feature].to_numpy(dtype=float32_t))
         self.all_y_ray_id = ray.put(self.all_y)
+        ray_put_time = time.time() - ray_put_start
 
         # initialize the hubs
+        hub_create_start = time.time()
         self.hub = K1_Hub(snp_list=self.snp_labels, snps_ray_ids=feature_ray_ids, window_distance=self.window_distance)
+        hub_create_time = time.time() - hub_create_start
+        
+        total_hub_time = time.time() - hub_init_start
+        
+        pct_ray = (ray_put_time / total_hub_time * 100) if total_hub_time > 0 else 0
+        pct_hub = (hub_create_time / total_hub_time * 100) if total_hub_time > 0 else 0
+        
+        print(f"\n[Timing] Hub initialization: {total_hub_time:.2f}s", flush=True)
+        print(f"  - Ray put ops:   {ray_put_time:6.2f}s ({pct_ray:5.1f}%)", flush=True)
+        print(f"  - Hub creation:  {hub_create_time:6.2f}s ({pct_hub:5.1f}%)\n", flush=True)
         return
 
     def evolve(self, gens: uint16_t) -> None:
@@ -148,13 +164,16 @@ class K1_Evolver(EA):
 
         # run the algorithm for the specified number of generations
         for g in range(gens):
-            print('Generation:', g, flush=True)
+            print('='*80, flush=True)
+            print(f'[Timing] Generation {g} starting...', flush=True)
+            gen_start_time = time.time()
 
             # how many pipelines are in the population
             print('Population size:', len(self.population), flush=True)
             assert(0 < len(self.population) <= self.pop_size)
 
             # get the size of the front 0 after each generation
+            pareto_start = time.time()
             count = 0
             if len(self.population) >= 2:
                 _, rank = nsga.non_dominated_sorting(obj_scores=self.get_pipeline_scores(pipelines=self.population, weights=(float32_t(1.0), int32_t(-1))))
@@ -164,7 +183,8 @@ class K1_Evolver(EA):
                         count += 1
             else:
                 count = 1
-            print('Size of Pareto Front:', count, flush=True)
+            pareto_time = time.time() - pareto_start
+            print(f'Size of Pareto Front: {count} (computed in {pareto_time:.4f}s)', flush=True)
             self.hub.seen_snps_proportion()  # count the number of unseen snps after each generation
 
             # Initialize generation stats dictionary (will be updated after evaluation)
@@ -174,10 +194,8 @@ class K1_Evolver(EA):
                 'consideration_set_size': self.hub.consideration_hub_size()
             }
 
-            # start generation timer
-            start_time = time.time()
-
             # get order of mutation/crossover to do with the extra offspring
+            selection_start = time.time()
             var_order = None
             parent_cnt = None
             parent_ids = None
@@ -187,46 +205,78 @@ class K1_Evolver(EA):
             else:
                 var_order, parent_cnt = self.reproduction.variation_order(self.rng, uint32_t(2*self.pop_size))
                 parent_ids = self.parent_selection(parent_cnt)
+            selection_time = time.time() - selection_start
+            print(f"[Timing] Parent selection: {selection_time:.4f}s", flush=True)
 
             # generate offspring
+            repro_start = time.time()
             offspring = self.reproduction.produce_offspring(rng = self.rng,
                                                            hub = self.hub,
                                                            offspring_cnt = uint32_t(2*self.pop_size),
                                                            parent_ids = parent_ids,
                                                            population = self.population,
                                                            order = var_order)
+            repro_time = time.time() - repro_start
+            print(f"[Timing] Offspring generation (crossover/mutation): {repro_time:.4f}s", flush=True)
             # make sure we have the correct number of offspring solutions
             assert 0 < len(offspring) <= 2 * self.pop_size
 
             # process offspring: evaluation interactions and remove bad interactions
+            process_start = time.time()
             offspring = self.process_offspring(offspring, int16_t(g))
+            process_time = time.time() - process_start
+            print(f"[Timing] Process offspring (unseen SNPs + filtering): {process_time:.4f}s", flush=True)
 
             # evaluate the offspring
             print('Evaluating offspring pipelines...', flush=True)
+            eval_start = time.time()
             offspring, eval_stats = self.evaluation(offspring, int16_t(g))
+            eval_time = time.time() - eval_start
+            print(f"[Timing] Offspring evaluation (LD+FS+R2): {eval_time:.4f}s", flush=True)
 
             # must be less than or equal because of potential negative r2 offspring pipelines
             assert (0 < len(offspring) + len(self.population) <= 3 * self.pop_size)
 
             # survival selection
+            survival_start = time.time()
             self.population = self.survival_selection(offspring)
+            survival_time = time.time() - survival_start
+            print(f"[Timing] Survival selection: {survival_time:.4f}s", flush=True)
 
             # make sure we have the correct number of pipelines
             assert len(self.population) <= self.pop_size
 
-            # Calculate total generation time
-            gen_time = (time.time() - start_time) / 60  # in minutes
-            print(f"Time to finish generation: {gen_time} minutes", flush=True)
+            # Calculate total generation time and percentages
+            gen_time = time.time() - gen_start_time
+            gen_time_mins = gen_time / 60
+            
+            pct_selection = (selection_time / gen_time * 100) if gen_time > 0 else 0
+            pct_repro = (repro_time / gen_time * 100) if gen_time > 0 else 0
+            pct_process = (process_time / gen_time * 100) if gen_time > 0 else 0
+            pct_eval = (eval_time / gen_time * 100) if gen_time > 0 else 0
+            pct_survival = (survival_time / gen_time * 100) if gen_time > 0 else 0
+            
+            print(f"\n[Timing] Generation {g} completed: {gen_time:.2f}s ({gen_time_mins:.2f} mins)", flush=True)
+            print(f"  - Selection:    {selection_time:6.2f}s ({pct_selection:5.1f}%)", flush=True)
+            print(f"  - Reproduction: {repro_time:6.2f}s ({pct_repro:5.1f}%)", flush=True)
+            print(f"  - Processing:   {process_time:6.2f}s ({pct_process:5.1f}%)", flush=True)
+            print(f"  - Evaluation:   {eval_time:6.2f}s ({pct_eval:5.1f}%)", flush=True)
+            print(f"  - Survival:     {survival_time:6.2f}s ({pct_survival:5.1f}%)", flush=True)
 
             # Add evaluation stats and timing to generation details
             gen_stats.update({
-                'total_time_mins': gen_time,
+                'total_time_mins': gen_time_mins,
+                'selection_time_s': selection_time,
+                'reproduction_time_s': repro_time,
+                'processing_time_s': process_time,
+                'evaluation_time_s': eval_time,
+                'survival_time_s': survival_time,
                 'fs_only_count': eval_stats['fs_only_count'],
                 'pipelines_evaluated': eval_stats['pipelines_evaluated']
             })
             generation_details.append(gen_stats)
 
-            print('-'*50, flush=True)
+            print('='*80, flush=True)
 
         # prints for the end of a run and the final population
         print('Final run/population details')
@@ -254,6 +304,9 @@ class K1_Evolver(EA):
         Size of self.population must be self.pop_size.
         """
 
+        print("[Timing] Initializing population...", flush=True)
+        pop_init_start = time.time()
+        
         # quick check to make sure hub is initialized
         assert self.hub is not None, "Hub must be initialized before initializing population."
         assert len(self.population) == 0, "Population must be empty before initializing."
@@ -266,6 +319,7 @@ class K1_Evolver(EA):
         chomosome_list = self.hub.get_keys_with_snps()
 
         # create initial set of branch sets to integrate within pipelines
+        sampling_start = time.time()
         while len(pop_branch_sets) < self.pop_size:
             # current set of branches
             branches = set()
@@ -283,15 +337,20 @@ class K1_Evolver(EA):
             unseen_branches.update(branches)
             # add the current branch set to the population list
             pop_branch_sets.append(branches)
+        
+        sampling_time = time.time() - sampling_start
 
         # break up unseen_branches into chunks of 2000 to avoid ray overload and then run evaluate_unseen_branches on each chunk
+        eval_unseen_start = time.time()
         unseen_branches_list = list(unseen_branches)
         for i in range(0, len(unseen_branches_list), 2000):
             print(f"Evaluating unseen branches chunk {i // 2000 + 1} / {(len(unseen_branches_list) - 1) // 2000 + 1}", flush=True)
             chunk = set(unseen_branches_list[i:i+2000])
             self.evaluate_unseen_branches(chunk, gen_seen=int16_t(0))
+        eval_unseen_time = time.time() - eval_unseen_start
 
         # remove inactive branches from each branch set for the initial population
+        filter_start = time.time()
         assert len(pop_branch_sets) == self.pop_size, "Population branch sets size does not match population size."
         assert len(self.population) == 0, "Population must be empty before initializing."
         for b_set in pop_branch_sets:
@@ -304,12 +363,35 @@ class K1_Evolver(EA):
 
             # generate random pipeline and add to population
             self.population.append(self.reproduction.generate_random_pipeline(self.rng, b_set_active, self.seed))
+        filter_time = time.time() - filter_start
         assert 1 <= len(self.population) <= self.pop_size, "Population size contained no valid pipelines after branch set evaluation."
 
         # evaluate the initial population
         print('Evaluating initial population pipelines...', flush=True)
+        eval_pop_start = time.time()
         self.population, _ = self.evaluation(self.population, gen_info=int16_t(0))
+        eval_pop_time = time.time() - eval_pop_start
         assert 1 <= len(self.population) <= self.pop_size, "Population size contained no valid pipelines after pipeline evaluation."
+        
+        total_pop_init = time.time() - pop_init_start
+        
+        pct_sampling = (sampling_time / total_pop_init * 100) if total_pop_init > 0 else 0
+        pct_eval_unseen = (eval_unseen_time / total_pop_init * 100) if total_pop_init > 0 else 0
+        pct_filter = (filter_time / total_pop_init * 100) if total_pop_init > 0 else 0
+        pct_eval_pop = (eval_pop_time / total_pop_init * 100) if total_pop_init > 0 else 0
+        
+        print(f"\n[Timing] Population initialization: {total_pop_init:.2f}s ({total_pop_init/60:.2f} mins)", flush=True)
+        print(f"  - Sampling:       {sampling_time:6.2f}s ({pct_sampling:5.1f}%)", flush=True)
+        print(f"  - Eval unseen:    {eval_unseen_time:6.2f}s ({pct_eval_unseen:5.1f}%)", flush=True)
+        print(f"  - Filtering:      {filter_time:6.2f}s ({pct_filter:5.1f}%)", flush=True)
+        print(f"  - Eval population:{eval_pop_time:6.2f}s ({pct_eval_pop:5.1f}%)\n", flush=True)
+        return
+        
+        print(f"\n[Timing] Population initialization: {total_pop_init:.2f}s ({total_pop_init/60:.2f} mins)", flush=True)
+        print(f"  - Sampling:       {sampling_time:6.2f}s ({pct_sampling:5.1f}%)", flush=True)
+        print(f"  - Eval unseen:    {eval_unseen_time:6.2f}s ({pct_eval_unseen:5.1f}%)", flush=True)
+        print(f"  - Filtering:      {filter_time:6.2f}s ({pct_filter:5.1f}%)", flush=True)
+        print(f"  - Eval population:{eval_pop_time:6.2f}s ({pct_eval_pop:5.1f}%)\n", flush=True)
         return
 
     def evaluation(self, pipelines: List[Pipeline], gen_info: int16_t) -> Tuple[List[Pipeline], Dict]:
@@ -332,10 +414,14 @@ class K1_Evolver(EA):
         # quick checks
         assert len(pipelines) > 0, "No pipelines to evaluate."
 
+        print(f"[Timing] Starting evaluation of {len(pipelines)} pipelines...", flush=True)
+        eval_method_start = time.time()
+        
         # keep a count of number of pipelines that are calling only fs vs ld+fs
         fs_only_count = 0
 
         # create ray jobs for each pipeline evaluation depending on if ld is needed or not
+        job_creation_start = time.time()
         ray_jobs = []
         pipeline_evaluation_details = {}
         for i, pipeline in enumerate(pipelines):
@@ -364,12 +450,15 @@ class K1_Evolver(EA):
                                                                      selector_node=pipeline.get_selector_node(),
                                                                      pop_id=uint32_t(i)))
                 fs_only_count += 1
+        job_creation_time = time.time() - job_creation_start
+        print(f"  - Ray job creation for LD/FS: {job_creation_time:.4f}s ({len(ray_jobs)} jobs)", flush=True)
+        
         # keep track of LD prunned snps
         pruned_snps = set()
         # will hold the snp details after LD for each pipeline
         snp_details_per_snp = {}
         # process results as they come in
-        start_time = time.time()
+        ld_fs_start = time.time()
         while len(ray_jobs) > 0:
             finished, ray_jobs = ray.wait(ray_jobs)
             error, feature_cnt, pop_id, features, ld_details = ray.get(finished[0])
@@ -391,10 +480,11 @@ class K1_Evolver(EA):
 
         # if self.ld_flag is False, pruned_snps should be empty
         assert (len(pruned_snps) == 0) if self.ld_flag == False else True, "Pruned SNPs should be empty when LD flag is False."
-        # timing print
-        print(f"Feature selection (ld->fs | fs) took {(time.time() - start_time) / 60} mins", flush=True)
+        ld_fs_time = time.time() - ld_fs_start
+        print(f"  - LD/FS processing: {ld_fs_time:.4f}s ({ld_fs_time/60:.2f} mins), pruned {len(pruned_snps)} SNPs", flush=True)
 
         # send pipelines with no error to be evaluated for r2 across k-folds (only pipelines with error == False)
+        r2_job_start = time.time()
         ray_jobs = []
         for pipeline_id in pipeline_evaluation_details:
             if pipeline_evaluation_details[pipeline_id][snp_t('error')]:
@@ -407,8 +497,11 @@ class K1_Evolver(EA):
                                                                       train_idx = fold_data['train_idx'],
                                                                       valid_idx = fold_data['val_idx'],
                                                                       pop_id = uint32_t(pipeline_id)))
+        r2_job_time = time.time() - r2_job_start
+        print(f"  - R2 job creation: {r2_job_time:.4f}s ({len(ray_jobs)} jobs)", flush=True)
+        
         # process results as they come in
-        start_time = time.time()
+        r2_eval_start = time.time()
         while len(ray_jobs) > 0:
             finished, ray_jobs = ray.wait(ray_jobs)
             r2, pop_id, error = ray.get(finished[0])
@@ -418,11 +511,14 @@ class K1_Evolver(EA):
             # update r2 and count
             pipeline_evaluation_details[pop_id][snp_t('r2')] += r2
             pipeline_evaluation_details[pop_id][snp_t('count')] += uint32_t(1)
-        # timing print
-        print(f"R2 evaluation took {(time.time() - start_time) / 60} mins", flush=True)
+        r2_eval_time = time.time() - r2_eval_start
+        print(f"  - R2 evaluation: {r2_eval_time:.4f}s ({r2_eval_time/60:.2f} mins)", flush=True)
 
         # update hubs with prunned snps info
+        hub_update_start = time.time()
         self.hub.process_pruned_snps(pruned_snps, snp_details_per_snp, gen_info)
+        hub_update_time = time.time() - hub_update_start
+        print(f"  - Hub pruned SNP updates: {hub_update_time:.4f}s", flush=True)
 
         # will hold the evaluated pipelines that passed evaluation
         evaluated_pipelines : List[Pipeline] = []
@@ -442,6 +538,22 @@ class K1_Evolver(EA):
             # add to evaluated pipelines
             evaluated_pipelines.append(pipelines[pipeline_id])
 
+        total_eval_time = time.time() - eval_method_start
+        
+        # Calculate percentages
+        pct_job_create = (job_creation_time / total_eval_time * 100) if total_eval_time > 0 else 0
+        pct_ld_fs = (ld_fs_time / total_eval_time * 100) if total_eval_time > 0 else 0
+        pct_r2_job = (r2_job_time / total_eval_time * 100) if total_eval_time > 0 else 0
+        pct_r2_eval = (r2_eval_time / total_eval_time * 100) if total_eval_time > 0 else 0
+        pct_hub_update = (hub_update_time / total_eval_time * 100) if total_eval_time > 0 else 0
+        
+        print(f"\n[Timing] Evaluation ({len(pipelines)} pipelines): {total_eval_time:.2f}s ({total_eval_time/60:.2f} mins)", flush=True)
+        print(f"  - Job creation:  {job_creation_time:6.2f}s ({pct_job_create:5.1f}%)", flush=True)
+        print(f"  - LD/FS process: {ld_fs_time:6.2f}s ({pct_ld_fs:5.1f}%)", flush=True)
+        print(f"  - R2 jobs:       {r2_job_time:6.2f}s ({pct_r2_job:5.1f}%)", flush=True)
+        print(f"  - R2 evaluation: {r2_eval_time:6.2f}s ({pct_r2_eval:5.1f}%)", flush=True)
+        print(f"  - Hub updates:   {hub_update_time:6.2f}s ({pct_hub_update:5.1f}%)\n", flush=True)
+        
         return evaluated_pipelines, {'fs_only_count': fs_only_count, 'pipelines_evaluated': len(evaluated_pipelines)}
 
     def process_offspring(self, pipelines: List[Pipeline], gen_info: int16_t) -> List[Pipeline]:
@@ -533,7 +645,11 @@ class K1_Evolver(EA):
         assert len(unseen_branches) > 0, "No unseen branches to evaluate."
         assert gen_seen >= 0, "Generation seen must be non-negative."
 
+        print(f"[Timing] Evaluating {len(unseen_branches)} unseen branches...", flush=True)
+        unseen_eval_start = time.time()
+        
         # container for ray object ids
+        ray_job_start = time.time()
         ray_jobs = []
         for snp in unseen_branches:
             assert isinstance(snp, snp_t), "SNP must be of type snp_t."
@@ -577,9 +693,12 @@ class K1_Evolver(EA):
                 # Only additive encoding
                 snp_perf[snp_name][snp_t('additive')] = {snp_t('r2'): float32_t(0.0), snp_t('cnt'): float32_t(0.0)}
         assert len(snp_perf) == len(unseen_branches), "SNP performance dictionary size does not match unseen branches."
+        
+        ray_job_time = time.time() - ray_job_start
+        print(f"  - Ray job creation for {len(ray_jobs)} SNP evaluation jobs: {ray_job_time:.4f}s", flush=True)
 
         # process results as they come in
-        start_time = time.time()
+        r2_calc_start = time.time()
         while len(ray_jobs) > 0:
             # collect results
             finished, ray_jobs = ray.wait(ray_jobs)
@@ -604,10 +723,12 @@ class K1_Evolver(EA):
                 # add them up
                 snp_perf[snp_name][lo][snp_t('r2')] += r2
                 snp_perf[snp_name][lo][snp_t('cnt')] += float32_t(1.0)
-        # timing print
-        print(f"Evaluating {len(unseen_branches)} unseen branches took {(time.time() - start_time) / 60} mins", flush=True)
+        
+        r2_calc_time = time.time() - r2_calc_start
+        print(f"  - R2 calculation for unseen branches: {r2_calc_time:.4f}s ({r2_calc_time/60:.2f} mins)", flush=True)
 
         # obtain encoded snp for each unseen branch with a best positve r2
+        encoding_prep_start = time.time()
         ray_jobs = []
         for snp_name in unseen_branches:
             # find best encoder for the snp
@@ -635,6 +756,23 @@ class K1_Evolver(EA):
 
             # save best encoder for the snp
             snp_perf[snp_t(snp_name)][snp_t('b_encoder')] = snp_t(best_encoder)
+        
+        encoding_prep_time = time.time() - encoding_prep_start
+        print(f"  - Best encoder selection: {encoding_prep_time:.4f}s", flush=True)
+        
+        # Create encoding jobs for SNPs above threshold
+        encoding_job_start = time.time()
+        for snp_name in unseen_branches:
+            best_r2 = float32_t(-10000000000000.0)
+            best_encoder = snp_perf[snp_t(snp_name)][snp_t('b_encoder')]
+            
+            # Recalculate best_r2 for this snp
+            if self.encoding_flag:
+                for encoder in self.encoder_types:
+                    if snp_perf[snp_name][encoder][snp_t('r2')] > best_r2:
+                        best_r2 = snp_perf[snp_name][encoder][snp_t('r2')]
+            else:
+                best_r2 = snp_perf[snp_name][snp_t('additive')][snp_t('r2')]
 
             # if we have an average r2 greater or equal than the threshold, get the encoded snp ray id
             # Note: For additive encoding, no need to encode since data is already in additive format
@@ -650,8 +788,11 @@ class K1_Evolver(EA):
                                                                  train_idx = self.train_idx_ray,
                                                                  enc = best_encoder,
                                                                  snp = snp_name))
+        encoding_job_time = time.time() - encoding_job_start
+        print(f"  - Encoding job creation: {encoding_job_time:.4f}s ({len(ray_jobs)} jobs)", flush=True)
+        
         # process encoded snp results
-        start_time = time.time()
+        encoding_exec_start = time.time()
         count = 0
         while len(ray_jobs) > 0:
             # collect results and store encoded snp
@@ -659,10 +800,11 @@ class K1_Evolver(EA):
             encoded_snp, snp_name = ray.get(finished)[0]
             snp_perf[snp_name][snp_t('encoded_x')] = encoded_snp
             count += 1
-        # timing print
-        print(f"Encoding {count} unseen branches took {(time.time() - start_time) / 60} mins", flush=True)
+        encoding_exec_time = time.time() - encoding_exec_start
+        print(f"  - Encoding {count} unseen branches: {encoding_exec_time:.4f}s ({encoding_exec_time/60:.2f} mins)", flush=True)
 
         # update the hub with best r2 and encoded snp ray id (if r2 >= threshold)
+        hub_update_start = time.time()
         for snp_name in unseen_branches:
             enc_id = None
             # set enc_id to those snps with r2 / k >= threshold
@@ -687,6 +829,12 @@ class K1_Evolver(EA):
                                           gen_seen=gen_seen,
                                           snp_explainability_threshold=self.branch_explainability_threshold,
                                           pager_lut=pager_lut)
+        hub_update_time = time.time() - hub_update_start
+        print(f"  - Hub updates for unseen branches: {hub_update_time:.4f}s", flush=True)
+        
+        total_unseen_time = time.time() - unseen_eval_start
+        print(f"[Timing] Total unseen branch evaluation: {total_unseen_time:.4f}s ({total_unseen_time/60:.2f} mins)", flush=True)
+        print(f"  Summary: JobCreate={ray_job_time:.2f}s, R2Calc={r2_calc_time:.2f}s, EncoderSelect={encoding_prep_time:.2f}s, EncodeJobs={encoding_job_time:.2f}s, EncodeExec={encoding_exec_time:.2f}s, HubUpdate={hub_update_time:.2f}s\\n", flush=True)
 
     def get_sampling(self, cnt:uint16_t, chrom_num:uint16_t) -> npt.NDArray[uint16_t]:
         """
