@@ -61,6 +61,13 @@ class K1_Reproduction(Reproduction):
                          m_out_win_p=m_out_win_p,
                          m_out_chr_p=m_out_chr_p,
                          window_distance=window_distance)
+        
+        # precompute probability arrays for performance
+        total_m = m_in_win_p + m_out_win_p + m_out_chr_p
+        self._mutation_type_probs = np.array([m_in_win_p / total_m, m_out_win_p / total_m, m_out_chr_p / total_m])
+        total_ran_smt = mut_ran_p + mut_smt_p
+        self._ran_threshold = mut_ran_p / total_ran_smt  # for binary choice optimization
+        
         return
 
     def generate_random_pipeline(self, rng: rng_t, branches: Set, seed: int) -> Pipeline:
@@ -125,11 +132,11 @@ class K1_Reproduction(Reproduction):
         # generate offspring with mutated parent branches and pass through selector and ld nodes from parent
         offspring = Pipeline(branch_set=parent_branches, ld_node=cp.deepcopy(parent.ld_node), selector_node=cp.deepcopy(parent.selector_node))
 
-        # roll to mutate the ld node
-        if rng.choice([True, False], p=[self.mut_ld_p, 1.0 - self.mut_ld_p]):
+        # roll to mutate the ld node (use faster binary random)
+        if rng.random() < self.mut_ld_p:
             offspring.mutate_ld_node(rng)
         # roll to mutate the selector node
-        if rng.choice([True, False], p=[self.mut_selector_p, 1.0 - self.mut_selector_p]):
+        if rng.random() < self.mut_selector_p:
             offspring.mutate_selector_node(rng)
 
         return offspring
@@ -169,11 +176,11 @@ class K1_Reproduction(Reproduction):
         # generate new offspring with mutated branches and pass through selector and ld nodes from original offspring
         offspring = Pipeline(branch_set=offspring_new_branches, ld_node=cp.deepcopy(offspring.ld_node), selector_node=cp.deepcopy(offspring.selector_node))
 
-        # roll to mutate the ld node
-        if rng.choice([True, False], p=[self.mut_ld_p, 1.0 - self.mut_ld_p]):
+        # roll to mutate the ld node (use faster binary random)
+        if rng.random() < self.mut_ld_p:
             offspring.mutate_ld_node(rng)
         # roll to mutate the selector node
-        if rng.choice([True, False], p=[self.mut_selector_p, 1.0 - self.mut_selector_p]):
+        if rng.random() < self.mut_selector_p:
             offspring.mutate_selector_node(rng)
 
         return offspring
@@ -195,12 +202,10 @@ class K1_Reproduction(Reproduction):
         assert hub.get_active_flag(branch), "Anchor branch must be active in the hub to mutate"
         assert '.' in branch, "Anchor branch SNP must be in the format 'chrom.pos'"
 
-        # randomly choose a anchor mutation type
-        mutation_type = rng.choice(['in_window', 'out_window', 'out_chrom'], p = [self.m_in_win_p / (self.m_in_win_p + self.m_out_win_p + self.m_out_chr_p),
-                                                                                self.m_out_win_p / (self.m_in_win_p + self.m_out_win_p + self.m_out_chr_p),
-                                                                                self.m_out_chr_p / (self.m_in_win_p + self.m_out_win_p + self.m_out_chr_p)])
-        # smart or random mutation roll
-        ran_roll = rng.choice([True, False], p=[self.mut_ran_p / (self.mut_ran_p + self.mut_smt_p), self.mut_smt_p / (self.mut_ran_p + self.mut_smt_p)])
+        # randomly choose a anchor mutation type (use precomputed probabilities)
+        mutation_type = rng.choice(['in_window', 'out_window', 'out_chrom'], p=self._mutation_type_probs)
+        # smart or random mutation roll (use direct comparison for binary choice)
+        ran_roll = rng.random() < self._ran_threshold
 
         # Start timing
         import time
@@ -260,19 +265,21 @@ class K1_Reproduction(Reproduction):
         # if combined branches less than num_branches, just use all combined branches
         if len(combined_branches) <= num_branches:
             return Pipeline(branch_set=combined_branches,
-                            ld_node=cp.deepcopy(parent1.ld_node if rng.choice([True, False]) else parent2.ld_node),
-                            selector_node=cp.deepcopy(parent1.selector_node if rng.choice([True, False]) else parent2.selector_node))
+                            ld_node=cp.deepcopy(parent1.ld_node if rng.random() < 0.5 else parent2.ld_node),
+                            selector_node=cp.deepcopy(parent1.selector_node if rng.random() < 0.5 else parent2.selector_node))
 
-        # smart or random crossover roll
-        ran_roll = rng.choice([True, False], p=[self.mut_ran_p / (self.mut_ran_p + self.mut_smt_p),
-                                                       self.mut_smt_p / (self.mut_ran_p + self.mut_smt_p)])
+        # convert to list once (cached for both random and smart crossover)
+        combined_list = list(combined_branches)
+        
+        # smart or random crossover roll (use precomputed threshold)
+        ran_roll = rng.random() < self._ran_threshold
 
         if ran_roll: # random crossover
-            return Pipeline(branch_set=set(rng.choice(list(combined_branches), size=num_branches, replace=False)),
-                            ld_node=cp.deepcopy(parent1.ld_node if rng.choice([True, False]) else parent2.ld_node),
-                            selector_node=cp.deepcopy(parent1.selector_node if rng.choice([True, False]) else parent2.selector_node))
+            return Pipeline(branch_set=set(rng.choice(combined_list, size=num_branches, replace=False)),
+                            ld_node=cp.deepcopy(parent1.ld_node if rng.random() < 0.5 else parent2.ld_node),
+                            selector_node=cp.deepcopy(parent1.selector_node if rng.random() < 0.5 else parent2.selector_node))
         else: # smart crossover
-            r2 = np.array([hub.get_r2(branch) for branch in combined_branches])
-            return Pipeline(branch_set=set(rng.choice(list(combined_branches), size=num_branches, replace=False, p=r2 / np.sum(r2))),
-                            ld_node=cp.deepcopy(parent1.ld_node if rng.choice([True, False]) else parent2.ld_node),
-                            selector_node=cp.deepcopy(parent1.selector_node if rng.choice([True, False]) else parent2.selector_node))
+            r2 = np.array([hub.get_r2(branch) for branch in combined_list])
+            return Pipeline(branch_set=set(rng.choice(combined_list, size=num_branches, replace=False, p=r2 / np.sum(r2))),
+                            ld_node=cp.deepcopy(parent1.ld_node if rng.random() < 0.5 else parent2.ld_node),
+                            selector_node=cp.deepcopy(parent1.selector_node if rng.random() < 0.5 else parent2.selector_node))

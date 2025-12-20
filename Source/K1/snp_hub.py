@@ -71,44 +71,50 @@ class K1_Hub(Hub):
         def get_random_nearest_neighbor(self, chrom: int32_t, position: int32_t, rng: rng_t) -> snp_t:
             """
             Get a random nearest neighbor SNP position in the given chromosome.
-            Should use rng to pick between left and right if both exist.
+            Assumes position always exists in the list.
 
             Args:
                 chrom (int32_t): chromosome number to get the nearest neighbor from.
-                position (int32_t): position to find the nearest neighbor for.
+                position (int32_t): position to find the nearest neighbor for (must exist in list).
+                rng (rng_t): Random number generator.
 
             Returns:
-                int32_t: Nearest neighbor SNP position in the given chromosome.
+                snp_t: Nearest neighbor SNP position in the given chromosome.
             """
 
-            # make sure the chromosome exists
-            assert chrom in self.hub
-
-            # choices
-            choices = []
-
-            # get anchor poisition in hub
-            anchor_pos = self.hub[chrom].bisect_left(position)
-
-            # get left neighhbor if possible
-            left_pos = None
-            if anchor_pos - 1 >= 0:
-                left_pos = self.hub[chrom][anchor_pos - 1]
-                choices.append(left_pos)
-                assert left_pos != position, "Left position is the same as anchor position."
-
-            # get right neighbor if possible
-            right_pos = None
-            if anchor_pos + 1 < len(self.hub[chrom]):
-                right_pos = self.hub[chrom][anchor_pos + 1]
-                choices.append(right_pos)
-                assert right_pos != position, "Right position is the same as anchor position."
-
-            assert left_pos is not None or right_pos is not None, f"No SNPs available in the Considered Hub for the given chromosome {len(self.hub[chrom])}."
-            assert left_pos != right_pos, "Left and right positions are the same, cannot select a random neighbor."
-
-            # randomly pick one of the choices
-            return snp_t(f'{chrom}.{rng.choice(choices)}')
+            # safety checks
+            assert chrom in self.hub, f"Chromosome {chrom} not found in hub"
+            
+            # get the sorted list for this chromosome
+            pos_list = self.hub[chrom]
+            n = len(pos_list)
+            
+            # position always exists, so bisect_left gives us its exact index
+            idx = pos_list.bisect_left(position)
+            
+            # verify position exists at this index
+            assert idx < n and pos_list[idx] == position, f"Position {position} not found in chromosome {chrom}"
+            
+            # determine valid neighbors
+            left_idx = idx - 1
+            right_idx = idx + 1
+            
+            # ensure at least one neighbor exists
+            assert left_idx >= 0 or right_idx < n, f"No neighbors available for position {position} in chromosome {chrom}"
+            
+            # choose based on which neighbors exist
+            if left_idx >= 0 and right_idx < n:
+                # both neighbors exist - randomly choose one
+                chosen_idx = left_idx if rng.random() < 0.5 else right_idx
+            elif left_idx >= 0:
+                # only left neighbor exists
+                chosen_idx = left_idx
+            else:
+                # only right neighbor exists
+                chosen_idx = right_idx
+            
+            # return the chosen neighbor
+            return snp_t(f'{chrom}.{pos_list[chosen_idx]}')
 
         def get_random_snp_in_chromosome(self, chrom: int32_t, position: int32_t, rng: rng_t) -> snp_t:
             """
@@ -116,24 +122,34 @@ class K1_Hub(Hub):
             Make sure that the SNP returned is not the same as the input position.
 
             Args:
-                chrom (int32_t): _description_
-                position (int32_t): _description_
-                rng (rng_t): _description_
+                chrom (int32_t): Chromosome number
+                position (int32_t): Position to avoid
+                rng (rng_t): Random number generator
 
             Returns:
-                snp_t: _description_
+                snp_t: A random SNP from the chromosome (different from input position if possible)
             """
 
             # make sure the chromosome exists
             assert chrom in self.hub
-
-            for _ in range(self.mutation_tries):
-                pos = rng.choice(self.hub[chrom])
-                if pos != position:
-                    return snp_t(f'{chrom}.{pos}')
-
-            # if we exhaust all tries, return the input position
-            return snp_t(f'{chrom}.{position}')
+            
+            pos_list = self.hub[chrom]
+            n = len(pos_list)
+            
+            # if only one position, return it
+            if n == 1:
+                return snp_t(f'{chrom}.{pos_list[0]}')
+            
+            # get random index, if it matches position, try adjacent index
+            idx = rng.integers(0, n)
+            pos = pos_list[idx]
+            
+            if pos != position:
+                return snp_t(f'{chrom}.{pos}')
+            
+            # position matched, use next index (wrap around if needed)
+            idx = (idx + 1) % n
+            return snp_t(f'{chrom}.{pos_list[idx]}')
 
         def get_ran_snp_out_chrm(self, chrom: int32_t, rng: rng_t) -> snp_t:
             """
@@ -147,9 +163,9 @@ class K1_Hub(Hub):
                 snp_t: A random SNP from a different chromosome.
             """
 
-            # get all chromosomes with at least one snp and not the input chromosome
-            chroms = self.get_keys_with_snps()
-            chroms.remove(chrom)
+            # get all chromosomes with at least one snp, excluding input chromosome
+            # use list comprehension for efficiency
+            chroms = [k for k, v in self.hub.items() if len(v) > 0 and k != chrom]
             assert len(chroms) > 0, "No SNPs available in the Considered Hub from different chromosomes."
 
             # get random chromosome
@@ -158,6 +174,75 @@ class K1_Hub(Hub):
             # return a random position from the chromosome
             return snp_t(f"{c}.{rng.choice(self.hub[c])}")
 
+        def get_positions_in_window(self, chrom: int32_t, window_distance: int32_t, position: int32_t) -> List[int32_t]:
+            """
+            Get all SNP positions within the window distance of the given position (excluding the position itself).
+
+            Args:
+                chrom (int32_t): Chromosome number.
+                window_distance (int32_t): Window distance in base pairs.
+                position (int32_t): Center position to find neighbors around.
+
+            Returns:
+                List[int32_t]: List of positions within the window (excluding position itself).
+            """
+            assert chrom in self.hub, f"Chromosome {chrom} not found in hub"
+            
+            pos_list = self.hub[chrom]
+            result = []
+            
+            # Calculate window bounds
+            min_pos = position - window_distance
+            max_pos = position + window_distance
+            
+            # Use binary search to find the start and end indices
+            start_idx = pos_list.bisect_left(min_pos)
+            end_idx = pos_list.bisect_right(max_pos)
+            
+            # Collect all positions in range, excluding the position itself
+            for i in range(start_idx, end_idx):
+                pos = pos_list[i]
+                if pos != position:
+                    result.append(pos)
+            
+            return result
+
+        def get_positions_out_of_window(self, chrom: int32_t, window_distance: int32_t, position: int32_t) -> List[int32_t]:
+            """
+            Get all SNP positions in the same chromosome but outside the window distance (excluding the position itself).
+
+            Args:
+                chrom (int32_t): Chromosome number.
+                window_distance (int32_t): Window distance in base pairs.
+                position (int32_t): Center position to exclude neighbors from.
+
+            Returns:
+                List[int32_t]: List of positions outside the window (excluding position itself).
+            """
+            assert chrom in self.hub, f"Chromosome {chrom} not found in hub"
+            
+            pos_list = self.hub[chrom]
+            result = []
+            
+            # Calculate window bounds
+            min_pos = position - window_distance
+            max_pos = position + window_distance
+            
+            # Get positions before the window
+            start_idx = pos_list.bisect_left(min_pos)
+            for i in range(start_idx):
+                pos = pos_list[i]
+                if pos != position:  # extra safety check
+                    result.append(pos)
+            
+            # Get positions after the window
+            end_idx = pos_list.bisect_right(max_pos)
+            for i in range(end_idx, len(pos_list)):
+                pos = pos_list[i]
+                if pos != position:  # extra safety check
+                    result.append(pos)
+            
+            return result
 
         def get_positions_in_chromosome(self, chrom: int32_t) -> List[int32_t]:
             """
@@ -211,11 +296,8 @@ class K1_Hub(Hub):
                 snp_t: A random SNP that is not the anchor SNP.
             """
 
-            # get all chromosomes with at least one snp
-            chrom = []
-            for chrm in list(self.hub.keys()):
-                if len(self.hub[chrm]) > 0:
-                    chrom.append(chrm)
+            # get all chromosomes with at least one snp (use list comprehension)
+            chrom = [k for k, v in self.hub.items() if len(v) > 0]
             assert len(chrom) > 0, "No SNPs available in the Considered Hub."
 
             # try to get a random snp that is not the anchor snp
@@ -1229,11 +1311,7 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         Returns:
             Set[snp_t]: A set of unseen univariate snps
         """
-        unseen_univariates = set()
-        for snp_name in snps:
-            if self.db.get_seen_flag(snp_name) == False:
-                unseen_univariates.add(snp_name)
-        return unseen_univariates
+        return {snp_name for snp_name in snps if not self.db.get_seen_flag(snp_name)}
 
     def remove_inactive_branches(self, branches: Set) -> Set:
         """
