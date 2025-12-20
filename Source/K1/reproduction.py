@@ -209,12 +209,12 @@ class K1_Reproduction(Reproduction):
         # perform mutation based on type
         if mutation_type == 'in_window':
             if ran_roll:
-                result = hub.get_ran_snp_in_window(branch, rng, hub.get_in_window_positions(branch, self.window_distance))
+                result = hub.get_ran_snp_in_window(branch, rng)
             else:
                 result = hub.get_smt_snp_in_window(branch, rng, hub.get_in_window_positions(branch, self.window_distance))
         elif mutation_type == 'out_window':
             if ran_roll:
-                result = hub.get_ran_snp_in_chrm(branch, rng, hub.get_out_of_window_positions(branch, self.window_distance))
+                result = hub.get_ran_snp_in_chrm(branch, rng)
             else:
                 result = hub.get_smt_snp_in_chrm(branch, rng, hub.get_out_of_window_positions(branch, self.window_distance))
         else: # out_chrom
