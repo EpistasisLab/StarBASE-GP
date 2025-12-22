@@ -163,6 +163,12 @@ class Reproduction(ABC):
                     print(f"{mutation_type}: {avg_time*1000:.4f} ms (n={len(times)})")
             print("==================================\n", flush=True)
 
+        # set the mutation timings back to empty lists
+        self.mutation_timings = {key: [] for key in self.mutation_timings}
+
+        # clear out nearest neighbor cache in hub if applicable
+        hub.consider.clear_nearest_neighbor()
+
         # return the offspring
         return offspring
 

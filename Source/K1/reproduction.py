@@ -26,6 +26,9 @@ from typeguard import typechecked
 from typing import Set
 import numpy as np
 import copy as cp
+# Start timing
+import time
+
 
 @typechecked
 class K1_Reproduction(Reproduction):
@@ -62,11 +65,12 @@ class K1_Reproduction(Reproduction):
                          m_out_chr_p=m_out_chr_p,
                          window_distance=window_distance)
         
-        # precompute probability arrays for performance
-        total_m = m_in_win_p + m_out_win_p + m_out_chr_p
-        self._mutation_type_probs = np.array([m_in_win_p / total_m, m_out_win_p / total_m, m_out_chr_p / total_m])
-        total_ran_smt = mut_ran_p + mut_smt_p
-        self._ran_threshold = mut_ran_p / total_ran_smt  # for binary choice optimization
+        # # precompute probability arrays for performance
+        # total_m = m_in_win_p + m_out_win_p + m_out_chr_p
+        # self._mutation_type_probs = np.array([m_in_win_p / total_m, m_out_win_p / total_m, m_out_chr_p / total_m])
+        # total_ran_smt = mut_ran_p + mut_smt_p
+        # self._ran_threshold = mut_ran_p / total_ran_smt  # for binary choice optimization
+    
         
         return
 
@@ -202,32 +206,18 @@ class K1_Reproduction(Reproduction):
         assert hub.get_active_flag(branch), "Anchor branch must be active in the hub to mutate"
         assert '.' in branch, "Anchor branch SNP must be in the format 'chrom.pos'"
 
-        # randomly choose a anchor mutation type (use precomputed probabilities)
-        mutation_type = rng.choice(['in_window', 'out_window', 'out_chrom'], p=self._mutation_type_probs)
-        # smart or random mutation roll (use direct comparison for binary choice)
-        ran_roll = rng.random() < self._ran_threshold
-
-        # Start timing
-        import time
         start_time = time.time()
-
         # perform mutation based on type
-        if mutation_type == 'in_window':
-            if ran_roll:
-                result = hub.get_ran_snp_in_window(branch, rng)
-            else:
-                result = hub.get_smt_snp_in_window(branch, rng, hub.get_in_window_positions(branch, self.window_distance))
-        elif mutation_type == 'out_window':
-            if ran_roll:
-                result = hub.get_ran_snp_in_chrm(branch, rng)
-            else:
-                result = hub.get_smt_snp_in_chrm(branch, rng, hub.get_out_of_window_positions(branch, self.window_distance))
+        if rng.random() < self.m_in_win_p:
+            result = hub.get_ran_snp_in_window(branch, rng)
+            mutation_type = 'in_window'
+        elif rng.random() < self.m_out_win_p:
+            result = hub.get_ran_snp_in_chrm(branch, rng)
+            mutation_type = 'out_window'
         else: # out_chrom
-            if ran_roll:
-                result = hub.get_ran_snp_out_chrm(branch, rng)
-            else:
-                result = hub.get_smt_snp_out_chrm(branch, rng)
-
+            result = hub.get_ran_snp_out_chrm(branch, rng)
+            mutation_type = 'out_chrom'
+           
         # Record timing
         elapsed_time = time.time() - start_time
         self.mutation_timings[mutation_type].append(elapsed_time)
@@ -271,15 +261,7 @@ class K1_Reproduction(Reproduction):
         # convert to list once (cached for both random and smart crossover)
         combined_list = list(combined_branches)
         
-        # smart or random crossover roll (use precomputed threshold)
-        ran_roll = rng.random() < self._ran_threshold
 
-        if ran_roll: # random crossover
-            return Pipeline(branch_set=set(rng.choice(combined_list, size=num_branches, replace=False)),
-                            ld_node=cp.deepcopy(parent1.ld_node if rng.random() < 0.5 else parent2.ld_node),
-                            selector_node=cp.deepcopy(parent1.selector_node if rng.random() < 0.5 else parent2.selector_node))
-        else: # smart crossover
-            r2 = np.array([hub.get_r2(branch) for branch in combined_list])
-            return Pipeline(branch_set=set(rng.choice(combined_list, size=num_branches, replace=False, p=r2 / np.sum(r2))),
+        return Pipeline(branch_set=set(rng.choice(combined_list, size=num_branches, replace=False)),
                             ld_node=cp.deepcopy(parent1.ld_node if rng.random() < 0.5 else parent2.ld_node),
                             selector_node=cp.deepcopy(parent1.selector_node if rng.random() < 0.5 else parent2.selector_node))

@@ -343,9 +343,9 @@ class K1_Evolver(EA):
         # break up unseen_branches into chunks of 2000 to avoid ray overload and then run evaluate_unseen_branches on each chunk
         eval_unseen_start = time.time()
         unseen_branches_list = list(unseen_branches)
-        for i in range(0, len(unseen_branches_list), 2000):
-            print(f"Evaluating unseen branches chunk {i // 2000 + 1} / {(len(unseen_branches_list) - 1) // 2000 + 1}", flush=True)
-            chunk = set(unseen_branches_list[i:i+2000])
+        for i in range(0, len(unseen_branches_list), 1000):
+            print(f"Evaluating unseen branches chunk {i // 1000 + 1} / {(len(unseen_branches_list) - 1) // 1000 + 1}", flush=True)
+            chunk = set(unseen_branches_list[i:i+1000])
             self.evaluate_unseen_branches(chunk, gen_seen=int16_t(0))
         eval_unseen_time = time.time() - eval_unseen_start
 
@@ -585,9 +585,9 @@ class K1_Evolver(EA):
         if len(unseen_snps) > 0:
             # break up unseen_branches into chunks of 2000 to avoid ray overload and then run evaluate_unseen_branches on each chunk
             unseen_branches_list = list(unseen_snps)
-            for i in range(0, len(unseen_branches_list), 2000):
-                print(f"Evaluating unseen branches chunk {i // 2000 + 1} / {(len(unseen_branches_list) - 1) // 2000 + 1}", flush=True)
-                chunk = set(unseen_branches_list[i:i+2000])
+            for i in range(0, len(unseen_branches_list), 1000):
+                print(f"Evaluating unseen branches chunk {i // 1000 + 1} / {(len(unseen_branches_list) - 1) // 1000 + 1}", flush=True)
+                chunk = set(unseen_branches_list[i:i+1000])
                 self.evaluate_unseen_branches(chunk, gen_seen=int16_t(gen_info))
 
         # offspring pipelines with no good snps
