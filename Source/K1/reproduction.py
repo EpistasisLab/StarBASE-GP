@@ -207,11 +207,12 @@ class K1_Reproduction(Reproduction):
         assert '.' in branch, "Anchor branch SNP must be in the format 'chrom.pos'"
 
         start_time = time.time()
+        r = rng.random()
         # perform mutation based on type
-        if rng.random() < self.m_in_win_p:
+        if r < self.m_in_win_p:
             result = hub.get_ran_snp_in_window(branch, rng)
             mutation_type = 'in_window'
-        elif rng.random() < self.m_out_win_p + self.m_in_win_p:
+        elif r < self.m_out_win_p + self.m_in_win_p:
             result = hub.get_ran_snp_in_chrm(branch, rng)
             mutation_type = 'out_window'
         else: # out_chrom
