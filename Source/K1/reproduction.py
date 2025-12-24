@@ -211,7 +211,7 @@ class K1_Reproduction(Reproduction):
         if rng.random() < self.m_in_win_p:
             result = hub.get_ran_snp_in_window(branch, rng)
             mutation_type = 'in_window'
-        elif rng.random() < self.m_out_win_p:
+        elif rng.random() < self.m_out_win_p + self.m_in_win_p:
             result = hub.get_ran_snp_in_chrm(branch, rng)
             mutation_type = 'out_window'
         else: # out_chrom
