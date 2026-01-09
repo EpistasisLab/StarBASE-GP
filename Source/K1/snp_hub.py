@@ -83,6 +83,10 @@ class K1_Hub(Hub):
                 neighbor = self.calculate_nearest_neighbor(chrom, snp_chrm_pos(snp)[1])
                 self.nearest_neighbor_dict[snp] = neighbor
 
+            # if no neighbors, get random snp from different chromosome
+            if len(self.nearest_neighbor_dict[snp]) == 0:
+                return self.get_ran_snp_out_chrm(chrom, rng)
+
             return rng.choice(self.nearest_neighbor_dict[snp])
 
         def calculate_nearest_neighbor(self, chrom: int32_t, position: int32_t) -> snp_t:
@@ -117,9 +121,6 @@ class K1_Hub(Hub):
             right_idx = idx + 1
 
             neighbor_list = []
-            
-            # ensure at least one neighbor exists
-            assert left_idx >= 0 or right_idx < n, f"No neighbors available for position {position} in chromosome {chrom}"
             
             # choose based on which neighbors exist
             if left_idx >= 0 and right_idx < n:

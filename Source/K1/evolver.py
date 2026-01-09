@@ -230,7 +230,9 @@ class K1_Evolver(EA):
             # evaluate the offspring
             print('Evaluating offspring pipelines...', flush=True)
             eval_start = time.time()
-            offspring, eval_stats = self.evaluation(offspring, int16_t(g))
+
+            offspring, eval_stats = self.evaluation(offspring, gen_info=int16_t(g))
+
             eval_time = time.time() - eval_start
             print(f"[Timing] Offspring evaluation (LD+FS+R2): {eval_time:.4f}s", flush=True)
 
@@ -368,7 +370,7 @@ class K1_Evolver(EA):
 
         # evaluate the initial population
         print('Evaluating initial population pipelines...', flush=True)
-        eval_pop_start = time.time()
+        eval_pop_start = time.time()    
         self.population, _ = self.evaluation(self.population, gen_info=int16_t(0))
         eval_pop_time = time.time() - eval_pop_start
         assert 1 <= len(self.population) <= self.pop_size, "Population size contained no valid pipelines after pipeline evaluation."
@@ -386,18 +388,12 @@ class K1_Evolver(EA):
         print(f"  - Filtering:      {filter_time:6.2f}s ({pct_filter:5.1f}%)", flush=True)
         print(f"  - Eval population:{eval_pop_time:6.2f}s ({pct_eval_pop:5.1f}%)\n", flush=True)
         return
-        
-        print(f"\n[Timing] Population initialization: {total_pop_init:.2f}s ({total_pop_init/60:.2f} mins)", flush=True)
-        print(f"  - Sampling:       {sampling_time:6.2f}s ({pct_sampling:5.1f}%)", flush=True)
-        print(f"  - Eval unseen:    {eval_unseen_time:6.2f}s ({pct_eval_unseen:5.1f}%)", flush=True)
-        print(f"  - Filtering:      {filter_time:6.2f}s ({pct_filter:5.1f}%)", flush=True)
-        print(f"  - Eval population:{eval_pop_time:6.2f}s ({pct_eval_pop:5.1f}%)\n", flush=True)
-        return
 
     def evaluation(self, pipelines: List[Pipeline], gen_info: int16_t) -> Tuple[List[Pipeline], Dict]:
         """
         Function to evaluate pipelines.
         All of this should be done in asyncronous parallel jobs for maximum efficiency.
+        Processes pipelines in batches of 1000 to avoid ray overload.
 
         Parameters:
         pipelines: List[Pipeline]
@@ -419,100 +415,121 @@ class K1_Evolver(EA):
         
         # keep a count of number of pipelines that are calling only fs vs ld+fs
         fs_only_count = 0
-
-        # create ray jobs for each pipeline evaluation depending on if ld is needed or not
-        job_creation_start = time.time()
-        ray_jobs = []
+        
+        # Global data structures to accumulate results across batches
         pipeline_evaluation_details = {}
-        for i, pipeline in enumerate(pipelines):
-            pipeline_evaluation_details[i] = {snp_t('r2'): float32_t(0.0), snp_t('feature_cnt'): None, snp_t('features'): None,
-                                              snp_t('ld_used'): False, snp_t('error'): False, snp_t('count'): uint16_t(0)}
-            # Check if LD pruning should be applied:
-            # 1. ld_flag must be True
-            # 2. Pipeline must contain SNPs from the same chromosome
-            if self.ld_flag and self.snps_on_the_same_chromosome(pipeline.branch_set):
-                ray_jobs.append(ray_utils.ray_eval_pipeline_ld_fs.remote(snp_names=[snp for snp in pipeline.get_branch_set()],
-                                                                         x_train_ori=[self.hub.get_ori_ray_id(snp) for snp in pipeline.get_branch_set()],
+        pruned_snps = set()
+        snp_details_per_snp = {}
+        
+        # Batch size for processing
+        batch_size = 1000
+        num_batches = (len(pipelines) - 1) // batch_size + 1
+        
+        # Timing accumulators
+        total_job_creation_time = 0.0
+        total_ld_fs_time = 0.0
+        total_r2_job_time = 0.0
+        total_r2_eval_time = 0.0
+        
+        # Process pipelines in batches
+        for batch_idx in range(num_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = min(start_idx + batch_size, len(pipelines))
+            batch = pipelines[start_idx:end_idx]
+            
+            print(f"  Processing batch {batch_idx + 1}/{num_batches} (pipelines {start_idx} to {end_idx - 1})...", flush=True)
+            
+            # create ray jobs for each pipeline evaluation depending on if ld is needed or not
+            job_creation_start = time.time()
+            ray_jobs = []
+            for i, pipeline in enumerate(batch):
+                global_id = start_idx + i
+                pipeline_evaluation_details[global_id] = {snp_t('r2'): float32_t(0.0), snp_t('feature_cnt'): None, snp_t('features'): None,
+                                                          snp_t('ld_used'): False, snp_t('error'): False, snp_t('count'): uint16_t(0)}
+                # Check if LD pruning should be applied:
+                # 1. ld_flag must be True
+                # 2. Pipeline must contain SNPs from the same chromosome
+                if self.ld_flag and self.snps_on_the_same_chromosome(pipeline.branch_set):
+                    ray_jobs.append(ray_utils.ray_eval_pipeline_ld_fs.remote(snp_names=[snp for snp in pipeline.get_branch_set()],
+                                                                             x_train_ori=[self.hub.get_ori_ray_id(snp) for snp in pipeline.get_branch_set()],
+                                                                             x_train_enc=[self.hub.get_enc_ray_id(snp) for snp in pipeline.get_branch_set()],
+                                                                             y_train=self.all_y_ray_id,
+                                                                             train_idx=self.train_idx_ray,
+                                                                             selector_node=pipeline.get_selector_node(),
+                                                                             ld_node=pipeline.get_ld_node(),
+                                                                             pop_id=uint32_t(global_id),
+                                                                             snp_r2_set=self.hub.generate_r2_dict(pipeline.get_branch_set())))
+                    pipeline_evaluation_details[global_id][snp_t('ld_used')] = True
+                # else, no need for ld pruner (either ld_flag is False or SNPs are not on same chromosome)
+                else:
+                    ray_jobs.append(ray_utils.ray_eval_pipeline_fs.remote(snp_names=[snp for snp in pipeline.get_branch_set()],
                                                                          x_train_enc=[self.hub.get_enc_ray_id(snp) for snp in pipeline.get_branch_set()],
                                                                          y_train=self.all_y_ray_id,
                                                                          train_idx=self.train_idx_ray,
                                                                          selector_node=pipeline.get_selector_node(),
-                                                                         ld_node=pipeline.get_ld_node(),
-                                                                         pop_id=uint32_t(i),
-                                                                         snp_r2_set=self.hub.generate_r2_dict(pipeline.get_branch_set())))
-                pipeline_evaluation_details[i][snp_t('ld_used')] = True
-            # else, no need for ld pruner (either ld_flag is False or SNPs are not on same chromosome)
-            else:
-                ray_jobs.append(ray_utils.ray_eval_pipeline_fs.remote(snp_names=[snp for snp in pipeline.get_branch_set()],
-                                                                     x_train_enc=[self.hub.get_enc_ray_id(snp) for snp in pipeline.get_branch_set()],
-                                                                     y_train=self.all_y_ray_id,
-                                                                     train_idx=self.train_idx_ray,
-                                                                     selector_node=pipeline.get_selector_node(),
-                                                                     pop_id=uint32_t(i)))
-                fs_only_count += 1
-        job_creation_time = time.time() - job_creation_start
-        print(f"  - Ray job creation for LD/FS: {job_creation_time:.4f}s ({len(ray_jobs)} jobs)", flush=True)
-        
-        # keep track of LD prunned snps
-        pruned_snps = set()
-        # will hold the snp details after LD for each pipeline
-        snp_details_per_snp = {}
-        # process results as they come in
-        ld_fs_start = time.time()
-        while len(ray_jobs) > 0:
-            finished, ray_jobs = ray.wait(ray_jobs)
-            error, feature_cnt, pop_id, features, ld_details = ray.get(finished[0])
-            assert feature_cnt == len(features), "Feature count does not match number of features returned."
+                                                                         pop_id=uint32_t(global_id)))
+                    fs_only_count += 1
+            job_creation_time = time.time() - job_creation_start
+            total_job_creation_time += job_creation_time
+            
+            # process LD/FS results as they come in
+            ld_fs_start = time.time()
+            while len(ray_jobs) > 0:
+                finished, ray_jobs = ray.wait(ray_jobs)
+                error, feature_cnt, pop_id, features, ld_details = ray.get(finished[0])
+                assert feature_cnt == len(features), "Feature count does not match number of features returned."
 
-            # update pipeline evaluation details
-            if error < float32_t(0.0):
-                pipeline_evaluation_details[pop_id][snp_t('error')] = True
-            pipeline_evaluation_details[pop_id][snp_t('feature_cnt')] = feature_cnt
-            pipeline_evaluation_details[pop_id][snp_t('features')] = features
+                # update pipeline evaluation details
+                if error < float32_t(0.0):
+                    pipeline_evaluation_details[pop_id][snp_t('error')] = True
+                pipeline_evaluation_details[pop_id][snp_t('feature_cnt')] = feature_cnt
+                pipeline_evaluation_details[pop_id][snp_t('features')] = features
 
-            # Track if this was an LD job (has ld_details)
-            if ld_details is not None and len(ld_details) > 0:
-                # update the pruned snps based on the snp details after LD
-                for snp, details in ld_details.items():
-                    if details['pruned'] == True:
-                        pruned_snps.add(snp)
-                        snp_details_per_snp[snp] = details
+                # Track if this was an LD job (has ld_details)
+                if ld_details is not None and len(ld_details) > 0:
+                    # update the pruned snps based on the snp details after LD
+                    for snp, details in ld_details.items():
+                        if details['pruned'] == True:
+                            pruned_snps.add(snp)
+                            snp_details_per_snp[snp] = details
+
+            ld_fs_time = time.time() - ld_fs_start
+            total_ld_fs_time += ld_fs_time
+
+            # send pipelines with no error to be evaluated for r2 across k-folds (only pipelines with error == False)
+            r2_job_start = time.time()
+            ray_jobs = []
+            for i in range(start_idx, end_idx):
+                if pipeline_evaluation_details[i][snp_t('error')]:
+                    continue
+
+                # create a ray job for each of the folds
+                for _, fold_data in self.train_fold_dict_ray.items():
+                    ray_jobs.append(ray_utils.ray_eval_pipeline_r2.remote(X = [self.hub.get_enc_ray_id(snp) for snp in pipeline_evaluation_details[i][snp_t('features')]],
+                                                                          y = self.all_y_ray_id,
+                                                                          train_idx = fold_data['train_idx'],
+                                                                          valid_idx = fold_data['val_idx'],
+                                                                          pop_id = uint32_t(i)))
+            r2_job_time = time.time() - r2_job_start
+            total_r2_job_time += r2_job_time
+            
+            # process R2 results as they come in
+            r2_eval_start = time.time()
+            while len(ray_jobs) > 0:
+                finished, ray_jobs = ray.wait(ray_jobs)
+                r2, pop_id, error = ray.get(finished[0])
+                if error < float32_t(0.0):
+                    pipeline_evaluation_details[pop_id][snp_t('error')] = True
+
+                # update r2 and count
+                pipeline_evaluation_details[pop_id][snp_t('r2')] += r2
+                pipeline_evaluation_details[pop_id][snp_t('count')] += uint32_t(1)
+            r2_eval_time = time.time() - r2_eval_start
+            total_r2_eval_time += r2_eval_time
 
         # if self.ld_flag is False, pruned_snps should be empty
         assert (len(pruned_snps) == 0) if self.ld_flag == False else True, "Pruned SNPs should be empty when LD flag is False."
-        ld_fs_time = time.time() - ld_fs_start
-        print(f"  - LD/FS processing: {ld_fs_time:.4f}s ({ld_fs_time/60:.2f} mins), pruned {len(pruned_snps)} SNPs", flush=True)
-
-        # send pipelines with no error to be evaluated for r2 across k-folds (only pipelines with error == False)
-        r2_job_start = time.time()
-        ray_jobs = []
-        for pipeline_id in pipeline_evaluation_details:
-            if pipeline_evaluation_details[pipeline_id][snp_t('error')]:
-                continue
-
-            # create a ray job for each of the folds
-            for _, fold_data in self.train_fold_dict_ray.items():
-                ray_jobs.append(ray_utils.ray_eval_pipeline_r2.remote(X = [self.hub.get_enc_ray_id(snp) for snp in pipeline_evaluation_details[pipeline_id][snp_t('features')]],
-                                                                      y = self.all_y_ray_id,
-                                                                      train_idx = fold_data['train_idx'],
-                                                                      valid_idx = fold_data['val_idx'],
-                                                                      pop_id = uint32_t(pipeline_id)))
-        r2_job_time = time.time() - r2_job_start
-        print(f"  - R2 job creation: {r2_job_time:.4f}s ({len(ray_jobs)} jobs)", flush=True)
-        
-        # process results as they come in
-        r2_eval_start = time.time()
-        while len(ray_jobs) > 0:
-            finished, ray_jobs = ray.wait(ray_jobs)
-            r2, pop_id, error = ray.get(finished[0])
-            if error < float32_t(0.0):
-                pipeline_evaluation_details[pop_id][snp_t('error')] = True
-
-            # update r2 and count
-            pipeline_evaluation_details[pop_id][snp_t('r2')] += r2
-            pipeline_evaluation_details[pop_id][snp_t('count')] += uint32_t(1)
-        r2_eval_time = time.time() - r2_eval_start
-        print(f"  - R2 evaluation: {r2_eval_time:.4f}s ({r2_eval_time/60:.2f} mins)", flush=True)
+        print(f"  - Total LD/FS processing: {total_ld_fs_time:.4f}s ({total_ld_fs_time/60:.2f} mins), pruned {len(pruned_snps)} SNPs", flush=True)
 
         # update hubs with prunned snps info
         hub_update_start = time.time()
@@ -541,17 +558,17 @@ class K1_Evolver(EA):
         total_eval_time = time.time() - eval_method_start
         
         # Calculate percentages
-        pct_job_create = (job_creation_time / total_eval_time * 100) if total_eval_time > 0 else 0
-        pct_ld_fs = (ld_fs_time / total_eval_time * 100) if total_eval_time > 0 else 0
-        pct_r2_job = (r2_job_time / total_eval_time * 100) if total_eval_time > 0 else 0
-        pct_r2_eval = (r2_eval_time / total_eval_time * 100) if total_eval_time > 0 else 0
+        pct_job_create = (total_job_creation_time / total_eval_time * 100) if total_eval_time > 0 else 0
+        pct_ld_fs = (total_ld_fs_time / total_eval_time * 100) if total_eval_time > 0 else 0
+        pct_r2_job = (total_r2_job_time / total_eval_time * 100) if total_eval_time > 0 else 0
+        pct_r2_eval = (total_r2_eval_time / total_eval_time * 100) if total_eval_time > 0 else 0
         pct_hub_update = (hub_update_time / total_eval_time * 100) if total_eval_time > 0 else 0
         
         print(f"\n[Timing] Evaluation ({len(pipelines)} pipelines): {total_eval_time:.2f}s ({total_eval_time/60:.2f} mins)", flush=True)
-        print(f"  - Job creation:  {job_creation_time:6.2f}s ({pct_job_create:5.1f}%)", flush=True)
-        print(f"  - LD/FS process: {ld_fs_time:6.2f}s ({pct_ld_fs:5.1f}%)", flush=True)
-        print(f"  - R2 jobs:       {r2_job_time:6.2f}s ({pct_r2_job:5.1f}%)", flush=True)
-        print(f"  - R2 evaluation: {r2_eval_time:6.2f}s ({pct_r2_eval:5.1f}%)", flush=True)
+        print(f"  - Job creation:  {total_job_creation_time:6.2f}s ({pct_job_create:5.1f}%)", flush=True)
+        print(f"  - LD/FS process: {total_ld_fs_time:6.2f}s ({pct_ld_fs:5.1f}%)", flush=True)
+        print(f"  - R2 jobs:       {total_r2_job_time:6.2f}s ({pct_r2_job:5.1f}%)", flush=True)
+        print(f"  - R2 evaluation: {total_r2_eval_time:6.2f}s ({pct_r2_eval:5.1f}%)", flush=True)
         print(f"  - Hub updates:   {hub_update_time:6.2f}s ({pct_hub_update:5.1f}%)\n", flush=True)
         
         return evaluated_pipelines, {'fs_only_count': fs_only_count, 'pipelines_evaluated': len(evaluated_pipelines)}
@@ -934,27 +951,33 @@ class K1_Evolver(EA):
         pareto_validation_r2 = dict(sorted(pareto_validation_r2.items()))
 
         ################# FIND THE UTOPIA MODEL #################
+        assert len(pareto_validation_r2) > 0, "No utopia pipeline found."
 
-        # find model based on Utopia point (maximize r2 and minimize feature count)
-        utopia_pipeline_id = {}
-        max_r2 = max([data["validation_r2"] for data in pareto_validation_r2.values()])
-        min_r2 = min([data["validation_r2"] for data in pareto_validation_r2.values()])
-        max_comp = max([data["feature_cnt"] for data in pareto_validation_r2.values()])
-        min_comp = min([data["feature_cnt"] for data in pareto_validation_r2.values()])
-
-        for pid, data in pareto_validation_r2.items():
-            # save utopia distance score
-            r2 = (1 - ((data["validation_r2"] - min_r2) / (max_r2 - min_r2)))**2
-            comp = (1 - (1 - (data["feature_cnt"] - min_comp) / (max_comp - min_comp)))**2
-            utopia_pipeline_id[pid] = np.sqrt(r2 + comp)
-
-        # find the set of snps with the smallest utopia distance
-        min_distance = float32_t(10000000.0)
         utopia_point_pipeline_id = None
-        for pid, distance in utopia_pipeline_id.items():
-            if min_distance > distance:
-                min_distance = distance
-                utopia_point_pipeline_id = pid
+        if len(pareto_validation_r2) > 1:
+            # find model based on Utopia point (maximize r2 and minimize feature count)
+            utopia_pipeline_id = {}
+            max_r2 = max([data["validation_r2"] for data in pareto_validation_r2.values()])
+            min_r2 = min([data["validation_r2"] for data in pareto_validation_r2.values()])
+            max_comp = max([data["feature_cnt"] for data in pareto_validation_r2.values()])
+            min_comp = min([data["feature_cnt"] for data in pareto_validation_r2.values()])
+
+            for pid, data in pareto_validation_r2.items():
+                # save utopia distance score
+                r2 = (1 - ((data["validation_r2"] - min_r2) / (max_r2 - min_r2)))**2
+                comp = (1 - (1 - (data["feature_cnt"] - min_comp) / (max_comp - min_comp)))**2
+                utopia_pipeline_id[pid] = np.sqrt(r2 + comp)
+
+            # find the set of snps with the smallest utopia distance
+            min_distance = float32_t(10000000.0)
+            utopia_point_pipeline_id = None
+            for pid, distance in utopia_pipeline_id.items():
+                if min_distance > distance:
+                    min_distance = distance
+                    utopia_point_pipeline_id = pid
+        else:
+            utopia_point_pipeline_id = list(utopia_pipeline_id.keys())[0]
+        assert utopia_point_pipeline_id is not None, "Utopia point pipeline ID should not be None."
 
         # print the details of the utopia point pipeline
         print(f"Utopia Point Pipeline ID: {utopia_point_pipeline_id}", flush=True)
