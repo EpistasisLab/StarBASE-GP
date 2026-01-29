@@ -909,7 +909,9 @@ class K1_Evolver(EA):
         for i in self.front_zero_ids:
             pareto_front_pipelines.append(self.population[i])
         print(f"Number of pipelines in Pareto front for post analysis: {len(pareto_front_pipelines)}", flush=True)
-
+        print ("The IDs of the pipelines in the Pareto front are:", flush=True)
+        print([i for i in self.front_zero_ids], flush=True)
+        assert len(pareto_front_pipelines) > 0, "No pipelines in Pareto front for post analysis."
         # Sort the Pareto front by feature count (MUST match save_and_plot_pareto_front ordering)
         pareto_front_pipelines = sorted(pareto_front_pipelines, key=lambda x: x.get_trait_feature_cnt())
 
@@ -976,7 +978,8 @@ class K1_Evolver(EA):
                     min_distance = distance
                     utopia_point_pipeline_id = pid
         else:
-            utopia_point_pipeline_id = list(utopia_pipeline_id.keys())[0]
+            # only one pipeline in pareto front, it is the utopia point
+            utopia_point_pipeline_id =  0
         assert utopia_point_pipeline_id is not None, "Utopia point pipeline ID should not be None."
 
         # print the details of the utopia point pipeline
