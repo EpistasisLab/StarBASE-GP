@@ -201,7 +201,7 @@ class K1_Evolver(EA):
             parent_ids = None
             if len(self.population) == 1:
                 var_order, parent_cnt = [snp_t('m')] * uint32_t(2*self.pop_size), uint32_t(2*self.pop_size)
-                parent_ids = [uint32_t(0)] * parent_cnt
+                parent_ids = [uint32_t(0) for _ in range(2*self.pop_size)]
             else:
                 var_order, parent_cnt = self.reproduction.variation_order(self.rng, uint32_t(2*self.pop_size))
                 parent_ids = self.parent_selection(parent_cnt)
