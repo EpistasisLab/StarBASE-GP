@@ -964,19 +964,27 @@ class K1_Evolver(EA):
             max_comp = max([data["feature_cnt"] for data in pareto_validation_r2.values()])
             min_comp = min([data["feature_cnt"] for data in pareto_validation_r2.values()])
 
-            for pid, data in pareto_validation_r2.items():
-                # save utopia distance score
-                r2 = (1 - ((data["validation_r2"] - min_r2) / (max_r2 - min_r2)))**2
-                comp = (1 - (1 - (data["feature_cnt"] - min_comp) / (max_comp - min_comp)))**2
-                utopia_pipeline_id[pid] = np.sqrt(r2 + comp)
+            # Edge case: all pipelines have the same r2, pick the one with smallest feature count
+            if max_r2 == min_r2:
+                min_feature_cnt = float('inf')
+                for pid, data in pareto_validation_r2.items():
+                    if data["feature_cnt"] < min_feature_cnt:
+                        min_feature_cnt = data["feature_cnt"]
+                        utopia_point_pipeline_id = pid
+            else:
+                for pid, data in pareto_validation_r2.items():
+                    # save utopia distance score
+                    r2 = (1 - ((data["validation_r2"] - min_r2) / (max_r2 - min_r2)))**2
+                    comp = ((data["feature_cnt"] - min_comp) / (max_comp - min_comp))**2
+                    utopia_pipeline_id[pid] = np.sqrt(r2 + comp)
 
-            # find the set of snps with the smallest utopia distance
-            min_distance = float32_t(10000000.0)
-            utopia_point_pipeline_id = None
-            for pid, distance in utopia_pipeline_id.items():
-                if min_distance > distance:
-                    min_distance = distance
-                    utopia_point_pipeline_id = pid
+                # find the set of snps with the smallest utopia distance
+                min_distance = float32_t(10000000.0)
+                utopia_point_pipeline_id = None
+                for pid, distance in utopia_pipeline_id.items():
+                    if min_distance > distance:
+                        min_distance = distance
+                        utopia_point_pipeline_id = pid
         else:
             # only one pipeline in pareto front, it is the utopia point
             utopia_point_pipeline_id =  0
