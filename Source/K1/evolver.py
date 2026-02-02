@@ -544,7 +544,7 @@ class K1_Evolver(EA):
         for pipeline_id in pipeline_evaluation_details:
             # skip pipelines with error, negative r2, or all snps are inactive
             if pipeline_evaluation_details[pipeline_id][snp_t('error')] or \
-                pipeline_evaluation_details[pipeline_id][snp_t('r2')] < float32_t(0.0) or \
+                pipeline_evaluation_details[pipeline_id][snp_t('r2')] <= float32_t(0.0) or \
                 self.hub.at_least_one_active_snp(pipeline_evaluation_details[pipeline_id][snp_t('features')]) == False:
                 continue
 
