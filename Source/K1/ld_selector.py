@@ -65,8 +65,8 @@ def compute_ld_matrix(X_array, snp_indices):
         ld_matrix: symmetric matrix of LD values
     """
 
-    n_snps = len(snp_indices)
-    ld_matrix = np.zeros((n_snps, n_snps), dtype=np.float32)
+    n_snps = len(snp_indices) # number of SNPs to compute LD for
+    ld_matrix = np.zeros((n_snps, n_snps), dtype=np.float32) # initialize LD matrix
 
     for i in numba.prange(n_snps):
         idx_i = snp_indices[i]

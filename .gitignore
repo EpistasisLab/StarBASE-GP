@@ -11,3 +11,7 @@ utopia_pipeline_test_results.csv
 .DS_Store
 generation_details.csv
 pareto_validation_plot.png
+Source/K2/ld_check.py
+Source/K2/mdr_check.py
+Source/K2/simulated_data_peaks.py
+Source/K2/COMPONENT_SNP_ARCHITECTURE.md
