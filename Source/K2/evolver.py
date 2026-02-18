@@ -1,7 +1,7 @@
 
 # import base EA class and types
 from ..Base.evovler import EA
-from ..Base.types import (float32_t, int16_t, prob_t, int32_t, snp_t, uint16_t, uint32_t)
+from ..Base.types import (float32_t, int16_t, prob_t, int32_t, snp_t, uint16_t, uint32_t, interaction_t)
 from ..Base.pipeline import Pipeline
 from ..Base.utils import snp_chrm_pos
 from ..Base import nsga_tool as nsga
@@ -334,6 +334,7 @@ class K1_Evolver(EA):
             snp1_chrom, snp2_chrom = self.rng.choice(sampling_list, size=2, replace=True)
             snp_1 = self.hub.get_random_snp_pair_from_chromosome(chrom=snp1_chrom, rng=self.rng)
             snp_2 = self.hub.get_random_snp_pair_from_chromosome(chrom=snp2_chrom, rng=self.rng)
+            
             if snp_1 is not None and snp_2 is not None:
                 branches.add((snp_1, snp_2)) # modified for epistasis - adding tuple of snp pairs as a branch instead of individual snps
             if len(branches) >= self.branch_max:

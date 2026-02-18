@@ -32,3 +32,6 @@ prob_t = np.float64
 
 # SNP type
 snp_t = np.str_
+
+# Interaction type
+interaction_t = tuple(np.str_, np.str_)
