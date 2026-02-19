@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 import time
 
 @typechecked
-class K1_Evolver(EA):
+class K2_Evolver(EA):
     def __init__(self,
                  seed: int,
                  pop_size: uint32_t,
@@ -50,7 +50,7 @@ class K1_Evolver(EA):
                  regression: bool = True
                  ) -> None:
         """
-        K1 Evolver class that extends the EA base class.
+        K2 Evolver class that extends the EA base class.
         """
 
         # pass all variables to the EA base class
@@ -654,16 +654,18 @@ class K1_Evolver(EA):
             chromosomes.add(chrom)
         return False
 
-    # modified for epistasis - needs testing
+    # modified for epistasis - optimized with two-stage evaluation
     def evaluate_unseen_branches(self, unseen_branches: Set[snp_t], gen_seen: int16_t) -> None:
         """
         Function to evaluate all unseen branches and add their best R2 and Encoder type to the Hub.
-        All of this should be done in asyncronous parallel jobs.
-        We update the Hub with the results as they come in.
+        Uses two-stage approach:
+        1. Pre-screen interactions (MLG + Pearson correlation) - once per interaction
+        2. Evaluate encodings on CV folds - only for interactions that pass pre-screening
+        
+        This minimizes Ray overhead by avoiding redundant checks across CV folds.
 
         Parameters:
-            unseen_branches (Set[snp_t]): Set of unseen branches, tuples of SNP1 and SNP2.
-
+            unseen_branches (Set[snp_t]): Set of unseen branch tuples (SNP1, SNP2).
             gen_seen (int16_t): Generation number when these branches were first seen.
         """
 
@@ -674,208 +676,253 @@ class K1_Evolver(EA):
         print(f"[Timing] Evaluating {len(unseen_branches)} unseen branches...", flush=True)
         unseen_eval_start = time.time()
 
-        # container for ray object ids
-        ray_job_start = time.time()
-        ray_jobs = []
+        # STEP 1: Pre-screen all interactions (MLG + Pearson correlation)
+        print("  [Step 1] Pre-screening interactions (MLG + Pearson correlation)...", flush=True)
+        prescreen_start = time.time()
+        prescreen_jobs = []
+        
         for snp_pair in unseen_branches:
             snp_1, snp_2 = snp_pair
             assert isinstance(snp_1, snp_t), "SNP must be of type snp_t."
             assert isinstance(snp_2, snp_t), "SNP must be of type snp_t."
-            assert '.' in snp_1 and '.' in snp_2, "SNP must be a string with chromosome and position separated by a dot."
-
-            # Check encoding_flag to determine which encodings to evaluate
-            if self.encoding_flag:
-                # Launch one Ray job per SNP pair that does all the preprocessing and evaluation for all encodings, and returns results in a single call to minimize Ray overhead
-                for _, fold_data in self.train_fold_dict_ray.items():
-                    ray_jobs.append(ray_utils.ray_preprocess_interaction.remote(
-                        X1 = self.hub.get_ori_ray_id(snp_1),
-                        X2 = self.hub.get_ori_ray_id(snp_2),
-                        y = self.all_y_ray_id,
-                        train_idx = fold_data['train_idx'],
-                        valid_idx = fold_data['val_idx'],
-                        snp = snp_pair
-                    ))
+            
+            X1 = self.hub.get_ori_ray_id(snp_1)
+            X2 = self.hub.get_ori_ray_id(snp_2)
+            
+            job = ray_utils.ray_prescreen_interaction.remote(
+                X1, X2, self.train_idx_ray, snp_1, snp_2
+            )
+            prescreen_jobs.append((job, snp_pair))
+        
+        # Process pre-screening results
+        passed_interactions = {}  # snp_pair -> correlation_r2
+        failed_interactions = {}  # snp_pair -> (failure_code, correlation_r2)
+        
+        while len(prescreen_jobs) > 0:
+            done, _ = ray.wait([job[0] for job in prescreen_jobs], num_returns=1)
+            job_idx = [job[0] for job in prescreen_jobs].index(done[0])
+            snp_pair = prescreen_jobs[job_idx][1]
+            
+            pass_flag, failure_code, correlation_r2 = ray.get(done[0])
+            
+            if pass_flag:
+                passed_interactions[snp_pair] = correlation_r2
             else:
-                # Only evaluate additive encoding
-                for _, fold_data in self.train_fold_dict_ray.items():
-                    ray_jobs.append(ray_utils.ray_preprocess_interaction_cartesian.remote(
-                        X1 = self.hub.get_ori_ray_id(snp_1),
-                        X2 = self.hub.get_ori_ray_id(snp_2),
-                        y = self.all_y_ray_id,
-                        train_idx = fold_data['train_idx'],
-                        valid_idx = fold_data['val_idx'],
-                        snp = snp_pair,
-                    ))
-        assert len(ray_jobs) == len(unseen_branches) * self.k  # k folds for each unseen snp
-
-        # container to hold interaction performance (accumulated r2, count, error flag, encoder type, encoded_x ray id(depending on r2 / count >= threshold))
+                failed_interactions[snp_pair] = (failure_code, correlation_r2)
+            
+            prescreen_jobs = [prescreen_jobs[i] for i in range(len(prescreen_jobs)) if i != job_idx]
+        
+        prescreen_time = time.time() - prescreen_start
+        print(f"    Pre-screening complete: {len(passed_interactions)} passed, {len(failed_interactions)} failed ({prescreen_time:.2f}s)", flush=True)
+        
+        # STEP 2: Evaluate encodings for passed interactions
+        print("  [Step 2] Evaluating encodings for passed interactions...", flush=True)
+        encoding_eval_start = time.time()
+        
+        # Initialize results structure
         inter_perf = {}
-        for snp_name in unseen_branches:
-            # initialize with best encoder as None, encoded_x as None, and mdr_mapping zeros array
-            inter_perf[snp_name] = {snp_t('b_encoder'): None, snp_t('encoded_x'): None, snp_t('mdr_mapping'): np.zeros(3, dtype=float32_t), snp_t('pager_lut_sum'): np.zeros(3, dtype=float32_t), snp_t('pager_lut_cnt'): 0}
+        for snp_pair in unseen_branches:
+            inter_perf[snp_pair] = {
+                'cartesian_r2_folds': [],
+                'xor_r2_folds': [],
+                'mdr_r2_folds': [],
+                'mdr_mappings': [],
+                'correlation_r2': failed_interactions.get(snp_pair, (None, -1.0))[1] if snp_pair in failed_interactions else passed_interactions.get(snp_pair, -1.0),
+                'failure_code': failed_interactions.get(snp_pair, (None, None))[0] if snp_pair in failed_interactions else None,
+                'avg_r2': float32_t(-1.0),
+                'best_enc': None
+            }
+        
+        # Create encoding evaluation jobs only for passed interactions
+        encoding_jobs = []
+        if self.encoding_flag:
+            # Evaluate all encodings (cartesian, xor, mdr)
+            for snp_pair in passed_interactions:
+                snp_1, snp_2 = snp_pair
+                X1 = self.hub.get_ori_ray_id(snp_1)
+                X2 = self.hub.get_ori_ray_id(snp_2)
+                
+                for _, fold_data in self.train_fold_dict_ray.items():
+                    job = ray_utils.ray_evaluate_interaction_encodings.remote(
+                        X1, X2, self.all_y_ray_id,
+                        fold_data['train_idx'], fold_data['val_idx'],
+                        snp_1, snp_2
+                    )
+                    encoding_jobs.append((job, snp_pair))
+        else:
+            # Evaluate only cartesian encoding (ablation study)
+            for snp_pair in passed_interactions:
+                snp_1, snp_2 = snp_pair
+                X1 = self.hub.get_ori_ray_id(snp_1)
+                X2 = self.hub.get_ori_ray_id(snp_2)
+                
+                for _, fold_data in self.train_fold_dict_ray.items():
+                    job = ray_utils.ray_evaluate_interaction_cartesian_fold.remote(
+                        X1, X2, self.all_y_ray_id,
+                        fold_data['train_idx'], fold_data['val_idx'],
+                        snp_1, snp_2
+                    )
+                    encoding_jobs.append((job, snp_pair))
+        
+        print(f"    Created {len(encoding_jobs)} encoding evaluation jobs ({len(passed_interactions)} interactions × {self.k} folds)", flush=True)
+        
+        # Process encoding evaluation results
+        while len(encoding_jobs) > 0:
+            done, _ = ray.wait([job[0] for job in encoding_jobs], num_returns=1)
+            job_idx = [job[0] for job in encoding_jobs].index(done[0])
+            snp_pair = encoding_jobs[job_idx][1]
+            
             if self.encoding_flag:
-                # Include all encoder types
-                for encoder in self.encoder_types:
-                    # extend inter_perf with r2 and count for each of the encoders
-                    inter_perf[snp_name][encoder] = {snp_t('r2'): float32_t(0.0), snp_t('cnt'): float32_t(0.0)}
+                results, mdr_mapping = ray.get(done[0])
+                inter_perf[snp_pair]['cartesian_r2_folds'].append(results['cartesian'])
+                inter_perf[snp_pair]['xor_r2_folds'].append(results['xor'])
+                inter_perf[snp_pair]['mdr_r2_folds'].append(results['mdr'])
+                if mdr_mapping is not None:
+                    inter_perf[snp_pair]['mdr_mappings'].append(mdr_mapping)
+            else:
+                cartesian_r2 = ray.get(done[0])
+                inter_perf[snp_pair]['cartesian_r2_folds'].append(cartesian_r2)
+            
+            encoding_jobs = [encoding_jobs[i] for i in range(len(encoding_jobs)) if i != job_idx]
+        
+        encoding_eval_time = time.time() - encoding_eval_start
+        print(f"    Encoding evaluation complete ({encoding_eval_time:.2f}s, {encoding_eval_time/60:.2f} mins)", flush=True)
+        
+        # STEP 3: Aggregate results and select best encoding
+        print("  [Step 3] Aggregating results and selecting best encodings...", flush=True)
+        aggregate_start = time.time()
+        
+        for snp_pair in passed_interactions:
+            if self.encoding_flag:
+                # Average R2 across folds for each encoding
+                avg_cartesian = np.mean([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0])if len([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
+                avg_xor = np.mean([r2 for r2 in inter_perf[snp_pair]['xor_r2_folds'] if r2 > 0]) if len([r2 for r2 in inter_perf[snp_pair]['xor_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
+                avg_mdr = np.mean([r2 for r2 in inter_perf[snp_pair]['mdr_r2_folds'] if r2 > 0]) if len([r2 for r2 in inter_perf[snp_pair]['mdr_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
+                
+                # Select best encoding
+                best_r2 = max(avg_cartesian, avg_xor, avg_mdr)
+                if best_r2 == avg_cartesian:
+                    best_enc = snp_t('cartesian')
+                elif best_r2 == avg_xor:
+                    best_enc = snp_t('xor')
+                else:
+                    best_enc = snp_t('mdr')
+                
+                inter_perf[snp_pair]['avg_r2'] = float32_t(best_r2)
+                inter_perf[snp_pair]['best_enc'] = best_enc
             else:
                 # Only cartesian encoding
-                inter_perf[snp_name][snp_t('cartesian')] = {snp_t('r2'): float32_t(0.0), snp_t('cnt'): float32_t(0.0)}
-        assert len(inter_perf) == len(unseen_branches), "Interaction performance dictionary size does not match unseen branches."
-        ray_job_time = time.time() - ray_job_start
-        print(f"  - Ray job creation for {len(ray_jobs)} interaction evaluation jobs: {ray_job_time:.4f}s", flush=True)
-
-        # process results as they come in
-        r2_calc_start = time.time()
-        while len(ray_jobs) > 0:
-            # collect results
-            finished, ray_jobs = ray.wait(ray_jobs)
-
-            if self.encoding_flag:
-                # ray_snp_eval_all_encodings returns dict of {encoding_name: (r2, snp, enc, error, pager_lut)}
-                encoding_results = ray.get(finished)[0]
-                # Process results for all encodings from this single job
-                for enc_name, (r2, snp_name, lo, error, pager_lut) in encoding_results.items():
-                    assert error >= 0.0, f"Error flag must be non-negative for {enc_name}. Error during interaction evaluation cannot occur."
-                    # add them up
-                    inter_perf[snp_name][lo][snp_t('r2')] += r2
-                    inter_perf[snp_name][lo][snp_t('cnt')] += float32_t(1.0)
-                    # Accumulate PAGER LUT values across all folds for averaging
-                    if enc_name == 'pager' and pager_lut is not None:
-                        inter_perf[snp_name][snp_t('pager_lut_sum')] += pager_lut
-                        inter_perf[snp_name][snp_t('pager_lut_cnt')] += 1
-            else:
-                # ray_snp_eval_add returns (r2, snp, enc, error)
-                r2, snp_name, lo, error = ray.get(finished)[0]
-                assert error >= 0.0, f"Error flag must be non-negative for additive. Error during interaction evaluation cannot occur."
-                # add them up
-                inter_perf[snp_name][lo][snp_t('r2')] += r2
-                inter_perf[snp_name][lo][snp_t('cnt')] += float32_t(1.0)
-
-        r2_calc_time = time.time() - r2_calc_start
-        print(f"  - R2 calculation for unseen branches: {r2_calc_time:.4f}s ({r2_calc_time/60:.2f} mins)", flush=True)
-
-        # obtain encoded snp for each unseen branch with a best positve r2
-        encoding_prep_start = time.time()
-        ray_jobs = []
-        for snp_name in unseen_branches:
-            # find best encoder for the snp
-            best_r2 = float32_t(-10000000000000.0)
-            best_encoder = None
-
-            # go through each encoder and find the best average r2
-            if self.encoding_flag:
-                # Check all encoder types
-                for encoder in self.encoder_types:
-                    # make sure we have at least k-folds of results
-                    assert float32_t(inter_perf[snp_name][encoder][snp_t('cnt')]) == float32_t(self.k), "Interaction performance count does not match k-folds."
-
-                    # only care about largest aggregated r2 up to this point
-                    if inter_perf[snp_name][encoder][snp_t('r2')] > best_r2:
-                        best_r2 = inter_perf[snp_name][encoder][snp_t('r2')]
-                        best_encoder = encoder
-            else:
-                # Only additive encoding
-                encoder = snp_t('additive')
-                # make sure we have at least k-folds of results
-                assert float32_t(inter_perf[snp_name][encoder][snp_t('cnt')]) == float32_t(self.k), "Interaction performance count does not match k-folds."
-                best_r2 = inter_perf[snp_name][encoder][snp_t('r2')]
-                best_encoder = encoder
-
-            # save best encoder for the snp
-            inter_perf[snp_t(snp_name)][snp_t('b_encoder')] = snp_t(best_encoder)
-
-        encoding_prep_time = time.time() - encoding_prep_start
-        print(f"  - Best encoder selection: {encoding_prep_time:.4f}s", flush=True)
-
-        # Create encoding jobs for SNPs above threshold
+                avg_cartesian = np.mean([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0]) if len([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
+                inter_perf[snp_pair]['avg_r2'] = float32_t(avg_cartesian)
+                inter_perf[snp_pair]['best_enc'] = snp_t('cartesian')
+            
+            # Check threshold
+            if inter_perf[snp_pair]['avg_r2'] <= 0.004:
+                inter_perf[snp_pair]['failure_code'] = float32_t(-3.0)  # Phantom epistasis
+        
+        aggregate_time = time.time() - aggregate_start
+        print(f"    Aggregation complete ({aggregate_time:.2f}s)", flush=True)
+        
+        # STEP 4: Create encoding jobs for interactions above threshold
+        print("  [Step 4] Creating encoding jobs for interactions above threshold...", flush=True)
         encoding_job_start = time.time()
-        for snp_name in unseen_branches:
-            best_r2 = float32_t(-10000000000000.0)
-            best_encoder = inter_perf[snp_t(snp_name)][snp_t('b_encoder')]
-            # Recalculate best_r2 for this snp
-            if self.encoding_flag:
-                for encoder in self.encoder_types:
-                    if inter_perf[snp_name][encoder][snp_t('r2')] > best_r2:
-                        best_r2 = inter_perf[snp_name][encoder][snp_t('r2')]
-            else:
-                best_r2 = inter_perf[snp_name][snp_t('additive')][snp_t('r2')]
-
-            # if we have an average r2 greater or equal than the threshold, get the encoded snp ray id
-            # Note: For additive encoding, no need to encode since data is already in additive format
-            if best_r2 / float32_t(self.k) >= self.branch_explainability_threshold and best_encoder != snp_t('additive'):
-                ray_jobs.append(ray_utils.ray_snp_encoder.remote(X = self.hub.get_ori_ray_id(snp_name),
-                                                                 y = self.all_y_ray_id,
-                                                                 train_idx = self.train_idx_ray,
-                                                                 enc = best_encoder,
-                                                                 snp = snp_name))
-            elif float32_t(0.0) > self.branch_explainability_threshold and best_encoder != snp_t('additive'):
-                ray_jobs.append(ray_utils.ray_snp_encoder.remote(X = self.hub.get_ori_ray_id(snp_name),
-                                                                 y = self.all_y_ray_id,
-                                                                 train_idx = self.train_idx_ray,
-                                                                 enc = best_encoder,
-                                                                 snp = snp_name))
+        
+        encoding_jobs = []
+        interactions_to_encode = []
+        
+        for snp_pair in passed_interactions:
+            if inter_perf[snp_pair]['avg_r2'] >= self.branch_explainability_threshold:
+                interactions_to_encode.append(snp_pair)
+                snp_1, snp_2 = snp_pair
+                X1 = self.hub.get_ori_ray_id(snp_1)
+                X2 = self.hub.get_ori_ray_id(snp_2)
+                best_enc = inter_perf[snp_pair]['best_enc']
+                
+                # Create the interaction name with best encoding
+                interaction_name = f"{snp_1}_{best_enc}_{snp_2}"
+                
+                # Use ray_interaction_encoder to encode the full dataset
+                job = ray_utils.ray_interaction_encoder.remote(
+                    X1, X2, self.all_y_ray_id,
+                    self.train_idx_ray, best_enc, snp_t(interaction_name)
+                )
+                encoding_jobs.append((job, snp_pair))
+        
         encoding_job_time = time.time() - encoding_job_start
-        print(f"  - Encoding job creation: {encoding_job_time:.4f}s ({len(ray_jobs)} jobs)", flush=True)
-
-        # process encoded snp results
+        print(f"    Created {len(encoding_jobs)} encoding jobs for {len(interactions_to_encode)} interactions ({encoding_job_time:.2f}s)", flush=True)
+        
+        # Process encoding jobs
         encoding_exec_start = time.time()
-        count = 0
-        while len(ray_jobs) > 0:
-            # collect results and store encoded snp
-            finished, ray_jobs = ray.wait(ray_jobs)
-            encoded_snp, snp_name = ray.get(finished)[0]
-            inter_perf[snp_name][snp_t('encoded_x')] = encoded_snp
-            count += 1
+        while len(encoding_jobs) > 0:
+            done, _ = ray.wait([job[0] for job in encoding_jobs], num_returns=1)
+            job_idx = [job[0] for job in encoding_jobs].index(done[0])
+            snp_pair = encoding_jobs[job_idx][1]
+            
+            encoded_data, _ = ray.get(done[0])
+            inter_perf[snp_pair]['encoded_data'] = encoded_data
+            
+            encoding_jobs = [encoding_jobs[i] for i in range(len(encoding_jobs)) if i != job_idx]
+        
         encoding_exec_time = time.time() - encoding_exec_start
-        print(f"  - Encoding {count} unseen branches: {encoding_exec_time:.4f}s ({encoding_exec_time/60:.2f} mins)", flush=True)
-
-        # update the hub with best r2 and encoded snp ray id (if r2 >= threshold)
+        print(f"    Encoding execution complete: {len(interactions_to_encode)} interactions encoded ({encoding_exec_time:.2f}s)", flush=True)
+        
+        # STEP 5: Update hub with results
+        print("  [Step 5] Updating hub with interaction results...", flush=True)
         hub_update_start = time.time()
-        ray_put_total = 0.0
-        hub_call_total = 0.0
-
-        for snp_name in unseen_branches:
-            enc_id = None
-            # set enc_id to those snps with r2 / k >= threshold
-            ray_put_start = time.time()
-            if inter_perf[snp_name][inter_perf[snp_name][snp_t('b_encoder')]][snp_t('r2')] / float32_t(self.k) >= self.branch_explainability_threshold:
-                enc_id = ray.put(inter_perf[snp_name][snp_t('encoded_x')])
-            # or set enc_id to those snps if threshold < 0.0
-            elif float32_t(0.0) > self.branch_explainability_threshold and inter_perf[snp_name][snp_t('b_encoder')] != snp_t('additive'):
-                enc_id = ray.put(inter_perf[snp_name][snp_t('encoded_x')])
-            ray_put_total += time.time() - ray_put_start
-
-            # Get averaged PAGER LUT if encoding is pager
-            pager_lut = None
-            if inter_perf[snp_name][snp_t('b_encoder')] == snp_t('pager'):
-                pager_lut_cnt = inter_perf[snp_name][snp_t('pager_lut_cnt')]
-                if pager_lut_cnt > 0:
-                    # Average PAGER LUT values across all k-folds
-                    pager_lut = inter_perf[snp_name][snp_t('pager_lut_sum')] / float32_t(pager_lut_cnt)
-            hub_call_start = time.time()
-            self.hub.update_snp_hub_r2_enc(snp=snp_name,
-                                          r2=inter_perf[snp_name][inter_perf[snp_name][snp_t('b_encoder')]][snp_t('r2')] / float32_t(self.k),
-                                          enc=inter_perf[snp_name][snp_t('b_encoder')],
-                                          enc_x=enc_id,
-                                          gen_seen=gen_seen,
-                                          snp_explainability_threshold=self.branch_explainability_threshold,
-                                          pager_lut=pager_lut)
-            hub_call_total += time.time() - hub_call_start
-
+        
+        for snp_pair in unseen_branches:
+            snp_1, snp_2 = snp_pair
+            
+            # Put encoded data in Ray store if it exists and above threshold
+            encoded_ray_id = None
+            if 'encoded_data' in inter_perf[snp_pair] and inter_perf[snp_pair]['avg_r2'] >= self.branch_explainability_threshold:
+                encoded_ray_id = ray.put(inter_perf[snp_pair]['encoded_data'])
+            
+            # Get MDR mapping for MDR encoding - average across all folds
+            mdr_mapping = None
+            if inter_perf[snp_pair]['best_enc'] == snp_t('mdr') and len(inter_perf[snp_pair]['mdr_mappings']) > 0:
+                # Average MDR mappings across all k-folds
+                # MDR mapping is a dict: {(genotype1, genotype2): value}
+                all_mappings = inter_perf[snp_pair]['mdr_mappings']
+                averaged_mapping = {}
+                
+                # Get all unique keys across all folds
+                all_keys = set()
+                for mapping in all_mappings:
+                    all_keys.update(mapping.keys())
+                
+                # Average the values for each genotype combination
+                for key in all_keys:
+                    values = [mapping.get(key, 0.0) for mapping in all_mappings if key in mapping]
+                    averaged_mapping[key] = np.mean(values)
+                
+                mdr_mapping = averaged_mapping
+            
+            # Update hub with interaction performance
+            # The hub expects the snp_pair tuple and will handle it as an interaction
+            # Use pager_lut parameter to pass MDR mapping (reusing existing parameter)
+            self.hub.update_snp_hub_r2_enc(
+                snp=snp_pair,
+                r2=inter_perf[snp_pair]['avg_r2'],
+                enc=inter_perf[snp_pair]['best_enc'],
+                enc_x=encoded_ray_id,
+                gen_seen=gen_seen,
+                snp_explainability_threshold=self.branch_explainability_threshold,
+                pager_lut=mdr_mapping  # Reusing pager_lut parameter for MDR mapping-rename it later
+            )
+        
         hub_update_time = time.time() - hub_update_start
-
-        # Calculate percentages for hub update breakdown
-        pct_ray_put = (ray_put_total / hub_update_time * 100) if hub_update_time > 0 else 0
-        pct_hub_call = (hub_call_total / hub_update_time * 100) if hub_update_time > 0 else 0
-
-        print(f"  - Hub updates ({len(unseen_branches)} SNPs): {hub_update_time:.4f}s", flush=True)
-        print(f"    • ray.put():    {ray_put_total:.4f}s ({pct_ray_put:5.1f}%)", flush=True)
-        print(f"    • hub updates:  {hub_call_total:.4f}s ({pct_hub_call:5.1f}%)", flush=True)
-
-        total_unseen_time = time.time() - unseen_eval_start
-        print(f"[Timing] Total unseen branch evaluation: {total_unseen_time:.4f}s ({total_unseen_time/60:.2f} mins)", flush=True)
-        print(f"  Summary: JobCreate={ray_job_time:.2f}s, R2Calc={r2_calc_time:.2f}s, EncoderSelect={encoding_prep_time:.2f}s, EncodeJobs={encoding_job_time:.2f}s, EncodeExec={encoding_exec_time:.2f}s, HubUpdate={hub_update_time:.2f}s\\n", flush=True)
+        print(f"    Hub updates complete ({hub_update_time:.2f}s)", flush=True)
+        
+        # Summary of unseen branch evaluation - time breakdown and results
+        total_time = time.time() - unseen_eval_start
+        print(f"\n[Timing] Total unseen branch evaluation: {total_time:.2f}s ({total_time/60:.2f} mins)", flush=True)
+        print(f"  Step 1 (Pre-screen):  {prescreen_time:6.2f}s ({prescreen_time/total_time*100:5.1f}%)", flush=True)
+        print(f"  Step 2 (Eval encode): {encoding_eval_time:6.2f}s ({encoding_eval_time/total_time*100:5.1f}%)", flush=True)
+        print(f"  Step 3 (Aggregate):   {aggregate_time:6.2f}s ({aggregate_time/total_time*100:5.1f}%)", flush=True)
+        print(f"  Step 4 (Encode jobs): {encoding_job_time + encoding_exec_time:6.2f}s ({(encoding_job_time + encoding_exec_time)/total_time*100:5.1f}%)", flush=True)
+        print(f"  Step 5 (Hub update):  {hub_update_time:6.2f}s ({hub_update_time/total_time*100:5.1f}%)", flush=True)
+        print(f"  Results: {len(passed_interactions)} passed, {len(failed_interactions)} failed, {len(interactions_to_encode)} above threshold\n", flush=True)
 
     def get_sampling(self, cnt:uint16_t, chrom_num:uint16_t) -> npt.NDArray[uint16_t]:
         """

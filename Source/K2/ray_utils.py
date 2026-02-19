@@ -1,5 +1,5 @@
 from ..Base.selectors import SelectorNode
-from ..Base.types import (float32_t, int16_t, snp_t, uint16_t, uint32_t)
+from ..Base.types import (float32_t, int16_t, snp_t, uint16_t, uint32_t, interaction_t)
 
 import ray
 import numpy as np
@@ -245,6 +245,206 @@ def ray_interaction_encoder(X1, X2, y, train_idx, enc: snp_t, snp: snp_t) -> Tup
     else:
         raise ValueError(f"Unknown encoding type: {enc_str}")     
 
+# ray remote function to pre-screen an interaction (MLG + Pearson correlation check)
+@ray.remote
+def ray_prescreen_interaction(X1: np.ndarray, X2: np.ndarray, full_train_idx: npt.NDArray, snp1: snp_t, snp2: snp_t) -> Tuple[bool, str, float32_t]:
+    """
+    Pre-screen an interaction by checking for missing multi-locus genotype (MLG) and high Pearson correlation.
+    This is called ONCE per interaction (not per CV fold) to avoid redundant checks.
+    
+    Parameters:
+        X1, X2: Genotype vectors
+        full_train_idx: Full training indices for MLG and correlation checks
+        snp1, snp2: SNP identifiers
+    
+    Returns:
+        pass_flag (bool): True if passed both checks, False if failed
+        failure_code (float32_t): -1.0 if MLG missing, -2.0 if high correlation, 1.0 if passed
+        correlation_r2 (float32_t): Pearson's R² between SNPs (-1.0 if not computed)
+    """
+    
+    correlation_r2 = float32_t(-1.0)
+    
+    # Step 1: Check for missing multi-locus genotype (MLG) in training set
+    all_combinations = {(g1, g2) for g1 in [0.0, 0.5, 1.0] for g2 in [0.0, 0.5, 1.0]}
+    full_train_combinations = set(zip(X1[full_train_idx], X2[full_train_idx]))
+    missing_train = not all_combinations.issubset(full_train_combinations)
+    
+    if missing_train:
+        return False, float32_t(-1.0), correlation_r2
+    
+    # Step 2: Check Pearson's correlation if SNPs are on the same chromosome
+    snp1_chr = snp1.split('_')[0]
+    snp2_chr = snp2.split('_')[0]
+    
+    if snp1_chr == snp2_chr:
+        correlation_coef = float32_t(np.corrcoef(X1[full_train_idx], X2[full_train_idx])[0, 1])
+        correlation_r2 = float32_t(correlation_coef ** 2)
+        if correlation_r2 > 0.50:
+            return False, 'pearson', correlation_r2
+    
+    # Passed both checks
+    return True, float32_t(1.0), correlation_r2
+
+
+# ray remote function to evaluate all encodings for a single CV fold
+@ray.remote
+def ray_evaluate_interaction_encodings(X1_ray_id: ray.ObjectID, X2_ray_id: ray.ObjectID, y_ray_id: ray.ObjectID, 
+                                       train_idx: npt.NDArray, valid_idx: npt.NDArray, 
+                                       snp1: snp_t, snp2: snp_t) -> Tuple[Dict[str, float32_t], Dict]:
+    """
+    Evaluate all three encoding types (Cartesian, XOR, MDR) for an interaction on a single CV fold.
+    Performs phantom epistasis check by fitting main effects first, then interaction effects on residuals.
+    
+    Parameters:
+        X1_ray_id, X2_ray_id: Ray ObjectIDs for genotype vectors
+        y_ray_id: Ray ObjectID for phenotype vector
+        train_idx: Training indices for this fold
+        valid_idx: Validation indices for this fold
+        snp1, snp2: SNP identifiers
+    
+    Returns:
+        results (Dict[str, float32_t]): R² scores for each encoding {'cartesian': r2, 'xor': r2, 'mdr': r2}
+            Failed encodings have R² = -1.0
+        mdr_mapping (Dict): MDR feature_map if MDR succeeded, else None
+    """
+    # Resolve Ray ObjectIDs
+    X1 = ray.get(X1_ray_id)
+    X2 = ray.get(X2_ray_id)
+    y = ray.get(y_ray_id)
+    
+    results = {'cartesian': float32_t(-1.0), 'xor': float32_t(-1.0), 'mdr': float32_t(-1.0)}
+    mdr_mapping = None
+    
+    # Step 1: Fit base model for phantom epistasis check (main effects only)
+    try:
+        X1_train_centered = X1[train_idx] - np.mean(X1[train_idx])
+        X2_train_centered = X2[train_idx] - np.mean(X2[train_idx])
+        y_train_centered = y[train_idx] - np.mean(y[train_idx])
+        
+        base_model = sm.OLS(y_train_centered, sm.add_constant(np.column_stack((X1_train_centered, X2_train_centered)), has_constant='add'))
+        base_results = base_model.fit()
+        
+        # Get residuals on training data
+        y_base_train_pred = base_results.predict(sm.add_constant(np.column_stack((X1_train_centered, X2_train_centered)), has_constant='add'))
+        y_train_residuals = y_train_centered - y_base_train_pred
+        
+        # Get residuals on validation data
+        X1_valid_centered = X1[valid_idx] - np.mean(X1[train_idx])
+        X2_valid_centered = X2[valid_idx] - np.mean(X2[train_idx])
+        y_valid_centered = y[valid_idx] - np.mean(y[train_idx])
+        y_base_valid_pred = base_results.predict(sm.add_constant(np.column_stack((X1_valid_centered, X2_valid_centered)), has_constant='add'))
+        y_valid_residuals = y_valid_centered - y_base_valid_pred
+    except Exception as e:
+        logging.error(f"Error fitting base model for phantom epistasis check for SNPs {snp1}, {snp2}: {e}")
+        return results, mdr_mapping
+    
+    # Step 2: Evaluate Cartesian encoding
+    try:
+        X_encoded = encode_cartesian(X1, X2)
+        X_encoded_train_centered = X_encoded[train_idx] - np.mean(X_encoded[train_idx])
+        X_encoded_valid_centered = X_encoded[valid_idx] - np.mean(X_encoded[train_idx])
+        
+        regressor = sm.OLS(y_train_residuals, sm.add_constant(X_encoded_train_centered, has_constant='add'))
+        fit_results = regressor.fit()
+        y_pred = fit_results.predict(sm.add_constant(X_encoded_valid_centered, has_constant='add'))
+        results['cartesian'] = float32_t(r2_score(y_valid_residuals, y_pred))
+    except Exception as e:
+        logging.error(f"Error evaluating cartesian for SNP pair {snp1}, {snp2}: {e}")
+    
+    # Step 3: Evaluate XOR encoding
+    try:
+        X_encoded = encode_xor(X1, X2)
+        X_encoded_train_centered = X_encoded[train_idx] - np.mean(X_encoded[train_idx])
+        X_encoded_valid_centered = X_encoded[valid_idx] - np.mean(X_encoded[train_idx])
+        
+        regressor = sm.OLS(y_train_residuals, sm.add_constant(X_encoded_train_centered, has_constant='add'))
+        fit_results = regressor.fit()
+        y_pred = fit_results.predict(sm.add_constant(X_encoded_valid_centered, has_constant='add'))
+        results['xor'] = float32_t(r2_score(y_valid_residuals, y_pred))
+    except Exception as e:
+        logging.error(f"Error evaluating xor for SNP pair {snp1}, {snp2}: {e}")
+    
+    # Step 4: Evaluate MDR encoding
+    try:
+        X_encoded_train, mdr_fitted_object, temp_mdr_mapping = encode_mdr(X1[train_idx], X2[train_idx], y[train_idx])
+        X_encoded_valid = mdr_fitted_object.transform(np.column_stack((X1[valid_idx], X2[valid_idx])))
+        
+        X_encoded_train_centered = X_encoded_train - np.mean(X_encoded_train)
+        X_encoded_valid_centered = X_encoded_valid - np.mean(X_encoded_train)
+        
+        regressor = sm.OLS(y_train_residuals, sm.add_constant(X_encoded_train_centered, has_constant='add'))
+        fit_results = regressor.fit()
+        y_pred = fit_results.predict(sm.add_constant(X_encoded_valid_centered, has_constant='add'))
+        results['mdr'] = float32_t(r2_score(y_valid_residuals, y_pred))
+        mdr_mapping = temp_mdr_mapping
+    except Exception as e:
+        logging.error(f"Error evaluating MDR for SNP pair {snp1}, {snp2}: {e}")
+    
+    return results, mdr_mapping
+
+
+# ray remote function to evaluate only cartesian encoding for a single CV fold (ablation study)
+@ray.remote
+def ray_evaluate_interaction_cartesian_fold(X1_ray_id: ray.ObjectID, X2_ray_id: ray.ObjectID, y_ray_id: ray.ObjectID,
+                                           train_idx: npt.NDArray, valid_idx: npt.NDArray,
+                                           snp1: snp_t, snp2: snp_t) -> float32_t:
+    """
+    Evaluate only Cartesian encoding for an interaction on a single CV fold.
+    Used for ablation studies. Does NOT perform phantom epistasis check.
+    
+    Parameters:
+        X1_ray_id, X2_ray_id: Ray ObjectIDs for genotype vectors
+        y_ray_id: Ray ObjectID for phenotype vector
+        train_idx: Training indices for this fold
+        valid_idx: Validation indices for this fold
+        snp1, snp2: SNP identifiers
+    
+    Returns:
+        cartesian_r2 (float32_t): R² score for cartesian encoding (-1.0 if failed)
+    """
+    # Resolve Ray ObjectIDs
+    X1 = ray.get(X1_ray_id)
+    X2 = ray.get(X2_ray_id)
+    y = ray.get(y_ray_id)
+
+    # Step 1: Fit base model for phantom epistasis check (main effects only)
+    try:
+        X1_train_centered = X1[train_idx] - np.mean(X1[train_idx])
+        X2_train_centered = X2[train_idx] - np.mean(X2[train_idx])
+        y_train_centered = y[train_idx] - np.mean(y[train_idx])
+        
+        base_model = sm.OLS(y_train_centered, sm.add_constant(np.column_stack((X1_train_centered, X2_train_centered)), has_constant='add'))
+        base_results = base_model.fit()
+        
+        # Get residuals on training data
+        y_base_train_pred = base_results.predict(sm.add_constant(np.column_stack((X1_train_centered, X2_train_centered)), has_constant='add'))
+        y_train_residuals = y_train_centered - y_base_train_pred
+        
+        # Get residuals on validation data
+        X1_valid_centered = X1[valid_idx] - np.mean(X1[train_idx])
+        X2_valid_centered = X2[valid_idx] - np.mean(X2[train_idx])
+        y_valid_centered = y[valid_idx] - np.mean(y[train_idx])
+        y_base_valid_pred = base_results.predict(sm.add_constant(np.column_stack((X1_valid_centered, X2_valid_centered)), has_constant='add'))
+        y_valid_residuals = y_valid_centered - y_base_valid_pred
+    except Exception as e:
+        logging.error(f"Error fitting base model for phantom epistasis check for SNPs {snp1}, {snp2}: {e}")
+        return float32_t(-1.0)
+
+    try:
+        X_encoded = encode_cartesian(X1, X2)
+        X_encoded_train_centered = X_encoded[train_idx] - np.mean(X_encoded[train_idx])
+        X_encoded_valid_centered = X_encoded[valid_idx] - np.mean(X_encoded[train_idx])
+        
+        regressor = sm.OLS(y_train_residuals, sm.add_constant(X_encoded_train_centered, has_constant='add'))
+        fit_results = regressor.fit()
+        y_pred = fit_results.predict(sm.add_constant(X_encoded_valid_centered, has_constant='add'))
+        return float32_t(r2_score(y_valid_residuals, y_pred))
+    except Exception as e:
+        logging.error(f"Error evaluating cartesian for SNP pair {snp1}, {snp2}: {e}")
+        return float32_t(-1.0)
+
+
 # ray remote function to apply all the preprocessing steps when evaluating an interaction
 @ray.remote 
 def ray_preprocess_interaction(X1, X2, y, train_idx, valid_idx, full_train_idx, snp1, snp2):
@@ -290,7 +490,7 @@ def ray_preprocess_interaction(X1, X2, y, train_idx, valid_idx, full_train_idx, 
     all_combinations = {(g1, g2) for g1 in [0.0, 0.5, 1.0] for g2 in [0.0, 0.5, 1.0]}
     
     # Check if any combination is missing in the training set
-    full_train_combinations = set(zip(X1[full_train_idx], X2[full_train_idx]))
+    full_train_combinations = set(zip(X1[full_train_idx], X2[full_train_idx])) # checks for genotype combinations of X1 and X2 in the training set
     missing_train = not all_combinations.issubset(full_train_combinations)
     if missing_train:
         failure_code = float32_t(-1.0)  # MLG missing
@@ -340,7 +540,9 @@ def ray_preprocess_interaction(X1, X2, y, train_idx, valid_idx, full_train_idx, 
         
     # Step 3b: Evaluate all 3 encodings inline (no nested ray calls)
     temp_mdr_mapping = None
-    
+    # make a dictionary to hold the r2 scores for each encoding to compare at the end and select the best one. This is needed to avoid code repetition and also to handle the case where all encodings fail.
+    results = {}
+
     # Cartesian encoding
     try:
         X_encoded = encode_cartesian(X1, X2)
@@ -356,10 +558,7 @@ def ray_preprocess_interaction(X1, X2, y, train_idx, valid_idx, full_train_idx, 
         # Score on validation residuals with centered interaction
         y_pred = fit_results.predict(sm.add_constant(X_encoded_valid_centered, has_constant='add'))
         interaction_r2 = r2_score(y_valid_residuals, y_pred)
-        
-        if interaction_r2 > best_r2:
-            best_r2 = float32_t(interaction_r2)
-            best_enc = snp_t('cartesian')
+        results['cartesian'] = (float32_t(interaction_r2), interaction_t(snp1, snp2), snp_t('cartesian'), failure_code, temp_mdr_mapping)
     except Exception as e:
         logging.error(f"Error evaluating cartesian for SNP pair {snp1}, {snp2}: {e}")
 
@@ -378,10 +577,8 @@ def ray_preprocess_interaction(X1, X2, y, train_idx, valid_idx, full_train_idx, 
         # Score on validation residuals with centered interaction
         y_pred = fit_results.predict(sm.add_constant(X_encoded_valid_centered, has_constant='add'))
         interaction_r2 = r2_score(y_valid_residuals, y_pred)
-        
-        if interaction_r2 > best_r2:
-            best_r2 = float32_t(interaction_r2)
-            best_enc = snp_t('xor')
+        results['xor'] = (float32_t(interaction_r2), interaction_t(snp1, snp2), snp_t('xor'), failure_code, temp_mdr_mapping)
+  
     except Exception as e:
         logging.error(f"Error evaluating xor for SNP pair {snp1}, {snp2}: {e}")
 
@@ -405,21 +602,13 @@ def ray_preprocess_interaction(X1, X2, y, train_idx, valid_idx, full_train_idx, 
         # Score on validation residuals with centered interaction
         y_pred = fit_results.predict(sm.add_constant(X_encoded_valid_centered, has_constant='add'))
         interaction_r2 = r2_score(y_valid_residuals, y_pred)
-        
-        if interaction_r2 > best_r2:
-            best_r2 = float32_t(interaction_r2)
-            best_enc = snp_t('mdr')
-            mdr_mapping = temp_mdr_mapping  # Save MDR mapping for best encoding
+        results['mdr'] = (float32_t(interaction_r2), interaction_t(snp1, snp2), snp_t('mdr'), failure_code, temp_mdr_mapping)
+       
     except Exception as e:
         logging.error(f"Error evaluating MDR for SNP pair {snp1}, {snp2}: {e}")
 
-    # Check if best_r2 meets minimum threshold
-    if best_r2 <= 0.004:
-        failure_code = float32_t(-3.0)  # all encodings failed to produce a valid interaction
-    
-    interaction_name = f"{snp1}_{best_enc}_{snp2}" if best_enc is not None else f"{snp1}_none_{snp2}"
 
-    return best_r2, interaction_name, failure_code, best_enc, correlation_r2, mdr_mapping
+    return results
 
 # ray remote function to apply all the preprocessing steps and only evaluating cartesian encoding. This is required for ablation study
 @ray.remote
