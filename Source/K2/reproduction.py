@@ -45,11 +45,13 @@ class K2_Reproduction(Reproduction):
                  m_in_win_p: prob_t = prob_t(.1),
                  m_out_win_p: prob_t = prob_t(.45),
                  m_out_chr_p: prob_t = prob_t(.45),
+                 keep_pair_interactions_p: prob_t = prob_t(.5),
                  window_distance: int32_t = int32_t(1000000)) -> None:
         """
         K2 Reproduction class that extends the Base Reproduction class.
         """
 
+        self.keep_pair_interactions_p = keep_pair_interactions_p
         # pass all variables to the Base Reproduction class
         super().__init__(branch_max=branch_max,
                          branch_min=branch_min,
@@ -64,14 +66,6 @@ class K2_Reproduction(Reproduction):
                          m_out_win_p=m_out_win_p,
                          m_out_chr_p=m_out_chr_p,
                          window_distance=window_distance)
-
-        # # precompute probability arrays for performance
-        # total_m = m_in_win_p + m_out_win_p + m_out_chr_p
-        # self._mutation_type_probs = np.array([m_in_win_p / total_m, m_out_win_p / total_m, m_out_chr_p / total_m])
-        # total_ran_smt = mut_ran_p + mut_smt_p
-        # self._ran_threshold = mut_ran_p / total_ran_smt  # for binary choice optimization
-
-
         return
 
     def generate_random_pipeline(self, rng: rng_t, branches: Set, seed: int) -> Pipeline:
@@ -189,41 +183,55 @@ class K2_Reproduction(Reproduction):
 
         return offspring
 
-    def mutate_branch(self, rng: rng_t, branch: snp_t, hub: K2_Hub) -> snp_t:
+    def mutate_branch(self, rng: rng_t, branch: interaction_t, hub: K2_Hub) -> interaction_t:
         """
-        Function to mutate a given anchor branch SNP.
+        Function to mutate a given anchor branch interaction.
 
         Parameters:
             rng (rng_t): A numpy random number generator from the evolver
-            branch (snp_t): The branch SNP to mutate
+            branch (interaction_t): The branch interaction to mutate
             hub: An interface to a branch hub to get branch specific information
 
         Returns:
-            snp_t: The mutated branch SNP
+            interaction_t: The mutated branch interaction
         """
 
         # quick checks
         assert hub.get_active_flag(branch), "Anchor branch must be active in the hub to mutate"
-        assert '.' in branch, "Anchor branch SNP must be in the format 'chrom.pos'"
 
+        mutation_type = None  # for timing purposes
+        pair = None
         start_time = time.time()
-        r = rng.random()
-        # perform mutation based on type
-        if r < self.m_in_win_p:
-            result = hub.get_ran_snp_in_window(branch, rng)
-            mutation_type = 'in_window'
-        elif r < self.m_out_win_p + self.m_in_win_p:
-            result = hub.get_ran_snp_in_chrm(branch, rng)
-            mutation_type = 'out_window'
-        else: # out_chrom
-            result = hub.get_ran_snp_out_chrm(branch, rng)
-            mutation_type = 'out_chrom'
+
+        # roll to see if we are keeping pair interactions (if the branch is an interaction) or not
+        if self.keep_pair_interactions_p < rng.random():
+            # roll to pick which snp in the interaction we want to keep
+            anchor_snp = rng.choice(list(branch))
+
+            # perform mutation based on type
+            r = rng.random()
+            if r < self.m_in_win_p:
+                result = hub.get_ran_snp_in_window(anchor_snp, rng)
+                mutation_type = 'in_window'
+            elif r < self.m_out_win_p + self.m_in_win_p:
+                result = hub.get_ran_snp_in_chrm(anchor_snp, rng)
+                mutation_type = 'out_window'
+            else: # out_chrom
+                result = hub.get_ran_snp_out_chrm(anchor_snp, rng)
+                mutation_type = 'out_chrom'
+
+            assert result != anchor_snp, f"Mutated SNP should not be the same as the anchor SNP. Got result: {result} and anchor_snp: {anchor_snp}"
+            pair = (anchor_snp, result) if anchor_snp < result else (result, anchor_snp)  # maintain sorted order in interaction
+        else:
+            # return a completely random interaction from the hub
+            pair = hub.get_ran_interaction(rng)
+            mutation_type = 'new_pair'
 
         # Record timing
         elapsed_time = time.time() - start_time
         self.mutation_timings[mutation_type].append(elapsed_time)
 
-        return result
+        return pair
 
     def crossover(self, rng: rng_t, parent1: Pipeline, parent2: Pipeline, hub: K2_Hub) -> Pipeline:
         """
@@ -261,7 +269,6 @@ class K2_Reproduction(Reproduction):
 
         # convert to list once (cached for both random and smart crossover)
         combined_list = list(combined_branches)
-
 
         return Pipeline(branch_set=set(rng.choice(combined_list, size=num_branches, replace=False)),
                             ld_node=cp.deepcopy(parent1.ld_node if rng.random() < 0.5 else parent2.ld_node),

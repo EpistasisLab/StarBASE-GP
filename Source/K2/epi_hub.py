@@ -38,7 +38,6 @@ class K2_Hub(Hub):
             # {snp: [idx, ori_rid]}
             self.hub = {}
 
-        # will add snp, idx, ori_rid to the hub
         def add_interaction_to_hub(self,
                        interaction: interaction_t,
                        r2: float32_t,
@@ -64,7 +63,6 @@ class K2_Hub(Hub):
             self.hub[interaction] = [r2, enc_rid, enc_x, gen_seen, active, pager_lut]
             return
 
-        # getters for all interaction information
         def get_r2(self, interaction: interaction_t) -> float32_t:
             # assert that interaction is in hub
             assert interaction in self.hub
@@ -396,25 +394,25 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
 
     def get_ran_snp_in_window(self, anchor: snp_t, rng: rng_t) -> snp_t:
         """
-        Get a random SNP from the same chromosome and within the specified window distance.
+        Get a random SNP from the same chromosome and within the specified neighbor set in SNP_DB.
 
         Args:
             anchor (snp_t): Anchor SNP in "chromosome.position" format.
             rng (rng_t): Numpy random generator.
-            in_window (List[int32_t]): List of positions within the window distance.
 
         Returns:
-            snp_t: A randomly selected SNP from the same chromosome and within the specified window distance
+            snp_t: A randomly selected SNP from the same chromosome and within the specified neighbor set in SNP_DB
         """
 
         # make sure there is a '-' inside the snp string
         assert '.' in anchor
 
-        # break snp into chromosome and position
-        chrom, pos = snp_chrm_pos(anchor)
+        # get neibhors for the anchor snp from the snp hub
+        neighbors = self.snp_db.get_neighbors(anchor)
+        assert len(neighbors) > 0, f"Anchor SNP {anchor} should have at least one neighbor in the SNP_DB to get a random SNP in the window. Got neighbors: {neighbors}"
 
         # roll a random snp from the list of snps
-        return self.consider.get_nearest_neighbor(chrom, anchor, rng)
+        return rng.choice(neighbors)
 
     def get_ran_snp_in_chrm(self, anchor: snp_t, rng: rng_t) -> snp_t:
         """
@@ -459,9 +457,9 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         # roll a random snp from the list of snps
         return self.consider.get_ran_snp_out_chrm(chrom, rng)
 
-    def get_active_flag(self, snp: snp_t) -> bool:
-        # is this snp active?
-        return self.db.get_active_flag(snp)
+    def get_active_flag(self, interaction: interaction_t) -> bool:
+        # is this interaction active?
+        return self.epi_db.get_active(interaction)
 
     #todo: what do we want to store in the hub?
     def process_pruned_interactions(self, interactions: Set[interaction_t], snp_details_after_ld: Dict[snp_t, Dict], gen_pruned: int16_t) -> None:
@@ -513,22 +511,6 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         total_time = time.time() - process_start
         print(f"[Timing] process_pruned_interactions completed: Flip flags={flip_total:.4f}s, Add LD details={add_details_total:.4f}s, Remove from consider={remove_total:.4f}s, Total={total_time:.4f}s", flush=True)
 
-    def generate_r2_dict(self, snps: Set[snp_t]) -> List:
-        """
-        Generate a dictionary of SNPs and their corresponding r2 values.
-
-        Args:
-            snps (Set[snp_t]): Set of SNPs to generate r2 values for.
-
-        Returns:
-            List: A list of tuples containing SNPs and their r2 values.
-        """
-
-        # make sure
-        assert len(snps) > 0
-
-        return [(snp, self.get_r2(snp)) for snp in snps]
-
     def at_least_one_active_snp(self, snps: List[snp_t]) -> bool:
         """
         Function to check if at least one snp in the list is active.
@@ -550,10 +532,6 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
     def consideration_hub_size(self) -> uint32_t:
         # print size of consideration hub
         return self.consider.get_total()
-
-    def get_keys_with_snps(self) -> List[int32_t]:
-        # get chromosomes with snps in consideration hub
-        return self.consider.get_keys_with_snps()
 
     def get_snp_ori_ray_id(self, snp: snp_t) -> ray.ObjectID:
         # get original feature from the snp hub (ray id)

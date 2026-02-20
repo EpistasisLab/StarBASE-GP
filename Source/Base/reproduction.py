@@ -51,7 +51,8 @@ class Reproduction(ABC):
         self.mutation_timings: Dict[str, List[float]] = {
             'in_window': [],
             'out_window': [],
-            'out_chrom': []
+            'out_chrom': [],
+            'new_pair': []
         }
 
         return
@@ -104,7 +105,7 @@ class Reproduction(ABC):
                           hub: Hub,
                           offspring_cnt: uint32_t,
                           population: List[Pipeline],
-                          parent_ids: List[uint32_t], # should be 
+                          parent_ids: List[uint32_t], # should be
                           order: List[snp_t]) -> List[Pipeline]:
         """
         Generate offspring pipelines based on the given order of variation operations.
