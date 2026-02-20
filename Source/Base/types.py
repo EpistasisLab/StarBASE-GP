@@ -5,6 +5,7 @@
 #####################################################################################################
 
 import numpy as np
+from typing import Tuple
 
 # float type: used for r2 scores, distances
 float32_t = np.float32
@@ -34,4 +35,4 @@ prob_t = np.float64
 snp_t = np.str_
 
 # Interaction type
-interaction_t = tuple(np.str_, np.str_)
+interaction_t = Tuple[np.str_, np.str_]

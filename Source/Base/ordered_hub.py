@@ -19,62 +19,6 @@ class Ordered_Hub:
         self.order = {}
         return
 
-    # def get_in_window_positions(self, chrom: int32_t, position: int32_t, idx: int32_t, left_idx: int32_t, right_idx: int32_t) -> List[int32_t]:
-    #     """
-    #     Given an anchor SNP's chromosome number and position, return all positions within the left index and right index.
-    #     Remove the original position from the in window list.
-
-    #     Args:
-    #         chrom (int32_t): chromosome number for the SNP
-    #         position (int32_t): base pair position for the SNP
-    #         idx (int32_t): index of the SNP in the ordered list for the chromosome (hub tracks this)
-    #         left_idx (int32_t): left index in the ordered list that falls within the given distance from the SNP position (hub tracks this)
-    #         right_idx (int32_t): right index in the ordered list that falls within the given distance from the SNP position (hub tracks this)
-    #     Returns:
-    #         List[int32_t]: List of positions within the left and right indices, excluding the original position.
-    #     """
-
-    #     assert chrom in self.order
-    #     assert 0 <= idx < len(self.order[chrom])
-    #     assert self.order[chrom][idx] == position, "Position does not match the index provided."
-    #     assert 0 <= left_idx <= idx
-    #     assert idx <= right_idx < len(self.order[chrom])
-    #     assert left_idx <= right_idx
-
-    #     # Optimize: directly construct the list without the anchor position
-    #     # Split at idx to avoid the position, then concatenate
-    #     chrom_order = self.order[chrom]
-    #     result = chrom_order[left_idx:idx]
-    #     result += chrom_order[idx + 1:right_idx + 1]
-    #     return result
-
-    # def get_out_window_positions(self, chrom: int32_t, position: int32_t, idx: int32_t, left_idx: int32_t, right_idx: int32_t) -> List[int32_t]:
-    #     """
-    #     Given an anchor SNP's chromosome number and position, return all positions outside the left index and right index.
-
-    #     Args:
-    #         chrom (int32_t): chromosome number for the SNP
-    #         position (int32_t): base pair position for the SNP
-    #         idx (int32_t): index of the SNP in the ordered list for the chromosome (hub tracks this)
-    #         left_idx (int32_t): left index in the ordered list that falls within the given distance from the SNP position (hub tracks this)
-    #         right_idx (int32_t): right index in the ordered list that falls within the given distance from the SNP position (hub tracks this)
-    #     Returns:
-    #         List[int32_t]: List of positions outside the left and right indices.
-    #     """
-
-    #     assert chrom in self.order
-    #     assert 0 <= idx < len(self.order[chrom])
-    #     assert self.order[chrom][idx] == position, "Position does not match the index provided."
-    #     assert 0 <= left_idx <= idx
-    #     assert idx <= right_idx < len(self.order[chrom])
-    #     assert left_idx <= right_idx
-
-    #     # Optimize: use list concatenation with += for better performance
-    #     chrom_order = self.order[chrom]
-    #     result = chrom_order[0:left_idx]
-    #     result += chrom_order[right_idx + 1:]
-    #     return result
-
     def count_order_objs(self) -> uint32_t:
         """
         Count the total number of objects in the order dictionary.

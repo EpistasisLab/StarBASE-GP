@@ -117,7 +117,7 @@ class K2_Evolver(EA):
 
         # initialize the hubs
         hub_create_start = time.time()
-        self.hub = K2_Hub(snp_list=self.snp_labels, snps_ray_ids=feature_ray_ids, window_distance=self.window_distance)
+        self.hub = K2_Hub(snp_list=self.snp_labels, snps_ray_ids=feature_ray_ids)
         hub_create_time = time.time() - hub_create_start
 
         total_hub_time = time.time() - hub_init_start
@@ -152,9 +152,9 @@ class K2_Evolver(EA):
 
         # print initial hub stats
         print('Initial Hub details:')
-        self.hub.seen_snps_proportion()
+        self.hub.seen_interactions_count()
         print('', flush=True)
-        # list to store the generation details - front zero size, still consider snp set size, number of snps pruned
+        # list to store the generation details - front zero size, still consider interaction set size, number of snps pruned
         generation_details = []
         # create the initial population
         print('Initializing population...', flush=True)
@@ -186,7 +186,7 @@ class K2_Evolver(EA):
                 count = 1
             pareto_time = time.time() - pareto_start
             print(f'Size of Pareto Front: {count} (computed in {pareto_time:.4f}s)', flush=True)
-            self.hub.seen_snps_proportion()  # count the number of unseen snps after each generation
+            self.hub.seen_interactions_count()  # count the number of seen interactions after each generation
 
             # Initialize generation stats dictionary (will be updated after evaluation)
             gen_stats = {
@@ -318,28 +318,19 @@ class K2_Evolver(EA):
         pop_branch_sets = []
         # container to hold newly found branches to avoid duplicate work
         unseen_branches = set()
-        # get list of chormosomes with available snps
-        chomosome_list = self.hub.get_keys_with_snps()
 
         # create initial set of branch sets to integrate within pipelines
         sampling_start = time.time()
         while len(pop_branch_sets) < self.pop_size:
             # current set of branches - set of tuples where each tuple is (snp1, snp2) for an interaction branch
             branches = set()
-            # generate sampling list for chromosomes
-            sampling_list = self.get_sampling(cnt=2*self.branch_max, chrom_num=uint16_t(len(chomosome_list))) # 2*branch max as we will be making interactions where we need 2 snps per branch 
-            # shuffle chromosome list
-            self.rng.shuffle(chomosome_list)
-            # randomly sample chromosomes based on the sampling list and then randomly sample snp pairs from those chromosomes
-            snp1_chrom, snp2_chrom = self.rng.choice(sampling_list, size=2, replace=True)
-            snp_1 = self.hub.get_random_snp_pair_from_chromosome(chrom=snp1_chrom, rng=self.rng)
-            snp_2 = self.hub.get_random_snp_pair_from_chromosome(chrom=snp2_chrom, rng=self.rng)
-            
-            if snp_1 is not None and snp_2 is not None:
-                branches.add((snp_1, snp_2)) # modified for epistasis - adding tuple of snp pairs as a branch instead of individual snps
-            if len(branches) >= self.branch_max:
-                break
-            
+
+            while len(branches) < self.branch_max:
+                # sample a random interaction from the hub
+                interaction = self.hub.get_ran_interaction(self.rng)
+                # add the interaction to the branch set
+                branches.add(interaction)
+
             assert len(branches) == self.branch_max, "Number of branches in initial pipeline does not match branch_max."
 
             # update unseen branches with all new branches
@@ -426,8 +417,8 @@ class K2_Evolver(EA):
 
         # Global data structures to accumulate results across batches
         pipeline_evaluation_details = {}
-        pruned_snps = set()
-        snp_details_per_snp = {}
+        pruned_interactions = set()
+        interactions_details_per_interaction = {}
 
         # Batch size for processing
         batch_size = 1000
@@ -457,19 +448,17 @@ class K2_Evolver(EA):
                 # Check if LD pruning should be applied:
                 # 1. ld_flag must be True
                 # 2. Pipeline must contain SNPs from the same chromosome
-                if self.ld_flag and self.snps_on_the_same_chromosome(pipeline.branch_set):
-                    ray_jobs.append(ray_utils.ray_eval_pipeline_ld_fs.remote(snp_names=[snp for snp in pipeline.get_branch_set()],
-                                                                             x_train_ori=[self.hub.get_ori_ray_id(snp) for snp in pipeline.get_branch_set()],
-                                                                             x_train_enc=[self.hub.get_enc_ray_id(snp) for snp in pipeline.get_branch_set()],
+                if self.ld_flag:
+                    ray_jobs.append(ray_utils.ray_eval_pipeline_ld_fs.remote(component_map=self.hub.build_component_map(pipeline.get_branch_set()),
                                                                              y_train=self.all_y_ray_id,
                                                                              train_idx=self.train_idx_ray,
                                                                              selector_node=pipeline.get_selector_node(),
                                                                              ld_node=pipeline.get_ld_node(),
                                                                              pop_id=uint32_t(global_id),
-                                                                             snp_r2_set=self.hub.generate_r2_dict(pipeline.get_branch_set())))
+                                                                             interaction_r2_set=self.hub.generate_r2_set(pipeline.get_branch_set())))
                     pipeline_evaluation_details[global_id][snp_t('ld_used')] = True
                 # else, no need for ld pruner (either ld_flag is False or SNPs are not on same chromosome)
-                else:
+                else: # todo: should this still be here?
                     ray_jobs.append(ray_utils.ray_eval_pipeline_fs.remote(snp_names=[snp for snp in pipeline.get_branch_set()],
                                                                          x_train_enc=[self.hub.get_enc_ray_id(snp) for snp in pipeline.get_branch_set()],
                                                                          y_train=self.all_y_ray_id,
@@ -495,14 +484,18 @@ class K2_Evolver(EA):
 
                 # Track if this was an LD job (has ld_details)
                 if ld_details is not None and len(ld_details) > 0:
-                    # update the pruned snps based on the snp details after LD
-                    for snp, details in ld_details.items():
+                    # update the pruned interactions based on the interaction details after LD
+                    for interaction, details in ld_details.items():
                         if details['pruned'] == True:
-                            pruned_snps.add(snp)
-                            snp_details_per_snp[snp] = details
+                            pruned_interactions.add(interaction)
+                            interactions_details_per_interaction[interaction] = details
 
             ld_fs_time = time.time() - ld_fs_start
             total_ld_fs_time += ld_fs_time
+
+            # print pipeline_evaluation_details for the current batch for debugging
+            for i in range(start_idx, end_idx):
+                print(f"Pipeline {i}: error={pipeline_evaluation_details[i][snp_t('error')]}, feature_cnt={pipeline_evaluation_details[i][snp_t('feature_cnt')]}, ld_used={pipeline_evaluation_details[i][snp_t('ld_used')]}", flush=True)
 
             # send pipelines with no error to be evaluated for r2 across k-folds (only pipelines with error == False)
             r2_job_start = time.time()
@@ -513,7 +506,7 @@ class K2_Evolver(EA):
 
                 # create a ray job for each of the folds
                 for _, fold_data in self.train_fold_dict_ray.items():
-                    ray_jobs.append(ray_utils.ray_eval_pipeline_r2.remote(X = [self.hub.get_enc_ray_id(snp) for snp in pipeline_evaluation_details[i][snp_t('features')]],
+                    ray_jobs.append(ray_utils.ray_eval_pipeline_r2.remote(component_map=self.hub.build_component_map(pipeline.get_branch_set()),
                                                                           y = self.all_y_ray_id,
                                                                           train_idx = fold_data['train_idx'],
                                                                           valid_idx = fold_data['val_idx'],
@@ -535,15 +528,16 @@ class K2_Evolver(EA):
             r2_eval_time = time.time() - r2_eval_start
             total_r2_eval_time += r2_eval_time
 
-        # if self.ld_flag is False, pruned_snps should be empty
-        assert (len(pruned_snps) == 0) if self.ld_flag == False else True, "Pruned SNPs should be empty when LD flag is False."
-        print(f"  - Total LD/FS processing: {total_ld_fs_time:.4f}s ({total_ld_fs_time/60:.2f} mins), pruned {len(pruned_snps)} SNPs", flush=True)
+        # if self.ld_flag is False, pruned_interactions should be empty
+        assert (len(pruned_interactions) == 0) if self.ld_flag == False else True, "Pruned interactions should be empty when LD flag is False."
+        print(f"  - Total LD/FS processing: {total_ld_fs_time:.4f}s ({total_ld_fs_time/60:.2f} mins), pruned {len(pruned_interactions)} interactions", flush=True)
 
-        # update hubs with prunned snps info
+        # update hubs with prunned interactions info
         hub_update_start = time.time()
-        self.hub.process_pruned_snps(pruned_snps, snp_details_per_snp, gen_info)
+        #todo: what we doing here tho?
+        self.hub.process_pruned_interactions(pruned_interactions, interactions_details_per_interaction, gen_info)
         hub_update_time = time.time() - hub_update_start
-        print(f"  - Hub pruned SNP updates: {hub_update_time:.4f}s", flush=True)
+        print(f"  - Hub pruned interaction updates: {hub_update_time:.4f}s", flush=True)
 
         # will hold the evaluated pipelines that passed evaluation
         evaluated_pipelines : List[Pipeline] = []
@@ -600,72 +594,49 @@ class K2_Evolver(EA):
         assert gen_info >= 0, "Generation info must be non-negative."
 
         print('Processing offspring pipelines: evaluating unseen branches and removing inactive branches...', flush=True)
-        # collect all snps from each pipeline and send to hub to find unseen snps
-        all_snps = set()
+        # collect all interactions from each pipeline and send to hub to find unseen interactions
+        all_interactions = set()
         for pipeline in pipelines:
-            all_snps.update(pipeline.get_branch_set())
-        unseen_snps = self.hub.get_unseen_snps(all_snps)
+            all_interactions.update(pipeline.get_branch_set())
+        unseen_interactions = self.hub.get_unseen_interactions(all_interactions)
 
-        # evaluate all unseen snps if we have any to evaluate
-        if len(unseen_snps) > 0:
+        # evaluate all unseen interactions if we have any to evaluate
+        if len(unseen_interactions) > 0:
             # break up unseen_branches into chunks of 2000 to avoid ray overload and then run evaluate_unseen_branches on each chunk
-            unseen_branches_list = list(unseen_snps)
+            unseen_branches_list = list(unseen_interactions)
             for i in range(0, len(unseen_branches_list), 1000):
                 print(f"Evaluating unseen branches chunk {i // 1000 + 1} / {(len(unseen_branches_list) - 1) // 1000 + 1}", flush=True)
                 chunk = set(unseen_branches_list[i:i+1000])
                 self.evaluate_unseen_branches(chunk, gen_seen=int16_t(gen_info))
 
-        # offspring pipelines with no good snps
+        # offspring pipelines with no good interactions
         updated_pipelines = []
 
         for pipeline in pipelines:
-            good_snps = self.hub.remove_inactive_branches(pipeline.get_branch_set())
-            if len(good_snps) == 0:
-                # skip this iteration if there are no good snps
+            good_interactions = self.hub.remove_inactive_branches(pipeline.get_branch_set())
+            if len(good_interactions) == 0:
+                # skip this iteration if there are no good interactions
                 continue
 
             updated_pipelines.append(Pipeline(
-                branch_set=good_snps,
+                branch_set=good_interactions,
                 selector_node=pipeline.get_selector_node(),
                 ld_node=pipeline.get_ld_node()
             ))
         return updated_pipelines
 
-    def snps_on_the_same_chromosome(self, branch_set: Set[snp_t]) -> bool:
-        """
-        Function to check if a branch set has SNPs on the same chromosome.
-
-        Parameters:
-            branch_set (Set[snp_t]): Set of SNPs to check.
-
-        Returns:
-            bool: True if any SNPs are on the same chromosome, False otherwise.
-        """
-        assert len(branch_set) > 0, "Branch set must not be empty."
-        assert len(branch_set) <= self.branch_max, "Branch set size exceeds maximum allowed branches."
-        assert all(isinstance(snp, snp_t) for snp in branch_set), "All elements in branch set must be of type snp_t."
-        assert all('.' in snp for snp in branch_set), "All SNPs must be in the format 'chrom.pos'."
-
-        chromosomes = set()
-        for snp in branch_set:
-            chrom, _ = snp_chrm_pos(snp)
-            if chrom in chromosomes:
-                return True
-            chromosomes.add(chrom)
-        return False
-
     # modified for epistasis - optimized with two-stage evaluation
-    def evaluate_unseen_branches(self, unseen_branches: Set[snp_t], gen_seen: int16_t) -> None:
+    def evaluate_unseen_branches(self, unseen_branches: Set[interaction_t], gen_seen: int16_t) -> None:
         """
         Function to evaluate all unseen branches and add their best R2 and Encoder type to the Hub.
         Uses two-stage approach:
         1. Pre-screen interactions (MLG + Pearson correlation) - once per interaction
         2. Evaluate encodings on CV folds - only for interactions that pass pre-screening
-        
+
         This minimizes Ray overhead by avoiding redundant checks across CV folds.
 
         Parameters:
-            unseen_branches (Set[snp_t]): Set of unseen branch tuples (SNP1, SNP2).
+            unseen_branches (Set[interaction_t]): Set of unseen branch tuples (SNP1, SNP2).
             gen_seen (int16_t): Generation number when these branches were first seen.
         """
 
@@ -680,45 +651,45 @@ class K2_Evolver(EA):
         print("  [Step 1] Pre-screening interactions (MLG + Pearson correlation)...", flush=True)
         prescreen_start = time.time()
         prescreen_jobs = []
-        
+
         for snp_pair in unseen_branches:
             snp_1, snp_2 = snp_pair
             assert isinstance(snp_1, snp_t), "SNP must be of type snp_t."
             assert isinstance(snp_2, snp_t), "SNP must be of type snp_t."
-            
-            X1 = self.hub.get_ori_ray_id(snp_1)
-            X2 = self.hub.get_ori_ray_id(snp_2)
-            
+
+            X1 = self.hub.get_snp_ori_ray_id(snp_1)
+            X2 = self.hub.get_snp_ori_ray_id(snp_2)
+
             job = ray_utils.ray_prescreen_interaction.remote(
                 X1, X2, self.train_idx_ray, snp_1, snp_2
             )
             prescreen_jobs.append((job, snp_pair))
-        
+
         # Process pre-screening results
         passed_interactions = {}  # snp_pair -> correlation_r2
         failed_interactions = {}  # snp_pair -> (failure_code, correlation_r2)
-        
+
         while len(prescreen_jobs) > 0:
             done, _ = ray.wait([job[0] for job in prescreen_jobs], num_returns=1)
             job_idx = [job[0] for job in prescreen_jobs].index(done[0])
             snp_pair = prescreen_jobs[job_idx][1]
-            
+
             pass_flag, failure_code, correlation_r2 = ray.get(done[0])
-            
+
             if pass_flag:
                 passed_interactions[snp_pair] = correlation_r2
             else:
                 failed_interactions[snp_pair] = (failure_code, correlation_r2)
-            
+
             prescreen_jobs = [prescreen_jobs[i] for i in range(len(prescreen_jobs)) if i != job_idx]
-        
+
         prescreen_time = time.time() - prescreen_start
         print(f"    Pre-screening complete: {len(passed_interactions)} passed, {len(failed_interactions)} failed ({prescreen_time:.2f}s)", flush=True)
-        
+
         # STEP 2: Evaluate encodings for passed interactions
         print("  [Step 2] Evaluating encodings for passed interactions...", flush=True)
         encoding_eval_start = time.time()
-        
+
         # Initialize results structure
         inter_perf = {}
         for snp_pair in unseen_branches:
@@ -732,16 +703,16 @@ class K2_Evolver(EA):
                 'avg_r2': float32_t(-1.0),
                 'best_enc': None
             }
-        
+
         # Create encoding evaluation jobs only for passed interactions
         encoding_jobs = []
         if self.encoding_flag:
             # Evaluate all encodings (cartesian, xor, mdr)
             for snp_pair in passed_interactions:
                 snp_1, snp_2 = snp_pair
-                X1 = self.hub.get_ori_ray_id(snp_1)
-                X2 = self.hub.get_ori_ray_id(snp_2)
-                
+                X1 = self.hub.get_snp_ori_ray_id(snp_1)
+                X2 = self.hub.get_snp_ori_ray_id(snp_2)
+
                 for _, fold_data in self.train_fold_dict_ray.items():
                     job = ray_utils.ray_evaluate_interaction_encodings.remote(
                         X1, X2, self.all_y_ray_id,
@@ -753,9 +724,9 @@ class K2_Evolver(EA):
             # Evaluate only cartesian encoding (ablation study)
             for snp_pair in passed_interactions:
                 snp_1, snp_2 = snp_pair
-                X1 = self.hub.get_ori_ray_id(snp_1)
-                X2 = self.hub.get_ori_ray_id(snp_2)
-                
+                X1 = self.hub.get_snp_ori_ray_id(snp_1)
+                X2 = self.hub.get_snp_ori_ray_id(snp_2)
+
                 for _, fold_data in self.train_fold_dict_ray.items():
                     job = ray_utils.ray_evaluate_interaction_cartesian_fold.remote(
                         X1, X2, self.all_y_ray_id,
@@ -763,15 +734,15 @@ class K2_Evolver(EA):
                         snp_1, snp_2
                     )
                     encoding_jobs.append((job, snp_pair))
-        
+
         print(f"    Created {len(encoding_jobs)} encoding evaluation jobs ({len(passed_interactions)} interactions × {self.k} folds)", flush=True)
-        
+
         # Process encoding evaluation results
         while len(encoding_jobs) > 0:
             done, _ = ray.wait([job[0] for job in encoding_jobs], num_returns=1)
             job_idx = [job[0] for job in encoding_jobs].index(done[0])
             snp_pair = encoding_jobs[job_idx][1]
-            
+
             if self.encoding_flag:
                 results, mdr_mapping = ray.get(done[0])
                 inter_perf[snp_pair]['cartesian_r2_folds'].append(results['cartesian'])
@@ -782,23 +753,23 @@ class K2_Evolver(EA):
             else:
                 cartesian_r2 = ray.get(done[0])
                 inter_perf[snp_pair]['cartesian_r2_folds'].append(cartesian_r2)
-            
+
             encoding_jobs = [encoding_jobs[i] for i in range(len(encoding_jobs)) if i != job_idx]
-        
+
         encoding_eval_time = time.time() - encoding_eval_start
         print(f"    Encoding evaluation complete ({encoding_eval_time:.2f}s, {encoding_eval_time/60:.2f} mins)", flush=True)
-        
+
         # STEP 3: Aggregate results and select best encoding
         print("  [Step 3] Aggregating results and selecting best encodings...", flush=True)
         aggregate_start = time.time()
-        
+
         for snp_pair in passed_interactions:
             if self.encoding_flag:
                 # Average R2 across folds for each encoding
                 avg_cartesian = np.mean([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0])if len([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
                 avg_xor = np.mean([r2 for r2 in inter_perf[snp_pair]['xor_r2_folds'] if r2 > 0]) if len([r2 for r2 in inter_perf[snp_pair]['xor_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
                 avg_mdr = np.mean([r2 for r2 in inter_perf[snp_pair]['mdr_r2_folds'] if r2 > 0]) if len([r2 for r2 in inter_perf[snp_pair]['mdr_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
-                
+
                 # Select best encoding
                 best_r2 = max(avg_cartesian, avg_xor, avg_mdr)
                 if best_r2 == avg_cartesian:
@@ -807,7 +778,7 @@ class K2_Evolver(EA):
                     best_enc = snp_t('xor')
                 else:
                     best_enc = snp_t('mdr')
-                
+
                 inter_perf[snp_pair]['avg_r2'] = float32_t(best_r2)
                 inter_perf[snp_pair]['best_enc'] = best_enc
             else:
@@ -815,69 +786,69 @@ class K2_Evolver(EA):
                 avg_cartesian = np.mean([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0]) if len([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
                 inter_perf[snp_pair]['avg_r2'] = float32_t(avg_cartesian)
                 inter_perf[snp_pair]['best_enc'] = snp_t('cartesian')
-            
+
             # Check threshold
             if inter_perf[snp_pair]['avg_r2'] <= 0.004:
                 inter_perf[snp_pair]['failure_code'] = float32_t(-3.0)  # Phantom epistasis
-        
+
         aggregate_time = time.time() - aggregate_start
         print(f"    Aggregation complete ({aggregate_time:.2f}s)", flush=True)
-        
+
         # STEP 4: Create encoding jobs for interactions above threshold
         print("  [Step 4] Creating encoding jobs for interactions above threshold...", flush=True)
         encoding_job_start = time.time()
-        
+
         encoding_jobs = []
         interactions_to_encode = []
-        
+
         for snp_pair in passed_interactions:
             if inter_perf[snp_pair]['avg_r2'] >= self.branch_explainability_threshold:
                 interactions_to_encode.append(snp_pair)
                 snp_1, snp_2 = snp_pair
-                X1 = self.hub.get_ori_ray_id(snp_1)
-                X2 = self.hub.get_ori_ray_id(snp_2)
+                X1 = self.hub.get_snp_ori_ray_id(snp_1)
+                X2 = self.hub.get_snp_ori_ray_id(snp_2)
                 best_enc = inter_perf[snp_pair]['best_enc']
-                
+
                 # Create the interaction name with best encoding
                 interaction_name = f"{snp_1}_{best_enc}_{snp_2}"
-                
+
                 # Use ray_interaction_encoder to encode the full dataset
                 job = ray_utils.ray_interaction_encoder.remote(
                     X1, X2, self.all_y_ray_id,
                     self.train_idx_ray, best_enc, snp_t(interaction_name)
                 )
                 encoding_jobs.append((job, snp_pair))
-        
+
         encoding_job_time = time.time() - encoding_job_start
         print(f"    Created {len(encoding_jobs)} encoding jobs for {len(interactions_to_encode)} interactions ({encoding_job_time:.2f}s)", flush=True)
-        
+
         # Process encoding jobs
         encoding_exec_start = time.time()
         while len(encoding_jobs) > 0:
             done, _ = ray.wait([job[0] for job in encoding_jobs], num_returns=1)
             job_idx = [job[0] for job in encoding_jobs].index(done[0])
             snp_pair = encoding_jobs[job_idx][1]
-            
+
             encoded_data, _ = ray.get(done[0])
             inter_perf[snp_pair]['encoded_data'] = encoded_data
-            
+
             encoding_jobs = [encoding_jobs[i] for i in range(len(encoding_jobs)) if i != job_idx]
-        
+
         encoding_exec_time = time.time() - encoding_exec_start
         print(f"    Encoding execution complete: {len(interactions_to_encode)} interactions encoded ({encoding_exec_time:.2f}s)", flush=True)
-        
+
         # STEP 5: Update hub with results
         print("  [Step 5] Updating hub with interaction results...", flush=True)
         hub_update_start = time.time()
-        
+
         for snp_pair in unseen_branches:
             snp_1, snp_2 = snp_pair
-            
+
             # Put encoded data in Ray store if it exists and above threshold
             encoded_ray_id = None
             if 'encoded_data' in inter_perf[snp_pair] and inter_perf[snp_pair]['avg_r2'] >= self.branch_explainability_threshold:
                 encoded_ray_id = ray.put(inter_perf[snp_pair]['encoded_data'])
-            
+
             # Get MDR mapping for MDR encoding - average across all folds
             mdr_mapping = None
             if inter_perf[snp_pair]['best_enc'] == snp_t('mdr') and len(inter_perf[snp_pair]['mdr_mappings']) > 0:
@@ -885,35 +856,35 @@ class K2_Evolver(EA):
                 # MDR mapping is a dict: {(genotype1, genotype2): value}
                 all_mappings = inter_perf[snp_pair]['mdr_mappings']
                 averaged_mapping = {}
-                
+
                 # Get all unique keys across all folds
                 all_keys = set()
                 for mapping in all_mappings:
                     all_keys.update(mapping.keys())
-                
+
                 # Average the values for each genotype combination
                 for key in all_keys:
                     values = [mapping.get(key, 0.0) for mapping in all_mappings if key in mapping]
                     averaged_mapping[key] = np.mean(values)
-                
+
                 mdr_mapping = averaged_mapping
-            
+
             # Update hub with interaction performance
             # The hub expects the snp_pair tuple and will handle it as an interaction
             # Use pager_lut parameter to pass MDR mapping (reusing existing parameter)
-            self.hub.update_snp_hub_r2_enc(
-                snp=snp_pair,
+            self.hub.add_interaction_to_hub(
+                interaction=snp_pair,
                 r2=inter_perf[snp_pair]['avg_r2'],
-                enc=inter_perf[snp_pair]['best_enc'],
-                enc_x=encoded_ray_id,
+                enc_rid=encoded_ray_id,
+                enc_x=inter_perf[snp_pair]['best_enc'],
                 gen_seen=gen_seen,
-                snp_explainability_threshold=self.branch_explainability_threshold,
+                explainability_threshold=self.branch_explainability_threshold,
                 pager_lut=mdr_mapping  # Reusing pager_lut parameter for MDR mapping-rename it later
             )
-        
+
         hub_update_time = time.time() - hub_update_start
         print(f"    Hub updates complete ({hub_update_time:.2f}s)", flush=True)
-        
+
         # Summary of unseen branch evaluation - time breakdown and results
         total_time = time.time() - unseen_eval_start
         print(f"\n[Timing] Total unseen branch evaluation: {total_time:.2f}s ({total_time/60:.2f} mins)", flush=True)
@@ -923,37 +894,6 @@ class K2_Evolver(EA):
         print(f"  Step 4 (Encode jobs): {encoding_job_time + encoding_exec_time:6.2f}s ({(encoding_job_time + encoding_exec_time)/total_time*100:5.1f}%)", flush=True)
         print(f"  Step 5 (Hub update):  {hub_update_time:6.2f}s ({hub_update_time/total_time*100:5.1f}%)", flush=True)
         print(f"  Results: {len(passed_interactions)} passed, {len(failed_interactions)} failed, {len(interactions_to_encode)} above threshold\n", flush=True)
-
-    def get_sampling(self, cnt:uint16_t, chrom_num:uint16_t) -> npt.NDArray[uint16_t]:
-        """
-        Function to get the sampling list that evenly splits the number of snps to sample from each chromosome.
-        Note that the chrom_num index is mapped to the chromosome keys provided by the hub.
-
-        Parameters:
-            cnt (uint16_t): Total number of snps to sample.
-            chrom_num (uint16_t): Number of chromosomes to sample from.
-
-        Returns:
-            npt.NDArray[uint16_t]: Array of size chrom_num with the number of snps to sample from each chromosome.
-        """
-
-        assert cnt > 0
-        assert chrom_num > 0
-
-        # how many SNPs should each chromosome get
-        sample_num = cnt//chrom_num
-        # how many extra SNPs are needed to complete the count
-        remainder = cnt%chrom_num
-        # create sampling list with the base number of SNPs per chromosome
-        sampling_list = np.full(shape=chrom_num,fill_value=sample_num)
-
-        # distribute the remainder SNPs randomly across chromosomes
-        if remainder > 0:
-            start_idx = self.rng.integers(low=0, high=chrom_num)
-            for i in range(remainder):
-                # Use modulo to wrap around and avoid index errors
-                sampling_list[(start_idx+i) % chrom_num] += 1
-        return sampling_list
 
     def post_analysis_with_good_snps(self):
         """

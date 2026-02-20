@@ -66,18 +66,18 @@ class K1_Hub(Hub):
                 self.hub[chrom] = SortedList(pos_l)
             sort_time = time.time() - sort_start
             print(f"  - Considered Hub sorting and SortedList creation: {sort_time:.4f} seconds", flush=True)
-            
+
             # Cache non-empty chromosomes for O(1) access during mutations
             self._non_empty_chroms = set(self.hub.keys())
             return
-    
+
         def get_nearest_neighbor(self, chrom: int32_t, snp: snp_t, rng: rng_t) -> snp_t:
             """
             Get the nearest neighbor SNP position using the dictionary from the considered hub.
             """
             # safety checks
             assert chrom in self.hub, f"Chromosome {chrom} not found in hub"
-            
+
             if snp not in self.nearest_neighbor_dict:
                 # calculate nearest neighbor and store in dictionary
                 neighbor = self.calculate_nearest_neighbor(chrom, snp_chrm_pos(snp)[1])
@@ -105,23 +105,23 @@ class K1_Hub(Hub):
 
             # safety checks
             assert chrom in self.hub, f"Chromosome {chrom} not found in hub"
-            
+
             # get the sorted list for this chromosome
             pos_list = self.hub[chrom]
             n = len(pos_list)
-            
+
             # position always exists, so bisect_left gives us its exact index
             idx = pos_list.bisect_left(position)
-            
+
             # verify position exists at this index
             assert idx < n and pos_list[idx] == position, f"Position {position} not found in chromosome {chrom}"
-            
+
             # determine valid neighbors
             left_idx = idx - 1
             right_idx = idx + 1
 
             neighbor_list = []
-            
+
             # choose based on which neighbors exist
             if left_idx >= 0 and right_idx < n:
                 # both neighbors exist - randomly choose one
@@ -135,10 +135,10 @@ class K1_Hub(Hub):
             else:
                 # only right neighbor exists
                 neighbor_list = []
-            
+
             # return the chosen neighbor
             return neighbor_list
-        
+
         def clear_nearest_neighbor(self) -> None:
             """
             Clear the nearest neighbor cache dictionary.
@@ -162,22 +162,22 @@ class K1_Hub(Hub):
 
             # make sure the chromosome exists
             assert chrom in self.hub
-            
+
             pos_list = self.hub[chrom]
             n = len(pos_list)
-            
+
             # if only one position, return it
             if n == 1:
                 return snp_t(f'{chrom}.{pos_list[0]}')
-            
+
             # replaced the earlier for loop implementation for efficiency
             # get random index, if it matches position, try adjacent index
             idx = rng.integers(0, n)
             pos = pos_list[idx]
-            
+
             if pos != position:
                 return snp_t(f'{chrom}.{pos}')
-            
+
             # position matched, use next index (wrap around if needed)
             idx = (idx + 1) % n
             return snp_t(f'{chrom}.{pos_list[idx]}')
@@ -223,7 +223,7 @@ class K1_Hub(Hub):
             # remove snp from the list
             # will error if the position does not exist
             self.hub[chrom].remove(pos)
-            
+
             # Update cache if chromosome is now empty
             if len(self.hub[chrom]) == 0:
                 self._non_empty_chroms.discard(chrom)
@@ -1161,39 +1161,3 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
             if self.db.get_active_flag(branch):
                 good_branches.add(branch)
         return good_branches
-
-    def get_in_window_positions(self, snp: snp_t, window_distance: int32_t) -> List[int32_t]:
-        """
-        Get the positions of SNPs within the window of a given SNP.
-
-        Args:
-            snp (snp_t): The SNP for which to get window positions.
-
-        Returns:
-            List[int32_t]: A list of positions within the window of the given SNP.
-        """
-
-        # make sure the snp is in the hub
-        assert snp in self.db.hub
-        # break snp into chromosome and position
-        chrom, pos = snp_chrm_pos(snp)
-        # get all positions in the window
-        return self.consider.get_positions_in_window(chrom, window_distance, pos)
-
-    def get_out_of_window_positions(self, snp: snp_t, window_distance: int32_t) -> List[int32_t]:
-        """
-        Get the positions of SNPs outside the window of a given SNP.
-
-        Args:
-            snp (snp_t): The SNP for which to get out-of-window positions.
-
-        Returns:
-            List[int32_t]: A list of positions outside the window of the given SNP.
-        """
-
-        # make sure the snp is in the hub
-        assert snp in self.db.hub
-        # break snp into chromosome and position
-        chrom, pos = snp_chrm_pos(snp)
-        # get all positions out of the window
-        return self.consider.get_positions_out_of_window(chrom, window_distance, pos)
