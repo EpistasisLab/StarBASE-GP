@@ -45,7 +45,7 @@ class K2_Hub(Hub):
                        enc_x: snp_t | None,
                        gen_seen: int16_t,
                        active: bool,
-                       pager_lut) -> None:
+                       mdr_mapping: Dict[tuple, float32_t] | None) -> None:
             """
             Process Args and add to hub.
 
@@ -56,7 +56,7 @@ class K2_Hub(Hub):
                 (2) enc_x (snp_t): the encoding type for the interaction
                 (3) gen_seen (int16_t): generation in which the interaction was seen
                 (4) active (bool): active value of the interaction
-                (5) pager_lut (Dict[snp_t, int32_t]): lookup table for pager values of each snp in the interaction
+                (5) mdr_mapping (Dict[tuple, float32_t] | None): lookup table for MDR values of each snp in the interaction
                 (6) gen_pruned (int16_t): generation when the interaction was pruned (-1 if not pruned)
                 (7) pruned_reason (str): reason for pruning ("LD" or "CA" or "" if not pruned)
                 (8) ld_threshold (float32_t): LD threshold used for pruning
@@ -65,7 +65,7 @@ class K2_Hub(Hub):
             """
 
             # add to hub with LD pruning fields initialized
-            self.hub[interaction] = [r2, enc_rid, enc_x, gen_seen, active, pager_lut, int16_t(-1), "", float32_t(-1.0), int32_t(-1), ""]
+            self.hub[interaction] = [r2, enc_rid, enc_x, gen_seen, active, mdr_mapping, int16_t(-1), "", float32_t(-1.0), int32_t(-1), ""]
             return
 
         def get_r2(self, interaction: interaction_t) -> float32_t:
@@ -98,10 +98,10 @@ class K2_Hub(Hub):
             # return active value
             return self.hub[interaction][4]
 
-        def get_pager_lut(self, interaction: interaction_t) -> Dict[snp_t, int32_t] | None:
+        def get_mdr_mapping(self, interaction: interaction_t) -> Dict[tuple, float32_t] | None:
             # assert that interaction is in hub
             assert interaction in self.hub
-            # return pager lut
+            # return mdr mapping
             return self.hub[interaction][5]
 
         def does_interaction_exist(self, interaction: interaction_t) -> bool:
@@ -263,7 +263,7 @@ class K2_Hub(Hub):
                        enc_x: snp_t | None,
                        gen_seen: int16_t,
                        explainability_threshold: float32_t,
-                       pager_lut) -> None:
+                       mdr_mapping) -> None:
         """
         Update SNP hub with the r2 and encoding type & vector (if applicable).
 
@@ -274,7 +274,7 @@ class K2_Hub(Hub):
             enc_x (snp_t): The encoding type for the interaction.
             gen_seen (int16_t): Generation when the interaction was seen.
             explainability_threshold (float32_t): Threshold for SNP explainability.
-            pager_lut (np.ndarray | None): PAGER LUT values if encoding is 'pager'.
+            mdr_mapping (Dict | None): MDR mapping values if encoding is 'mdr'.
         """
 
         # if r2 is below the explainability threshold and the threshold is non-negative, add hub with active flag
@@ -284,7 +284,7 @@ class K2_Hub(Hub):
                                            enc_x=enc_x,
                                            gen_seen=gen_seen,
                                            active=False if r2 < explainability_threshold and explainability_threshold >= float32_t(0.0) else True,
-                                           pager_lut=pager_lut)
+                                           mdr_mapping=mdr_mapping)
         return
 
     def get_encoding(self, interaction: interaction_t) -> snp_t:

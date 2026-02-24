@@ -126,77 +126,6 @@ def encode_mdr(X1, X2, y=None):
 
     return out, mdr, mapping
 
-# # ray function to evaluate all encodings for a pair of snps in one call to reduce ray scheduling overhead
-# @ray.remote
-# def ray_interaction_eval_all_encodings(X1, X2, y, train_idx, valid_idx, snp):
-#     """
-#     Evaluate all 3 encoding types for a pair of SNPs in one Ray call.
-#     This dramatically reduces Ray scheduling overhead by batching all encodings together.
-
-#     For MDR: Builds mapping from training data, applies to validation.
-#     For Cartesian/XOR: Direct encoding on full dataset.
-
-#     Returns:
-#         Dict[str, Tuple[float, str, str, float, dict|None]]:
-#             Dictionary mapping encoding name to (r2_score, snp, encoding, error_flag, mdr_mapping)
-#             mdr_mapping is only populated for 'mdr' encoding, None for others
-#     """
-#     assert isinstance(X1, np.ndarray), "X1 should be a numpy array"
-#     assert isinstance(X2, np.ndarray), "X2 should be a numpy array"
-
-#     results = {}
-
-#     # Cartesian encoding
-#     try:
-#         X_encoded = encode_cartesian(X1, X2)
-
-#         # Fit OLS model on training data
-#         regressor = sm.OLS(y[train_idx], sm.add_constant(X_encoded[train_idx], has_constant='add'))
-#         fit_results = regressor.fit()
-
-#         # Score on validation set
-#         y_pred = fit_results.predict(sm.add_constant(X_encoded[valid_idx], has_constant='add'))
-#         score = r2_score(y[valid_idx], y_pred)
-
-#         results['cartesian'] = (float32_t(score), snp, snp_t('cartesian'), float32_t(1.0), None)
-#     except Exception as e:
-#         logging.error(f"Error evaluating cartesian for SNP {snp}: {e}")
-#         results['cartesian'] = (float32_t(0.0), snp, snp_t('cartesian'), float32_t(-1.0), None)
-
-#     # XOR encoding
-#     try:
-#         X_encoded = encode_xor(X1, X2)
-
-#         # Fit OLS model on training data
-#         regressor = sm.OLS(y[train_idx], sm.add_constant(X_encoded[train_idx], has_constant='add'))
-#         fit_results = regressor.fit()
-
-#         # Score on validation set
-#         y_pred = fit_results.predict(sm.add_constant(X_encoded[valid_idx], has_constant='add'))
-#         score = r2_score(y[valid_idx], y_pred)
-#         results['xor'] = (float32_t(score), snp, snp_t('xor'), float32_t(1.0), None)
-#     except Exception as e:
-#         logging.error(f"Error evaluating xor for SNP {snp}: {e}")
-#         results['xor'] = (float32_t(0.0), snp, snp_t('xor'), float32_t(-1.0), None)
-
-#     # MDR encoding
-#     try:
-#         X_encoded, mapping = encode_mdr(X1, X2, y)
-
-#         # Fit OLS model on training data
-#         regressor = sm.OLS(y[train_idx], sm.add_constant(X_encoded[train_idx], has_constant='add'))
-#         fit_results = regressor.fit()
-
-#         # Score on validation set
-#         y_pred = fit_results.predict(sm.add_constant(X_encoded[valid_idx], has_constant='add'))
-#         score = r2_score(y[valid_idx], y_pred)
-
-#         results['mdr'] = (float32_t(score), snp, snp_t('mdr'), float32_t(1.0), mapping)
-#     except Exception as e:
-#         logging.error(f"Error evaluating MDR for SNP {snp}: {e}")
-#         results['mdr'] = (float32_t(0.0), snp, snp_t('mdr'), float32_t(-1.0), None)
-
-#     return results
 
 # This function will be used when encoding the validation/test set not during initial evaluation of the interaction.
 @ray.remote
@@ -281,7 +210,7 @@ def ray_prescreen_interaction(X1: np.ndarray, X2: np.ndarray, full_train_idx: np
         correlation_coef = float32_t(np.corrcoef(X1[full_train_idx], X2[full_train_idx])[0, 1])
         correlation_r2 = float32_t(correlation_coef ** 2)
         if correlation_r2 > 0.50:
-            return False, 'pearson', correlation_r2
+            return False, float32_t(-2.0), correlation_r2
 
     # Passed both checks
     return True, float32_t(1.0), correlation_r2
@@ -297,7 +226,7 @@ def ray_evaluate_interaction_encodings(X1: ray.ObjectID, X2: ray.ObjectID, y: ra
     Performs phantom epistasis check by fitting main effects first, then interaction effects on residuals.
 
     Parameters:
-        X1_ray_id, X2_ray_id: Ray ObjectIDs for genotype vectors
+        X1_ray_id, X2_ray_id: Ray ObjectIDs for genotype vectors for the constituent SNPs
         y_ray_id: Ray ObjectID for phenotype vector
         train_idx: Training indices for this fold
         valid_idx: Validation indices for this fold
@@ -308,11 +237,6 @@ def ray_evaluate_interaction_encodings(X1: ray.ObjectID, X2: ray.ObjectID, y: ra
             Failed encodings have R² = -1.0
         mdr_mapping (Dict): MDR feature_map if MDR succeeded, else None
     """
-    # Resolve Ray ObjectIDs
-    # print(X1_ray_id)
-    # X1 = ray.get(X1_ray_id)
-    # X2 = ray.get(X2_ray_id)
-    # y = ray.get(y_ray_id)
 
     results = {'cartesian': float32_t(-1.0), 'xor': float32_t(-1.0), 'mdr': float32_t(-1.0)}
     mdr_mapping = None
@@ -387,7 +311,7 @@ def ray_evaluate_interaction_encodings(X1: ray.ObjectID, X2: ray.ObjectID, y: ra
 
 # ray remote function to evaluate only cartesian encoding for a single CV fold (ablation study)
 @ray.remote
-def ray_evaluate_interaction_cartesian_fold(X1_ray_id: ray.ObjectID, X2_ray_id: ray.ObjectID, y_ray_id: ray.ObjectID,
+def ray_evaluate_interaction_cartesian(X1: ray.ObjectID, X2: ray.ObjectID, y: ray.ObjectID,
                                            train_idx: npt.NDArray, valid_idx: npt.NDArray,
                                            snp1: snp_t, snp2: snp_t) -> float32_t:
     """
@@ -395,8 +319,8 @@ def ray_evaluate_interaction_cartesian_fold(X1_ray_id: ray.ObjectID, X2_ray_id: 
     Used for ablation studies. Does NOT perform phantom epistasis check.
 
     Parameters:
-        X1_ray_id, X2_ray_id: Ray ObjectIDs for genotype vectors
-        y_ray_id: Ray ObjectID for phenotype vector
+        X1, X2: Ray ObjectIDs for genotype vectors
+        y: Ray ObjectID for phenotype vector
         train_idx: Training indices for this fold
         valid_idx: Validation indices for this fold
         snp1, snp2: SNP identifiers
@@ -404,10 +328,6 @@ def ray_evaluate_interaction_cartesian_fold(X1_ray_id: ray.ObjectID, X2_ray_id: 
     Returns:
         cartesian_r2 (float32_t): R² score for cartesian encoding (-1.0 if failed)
     """
-    # Resolve Ray ObjectIDs
-    X1 = ray.get(X1_ray_id)
-    X2 = ray.get(X2_ray_id)
-    y = ray.get(y_ray_id)
 
     # Step 1: Fit base model for phantom epistasis check (main effects only)
     try:
@@ -831,18 +751,17 @@ def ray_eval_pipeline_ld_fs(component_map: Dict[snp_t, Dict],
     return float32_t(1.0), int16_t(feature_count), pop_id, features_final, ld_node.interaction_details_after_ld
 
 @ray.remote
-def ray_eval_pipeline_fs(snp_names: List[snp_t],
-                         interaction_train_enc: List[ray.ObjectID],
+def ray_eval_pipeline_fs(component_map: Dict[snp_t, Dict],
                          y_train: npt.NDArray,
                          train_idx: npt.NDArray,
-                         selector_node: SelectorNode,   # error. feature count. pop_id. details after ld node. snp_after_ld (ignore for this one)
+                         selector_node: SelectorNode,
                          pop_id: uint32_t) -> Tuple[float32_t, int16_t, uint32_t, List, Dict]:
     """
-    Evaluate a pipeline with only a feature selection node using Ray.
+    Evaluate a pipeline with only a feature selection node using Ray (no LD pruning).
 
     Parameters:
-        snp_names (List[snp_t]): List of SNP names in the pipeline.
-        interaction_train_enc (List[ray.ObjectID]): List of Ray ObjectIDs for encoded interaction data.
+        component_map (Dict[snp_t, Dict]): Dictionary mapping interaction names to their component information
+            (snp1_name, snp2_name, snp1_ray_id, snp2_ray_id, encoded_ray_id).
         y_train (npt.NDArray): Phenotype data array.
         train_idx (npt.NDArray): Indices for training data.
         selector_node (SelectorNode): Fitted feature selector node.
@@ -853,24 +772,58 @@ def ray_eval_pipeline_fs(snp_names: List[snp_t],
             float32_t: Error value (-1.0 if failure, 1.0 if success).
             int16_t: Feature count after selection.
             uint32_t: Population ID.
-            List[snp_t]: List of selected SNP names after feature selection.
+            List[interaction_t]: List of selected interaction names after feature selection.
             Dict[snp_t, Dict]: Empty dictionary (no LD node details).
     """
 
-    # hold feature counts across all folds
-    feature_count = 0
-    # holds feature list
-    features_final = []
-    # create both original and encoded dataframes from the ray object ids
-    interaction_train_encoded_df = pd.DataFrame({name: ray.get(data_obj)[train_idx].tolist() for name, data_obj in zip(snp_names, interaction_train_enc)})
+    # 1. HELPER: Ensure keys are standard Python types (Strings or Tuples of Strings)
+    def sanitize_key(k):
+        if isinstance(k, tuple):
+            return tuple(str(x.item()) if hasattr(x, 'item') else str(x) for x in k)
+        return str(k.item()) if hasattr(k, 'item') else str(k)
 
-    # adding the selector and regressor nodes
+    # 2. SANITIZE INPUTS IMMEDIATELY
+    clean_component_map = {sanitize_key(k): v for k, v in component_map.items()}
+
+    feature_count = 0
+    features_final = []
+    interaction_names = list(clean_component_map.keys())
+
+    # 3. BUILD LOCAL MAP (Resolving Ray ObjectIDs)
+    local_component_map = {}
     try:
-        # get snps from selector node
+        for name in interaction_names:
+            # Note: train_idx is used to slice the data immediately to save memory
+            local_component_map[name] = {
+                'encoded_data': ray.get(clean_component_map[name]['encoded_ray_id'])[train_idx].ravel()
+            }
+    except Exception as e:
+        logging.error(f"Error resolving Ray objects: {e}")
+        return float32_t(-1.0), int16_t(0), pop_id, [], {}
+
+    # 4. CREATE DATAFRAME WITH ENCODED INTERACTIONS
+    try:
+        interaction_train_encoded_df = pd.DataFrame({
+            name: local_component_map[name]['encoded_data']
+            for name in interaction_names
+        })
+    except Exception as e:
+        logging.error(f"Error creating DataFrame: {e}")
+        return float32_t(-1.0), int16_t(0), pop_id, [], {}
+
+    # 5. FIT SELECTOR NODE
+    try:
         selector_node.fit(interaction_train_encoded_df, y_train[train_idx])
-        interaction_train_encoded_df = selector_node.transform(interaction_train_encoded_df) # this dataframe goes into regressor
-        feature_count = selector_node.get_feature_count() # number of selected features after the selector node
-        features_final = (selector_node.get_feature_names(snp_names)) # get the names of the features after the selector node by sending the selected features after the LD node
+        interaction_train_encoded_df = selector_node.transform(interaction_train_encoded_df)
+        feature_count = selector_node.get_feature_count()
+        
+        # Get final names and ensure they are tuples of snp_t (interaction_t)
+        raw_features = selector_node.get_feature_names(interaction_names)
+        if isinstance(raw_features, list):
+            features_final = [tuple(f) if not isinstance(f, tuple) else f for f in raw_features]
+        else:
+            # .tolist() on numpy array converts rows to lists, so convert each to tuple
+            features_final = [tuple(f) for f in raw_features.tolist()]
 
     except Exception as e:
         logging.error(f"Exception while feature selector fits/transforms: {e}")
@@ -880,15 +833,7 @@ def ray_eval_pipeline_fs(snp_names: List[snp_t],
     if feature_count == 0:
         return float32_t(-1.0), int16_t(0), pop_id, [], {}
 
-    # if features_final is not a list, convert it to a list, then ensure all elements are tuples
-    if not isinstance(features_final, list):
-        # .tolist() on numpy array converts rows to lists, so convert each to tuple
-        features_final = [tuple(f) for f in features_final.tolist()]
-    else:
-        # Already a list, but ensure each element is a tuple
-        features_final = [tuple(f) if not isinstance(f, tuple) else f for f in features_final]
-
-    # return features that made it passed ld and fs for this pipeline
+    # return features that made it passed fs for this pipeline
     return float32_t(1.0), int16_t(feature_count), pop_id, features_final, {}
 
 @ray.remote

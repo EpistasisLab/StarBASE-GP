@@ -460,8 +460,7 @@ class K2_Evolver(EA):
                 
                 # else, no need for ld pruner (either ld_flag is False or interactions are not on same hyperchromosome)
                 else: # todo: should this still be here? yes because of the pipelines which would have interaction pairs from different chromosomes, that will save time by not calling LD at all
-                    ray_jobs.append(ray_utils.ray_eval_pipeline_fs.remote(snp_names=[snp for snp in pipeline.get_branch_set()],
-                                                                         x_train_enc=[self.hub.get_enc_ray_id(snp) for snp in pipeline.get_branch_set()],
+                    ray_jobs.append(ray_utils.ray_eval_pipeline_fs.remote(component_map=self.hub.build_component_map(pipeline.get_branch_set()),
                                                                          y_train=self.all_y_ray_id,
                                                                          train_idx=self.train_idx_ray,
                                                                          selector_node=pipeline.get_selector_node(),
@@ -712,9 +711,9 @@ class K2_Evolver(EA):
         failed_interactions = {}  # snp_pair -> (failure_code, correlation_r2)
 
         while len(prescreen_jobs) > 0:
-            done, _ = ray.wait([job[0] for job in prescreen_jobs], num_returns=1)
-            job_idx = [job[0] for job in prescreen_jobs].index(done[0])
-            snp_pair = prescreen_jobs[job_idx][1]
+            done, _ = ray.wait([job[0] for job in prescreen_jobs], num_returns=1) # returns list of ready job references and list of remaining job references
+            job_idx = [job[0] for job in prescreen_jobs].index(done[0]) # get the index of the finished job in the prescreen_jobs list
+            snp_pair = prescreen_jobs[job_idx][1] # get the corresponding snp_pair for the finished job
 
             pass_flag, failure_code, correlation_r2 = ray.get(done[0])
 
@@ -723,7 +722,7 @@ class K2_Evolver(EA):
             else:
                 failed_interactions[snp_pair] = (failure_code, correlation_r2)
 
-            prescreen_jobs = [prescreen_jobs[i] for i in range(len(prescreen_jobs)) if i != job_idx]
+            prescreen_jobs = [prescreen_jobs[i] for i in range(len(prescreen_jobs)) if i != job_idx] # remove the finished job from the list
 
         prescreen_time = time.time() - prescreen_start
         print(f"    Pre-screening complete: {len(passed_interactions)} passed, {len(failed_interactions)} failed ({prescreen_time:.2f}s)", flush=True)
@@ -733,14 +732,14 @@ class K2_Evolver(EA):
         encoding_eval_start = time.time()
 
         # Initialize results structure
-        inter_perf = {}
+        inter_perf = {} # snp_pair -> dict with keys: cartesian_r2_folds, xor_r2_folds, mdr_r2_folds, mdr_mappings, correlation_r2, failure_code, avg_r2, best_enc
         for snp_pair in unseen_branches:
             inter_perf[snp_pair] = {
                 'cartesian_r2_folds': [],
                 'xor_r2_folds': [],
                 'mdr_r2_folds': [],
                 'mdr_mappings': [],
-                'correlation_r2': failed_interactions.get(snp_pair, (None, -1.0))[1] if snp_pair in failed_interactions else passed_interactions.get(snp_pair, -1.0),
+                'correlation_r2': failed_interactions.get(snp_pair, (None, float32_t(-1.0)))[1] if snp_pair in failed_interactions else passed_interactions.get(snp_pair, float32_t(-1.0)),
                 'failure_code': failed_interactions.get(snp_pair, (None, None))[0] if snp_pair in failed_interactions else None,
                 'avg_r2': float32_t(-1.0),
                 'best_enc': None
@@ -770,7 +769,7 @@ class K2_Evolver(EA):
                 X2 = self.hub.get_snp_ori_ray_id(snp_2)
 
                 for _, fold_data in self.train_fold_dict_ray.items():
-                    job = ray_utils.ray_evaluate_interaction_cartesian_fold.remote(
+                    job = ray_utils.ray_evaluate_interaction_cartesian.remote(
                         X1, X2, self.all_y_ray_id,
                         fold_data['train_idx'], fold_data['val_idx'],
                         snp_1, snp_2
@@ -781,9 +780,9 @@ class K2_Evolver(EA):
 
         # Process encoding evaluation results
         while len(encoding_jobs) > 0:
-            done, _ = ray.wait([job[0] for job in encoding_jobs], num_returns=1)
-            job_idx = [job[0] for job in encoding_jobs].index(done[0])
-            snp_pair = encoding_jobs[job_idx][1]
+            done, _ = ray.wait([job[0] for job in encoding_jobs], num_returns=1) # returns list of ready job references and list of remaining job references
+            job_idx = [job[0] for job in encoding_jobs].index(done[0]) # get the index of the finished job in the encoding_jobs list
+            snp_pair = encoding_jobs[job_idx][1] # get the corresponding snp_pair for the finished job
 
             if self.encoding_flag:
                 results, mdr_mapping = ray.get(done[0])
@@ -791,12 +790,12 @@ class K2_Evolver(EA):
                 inter_perf[snp_pair]['xor_r2_folds'].append(results['xor'])
                 inter_perf[snp_pair]['mdr_r2_folds'].append(results['mdr'])
                 if mdr_mapping is not None:
-                    inter_perf[snp_pair]['mdr_mappings'].append(mdr_mapping)
+                    inter_perf[snp_pair]['mdr_mappings'].append(mdr_mapping) # mdr_mapping is a dict with keys (0.0, 0.0), (0.0, 1.0), (1.0, 0.0), (1.0, 1.0) and values are the corresponding case/control ratios for that genotype combination
             else:
                 cartesian_r2 = ray.get(done[0])
                 inter_perf[snp_pair]['cartesian_r2_folds'].append(cartesian_r2)
 
-            encoding_jobs = [encoding_jobs[i] for i in range(len(encoding_jobs)) if i != job_idx]
+            encoding_jobs = [encoding_jobs[i] for i in range(len(encoding_jobs)) if i != job_idx] # remove the finished job from the list
 
         encoding_eval_time = time.time() - encoding_eval_start
         print(f"    Encoding evaluation complete ({encoding_eval_time:.2f}s, {encoding_eval_time/60:.2f} mins)", flush=True)
@@ -807,8 +806,12 @@ class K2_Evolver(EA):
 
         for snp_pair in passed_interactions:
             if self.encoding_flag:
+                # assert that we have k R2 results for each encoding
+                assert len(inter_perf[snp_pair]['cartesian_r2_folds']) == self.k, f"Expected {self.k} Cartesian R2 results for {snp_pair}, got {len(inter_perf[snp_pair]['cartesian_r2_folds'])}."
+                assert len(inter_perf[snp_pair]['xor_r2_folds']) == self.k, f"Expected {self.k} XOR R2 results for {snp_pair}, got {len(inter_perf[snp_pair]['xor_r2_folds'])}."
+                assert len(inter_perf[snp_pair]['mdr_r2_folds']) == self.k, f"Expected {self.k} MDR R2 results for {snp_pair}, got {len(inter_perf[snp_pair]['mdr_r2_folds'])}."
                 # Average R2 across folds for each encoding
-                avg_cartesian = np.mean([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0])if len([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
+                avg_cartesian = np.mean([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0])if len([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0) 
                 avg_xor = np.mean([r2 for r2 in inter_perf[snp_pair]['xor_r2_folds'] if r2 > 0]) if len([r2 for r2 in inter_perf[snp_pair]['xor_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
                 avg_mdr = np.mean([r2 for r2 in inter_perf[snp_pair]['mdr_r2_folds'] if r2 > 0]) if len([r2 for r2 in inter_perf[snp_pair]['mdr_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
 
@@ -825,6 +828,8 @@ class K2_Evolver(EA):
                 inter_perf[snp_pair]['best_enc'] = best_enc
             else:
                 # Only cartesian encoding
+                # assert that we have k R2 results for cartesian encoding
+                assert len(inter_perf[snp_pair]['cartesian_r2_folds']) == self.k, f"Expected {self.k} Cartesian R2 results for {snp_pair}, got {len(inter_perf[snp_pair]['cartesian_r2_folds'])}."
                 avg_cartesian = np.mean([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0]) if len([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
                 inter_perf[snp_pair]['avg_r2'] = float32_t(avg_cartesian)
                 inter_perf[snp_pair]['best_enc'] = snp_t('cartesian')
@@ -836,7 +841,7 @@ class K2_Evolver(EA):
         aggregate_time = time.time() - aggregate_start
         print(f"    Aggregation complete ({aggregate_time:.2f}s)", flush=True)
 
-        # STEP 4: Create encoding jobs for interactions above threshold
+        # STEP 4: Create encoding jobs for interactions above threshold - to store the encoded interactions as ray objects in the hub for future use in pipeline evaluations
         print("  [Step 4] Creating encoding jobs for interactions above threshold...", flush=True)
         encoding_job_start = time.time()
 
@@ -867,9 +872,9 @@ class K2_Evolver(EA):
         # Process encoding jobs
         encoding_exec_start = time.time()
         while len(encoding_jobs) > 0:
-            done, _ = ray.wait([job[0] for job in encoding_jobs], num_returns=1)
-            job_idx = [job[0] for job in encoding_jobs].index(done[0])
-            snp_pair = encoding_jobs[job_idx][1]
+            done, _ = ray.wait([job[0] for job in encoding_jobs], num_returns=1) # returns list of ready job references and list of remaining job references
+            job_idx = [job[0] for job in encoding_jobs].index(done[0]) # get the index of the finished job in the encoding_jobs list
+            snp_pair = encoding_jobs[job_idx][1] # get the corresponding snp_pair for the finished job
 
             encoded_data, _ = ray.get(done[0])
             inter_perf[snp_pair]['encoded_data'] = encoded_data
@@ -897,7 +902,7 @@ class K2_Evolver(EA):
                 # Average MDR mappings across all k-folds
                 # MDR mapping is a dict: {(genotype1, genotype2): value}
                 all_mappings = inter_perf[snp_pair]['mdr_mappings']
-                averaged_mapping = {}
+                averaged_mapping = {} # key is a genotype combination tuple (genotype1, genotype2) and value is the average case/control ratio across folds for that genotype combination
 
                 # Get all unique keys across all folds
                 all_keys = set()
@@ -906,7 +911,7 @@ class K2_Evolver(EA):
 
                 # Average the values for each genotype combination
                 for key in all_keys:
-                    values = [mapping.get(key, 0.0) for mapping in all_mappings if key in mapping]
+                    values = [mapping.get(key) for mapping in all_mappings if key in mapping] # only average over folds where this key exists
                     averaged_mapping[key] = np.mean(values)
 
                 mdr_mapping = averaged_mapping
@@ -921,7 +926,7 @@ class K2_Evolver(EA):
                 enc_x=inter_perf[snp_pair]['best_enc'],
                 gen_seen=gen_seen,
                 explainability_threshold=self.branch_explainability_threshold,
-                pager_lut=mdr_mapping  # Reusing pager_lut parameter for MDR mapping-rename it later
+                mdr_mapping=mdr_mapping  
             )
 
         hub_update_time = time.time() - hub_update_start
