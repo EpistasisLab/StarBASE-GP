@@ -58,6 +58,9 @@ class Considered:
 
         # Cache non-empty chromosomes for O(1) access during mutations
         self._non_empty_chroms = set(self.hub.keys())
+        
+        # For K2+: track interactions that are actively being considered
+        self.interactions = set()
         return
 
     def get_nearest_neighbor(self, chrom: int32_t, snp: snp_t, rng: rng_t) -> snp_t:
@@ -280,3 +283,37 @@ class Considered:
             if len(v) > 0:
                 keys.append(k)
         return keys
+
+    def add_interaction(self, interaction) -> None:
+        """
+        Add an interaction to the set of considered interactions.
+        This is used in K2+ to track which interactions are actively being considered.
+
+        Args:
+            interaction: The interaction to add (typically a tuple of SNPs).
+        """
+        self.interactions.add(interaction)
+        return
+
+    def remove_interaction(self, interaction) -> None:
+        """
+        Remove an interaction from the set of considered interactions.
+        This is called when an interaction is pruned or becomes inactive.
+
+        Args:
+            interaction: The interaction to remove (typically a tuple of SNPs).
+        """
+        self.interactions.discard(interaction)  # discard doesn't raise error if not present
+        return
+
+    def does_interaction_exist_in_consideration(self, interaction) -> bool:
+        """
+        Check if an interaction exists in the consideration set.
+
+        Args:
+            interaction: The interaction to check.
+
+        Returns:
+            bool: True if the interaction is in the consideration set, False otherwise.
+        """
+        return interaction in self.interactions

@@ -448,7 +448,7 @@ class K2_Evolver(EA):
                 # Check if LD pruning should be applied:
                 # 1. ld_flag must be True
                 # 2. Pipeline must contain SNPs from the same chromosome
-                if self.ld_flag:
+                if self.ld_flag and self.interactions_on_same_hyperchromosome(pipeline.get_branch_set()):    
                     ray_jobs.append(ray_utils.ray_eval_pipeline_ld_fs.remote(component_map=self.hub.build_component_map(pipeline.get_branch_set()),
                                                                              y_train=self.all_y_ray_id,
                                                                              train_idx=self.train_idx_ray,
@@ -457,8 +457,9 @@ class K2_Evolver(EA):
                                                                              pop_id=uint32_t(global_id),
                                                                              interaction_r2_set=self.hub.generate_r2_set(pipeline.get_branch_set())))
                     pipeline_evaluation_details[global_id][snp_t('ld_used')] = True
-                # else, no need for ld pruner (either ld_flag is False or SNPs are not on same chromosome)
-                else: # todo: should this still be here?
+                
+                # else, no need for ld pruner (either ld_flag is False or interactions are not on same hyperchromosome)
+                else: # todo: should this still be here? yes because of the pipelines which would have interaction pairs from different chromosomes, that will save time by not calling LD at all
                     ray_jobs.append(ray_utils.ray_eval_pipeline_fs.remote(snp_names=[snp for snp in pipeline.get_branch_set()],
                                                                          x_train_enc=[self.hub.get_enc_ray_id(snp) for snp in pipeline.get_branch_set()],
                                                                          y_train=self.all_y_ray_id,
@@ -487,15 +488,13 @@ class K2_Evolver(EA):
                     # update the pruned interactions based on the interaction details after LD
                     for interaction, details in ld_details.items():
                         if details['pruned'] == True:
-                            pruned_interactions.add(interaction)
-                            interactions_details_per_interaction[interaction] = details
+                            # Convert interaction tuple to use snp_t types (Ray returns regular strings)
+                            interaction_typed = (snp_t(interaction[0]), snp_t(interaction[1]))
+                            pruned_interactions.add(interaction_typed)
+                            interactions_details_per_interaction[interaction_typed] = details
 
             ld_fs_time = time.time() - ld_fs_start
             total_ld_fs_time += ld_fs_time
-
-            # print pipeline_evaluation_details for the current batch for debugging
-            for i in range(start_idx, end_idx):
-                print(f"Pipeline {i}: error={pipeline_evaluation_details[i][snp_t('error')]}, feature_cnt={pipeline_evaluation_details[i][snp_t('feature_cnt')]}, ld_used={pipeline_evaluation_details[i][snp_t('ld_used')]}", flush=True)
 
             # send pipelines with no error to be evaluated for r2 across k-folds (only pipelines with error == False)
             r2_job_start = time.time()
@@ -506,7 +505,7 @@ class K2_Evolver(EA):
 
                 # create a ray job for each of the folds
                 for _, fold_data in self.train_fold_dict_ray.items():
-                    ray_jobs.append(ray_utils.ray_eval_pipeline_r2.remote(component_map=self.hub.build_component_map(pipeline.get_branch_set()),
+                    ray_jobs.append(ray_utils.ray_eval_pipeline_r2.remote(component_map=self.hub.build_component_map(pipelines[i].get_branch_set()),
                                                                           y = self.all_y_ray_id,
                                                                           train_idx = fold_data['train_idx'],
                                                                           valid_idx = fold_data['val_idx'],
@@ -539,21 +538,41 @@ class K2_Evolver(EA):
         hub_update_time = time.time() - hub_update_start
         print(f"  - Hub pruned interaction updates: {hub_update_time:.4f}s", flush=True)
 
+        # print all the pipeline evaluation details for this generation
+        for pipeline_id in pipeline_evaluation_details:
+            print(f"Pipeline {pipeline_id} evaluation details: R2={pipeline_evaluation_details[pipeline_id][snp_t('r2')]:.4f}, Feature Count={pipeline_evaluation_details[pipeline_id][snp_t('feature_cnt')]}, LD Used={pipeline_evaluation_details[pipeline_id][snp_t('ld_used')]}, Interactions {pipeline_evaluation_details[pipeline_id][snp_t('features')]}", flush=True)
+
         # will hold the evaluated pipelines that passed evaluation
         evaluated_pipelines : List[Pipeline] = []
 
         # update pipelines with evaluation results
         for pipeline_id in pipeline_evaluation_details:
+            print(f"Final evaluation for Pipeline {pipeline_id}: R2={pipeline_evaluation_details[pipeline_id][snp_t('r2')]:.4f}, Feature Count={pipeline_evaluation_details[pipeline_id][snp_t('feature_cnt')]}, LD Used={pipeline_evaluation_details[pipeline_id][snp_t('ld_used')]}, Interactions {pipeline_evaluation_details[pipeline_id][snp_t('features')]}", flush=True)
+            
             # skip pipelines with error, negative r2, or all snps are inactive
             if pipeline_evaluation_details[pipeline_id][snp_t('error')] or \
-                pipeline_evaluation_details[pipeline_id][snp_t('r2')] <= float32_t(0.0) or \
-                self.hub.at_least_one_active_snp(pipeline_evaluation_details[pipeline_id][snp_t('features')]) == False:
+                pipeline_evaluation_details[pipeline_id][snp_t('r2')] <= float32_t(0.0):
+                continue
+
+            # clean up the interaction features list to be tuple of np.str_
+            raw_features = pipeline_evaluation_details[pipeline_id][snp_t('features')]
+            typed_features = []
+            for feature in raw_features:
+                if isinstance(feature, tuple):
+                    typed_features.append(tuple(snp_t(f) for f in feature))
+                elif isinstance(feature, np.str_):
+                    typed_features.append(snp_t(str(feature)))
+                else:
+                    raise ValueError(f"Unexpected feature type: {type(feature)} for feature {feature}")
+
+            # check if at least one interaction is active
+            if not self.hub.at_least_one_active_interaction(typed_features):
                 continue
 
             assert pipeline_evaluation_details[pipeline_id][snp_t('count')] == uint16_t(self.k), "Pipeline evaluation must have k-fold evaluations."
             pipelines[pipeline_id].set_traits([ pipeline_evaluation_details[pipeline_id][snp_t('r2')] / float32_t(self.k),
                                                 pipeline_evaluation_details[pipeline_id][snp_t('feature_cnt')],
-                                                set(pipeline_evaluation_details[pipeline_id][snp_t('features')]) ])
+                                                set(typed_features) ])
             # add to evaluated pipelines
             evaluated_pipelines.append(pipelines[pipeline_id])
 
@@ -574,6 +593,29 @@ class K2_Evolver(EA):
         print(f"  - Hub updates:   {hub_update_time:6.2f}s ({pct_hub_update:5.1f}%)\n", flush=True)
 
         return evaluated_pipelines, {'fs_only_count': fs_only_count, 'pipelines_evaluated': len(evaluated_pipelines)}
+    
+    # function to check if a branch set have interactions in the same hyperchromosome (that SNP 1 and SNP3 are on the same chromosome and SNP2 and SNP4 are on the same chromosome) - if so, we can apply LD pruning, if not, we skip LD pruning and just evaluate with FS
+    def interactions_on_same_hyperchromosome(self, branch_set: Set[interaction_t]) -> bool:
+        """
+        Function to check if a branch set has interactions in the same hyperchromosome.
+        This is determined by checking if SNP1 and SNP3 are on the same chromosome and if SNP2 and SNP4 are on the same chromosome for each interaction.
+
+        Args:
+            branch_set (Set[interaction_t]): Set of interactions (tuples of SNP pairs) to check.
+        Returns:
+            bool: True if all interactions in the branch set are on the same hyperchromosome, False otherwise.
+        """
+        hyperchromosome = set() # tuple of chromosomes for an interaction pair
+        for interaction in branch_set:
+            snp1, snp2 = interaction # unpack the interaction tuple (snp1, snp2)
+            snp1_chrom, _ = snp_chrm_pos(snp1)
+            snp2_chrom, _ = snp_chrm_pos(snp2)
+            hyperchromosome.add((snp1_chrom, snp2_chrom))
+        # if there is more than one unique hyperchromosome, then we return False
+        if len(hyperchromosome) > 1:
+            return False
+
+        return True
 
     def process_offspring(self, pipelines: List[Pipeline], gen_info: int16_t) -> List[Pipeline]:
         """
@@ -657,8 +699,8 @@ class K2_Evolver(EA):
             assert isinstance(snp_1, snp_t), "SNP must be of type snp_t."
             assert isinstance(snp_2, snp_t), "SNP must be of type snp_t."
 
-            X1 = self.hub.get_snp_ori_ray_id(snp_1)
-            X2 = self.hub.get_snp_ori_ray_id(snp_2)
+            X1 = self.hub.get_snp_ori_ray_id(snp_1) # get the original univariate encoding for snp1 from the hub as a Ray object reference
+            X2 = self.hub.get_snp_ori_ray_id(snp_2) # get the original univariate encoding for snp2 from the hub as a Ray object reference
 
             job = ray_utils.ray_prescreen_interaction.remote(
                 X1, X2, self.train_idx_ray, snp_1, snp_2
@@ -930,11 +972,13 @@ class K2_Evolver(EA):
                                                  'pipeline': pipeline  # Store pipeline object to access root node
                                                  }
             # create ray job for evaluating the pipeline on the validation set
-            ray_jobs.append(ray_utils.ray_eval_pipeline_r2.remote(X=[self.hub.get_enc_ray_id(snp) for snp in features_final],
-                                                                   y=self.all_y_ray_id,
-                                                                   train_idx=self.train_idx_ray,
-                                                                   valid_idx=self.val_idx_ray,
-                                                                   pop_id=uint32_t(pipeline_id)))
+            ray_jobs.append(ray_utils.ray_eval_pipeline_r2.remote(component_map=self.hub.build_component_map(pipeline.get_branch_set()),
+                                                                  y = self.all_y_ray_id,
+                                                                  train_idx = self.train_idx_ray,  # Use all training data for final evaluation
+                                                                  valid_idx = self.val_idx_ray, 
+                                                                  pop_id = uint32_t(pipeline_id)))
+
+            
             # process results as they come in
             while len(ray_jobs) > 0:
                 finished, ray_jobs = ray.wait(ray_jobs)
@@ -997,6 +1041,9 @@ class K2_Evolver(EA):
         # Create pareto_front_pipelines.csv with validation R2
         pareto_data = []
         for pid, data in pareto_validation_r2.items():
+            # Convert interaction tuples to string format: chr1.123:chr2.456
+            feature_set_str = ";".join(sorted([f"chr{interaction[0]}:chr{interaction[1]}" for interaction in data['feature_set']]))
+            
             pareto_data.append({
                 'Pipeline ID': pid + 1,  # Start from 1 instead of 0
                 'Cross-validated Train R2': data['train_r2'],
@@ -1004,7 +1051,7 @@ class K2_Evolver(EA):
                 'Feature Count': data['feature_cnt'],
                 'Selector': data['selector'],
                 'Selector Params': data['selector_params'],
-                'Feature Set': ';'.join(sorted(data['feature_set']))  # Feature Set at the end
+                'Feature Set': feature_set_str  # Interaction pairs as semicolon-separated string
             })
         pareto_df = pd.DataFrame(pareto_data)
         pareto_df.to_csv(os.path.join(self.save_directory, 'pareto_front_pipelines.csv'), index=False)
@@ -1105,12 +1152,15 @@ class K2_Evolver(EA):
         # Use combined train+validation data for encoding (to learn encoding from larger dataset)
         ray_jobs = []
         for snp in snp_names:
-            ray_jobs.append(ray_utils.ray_snp_encoder.remote(
-                X=self.hub.get_ori_ray_id(snp),
-                y=self.all_y_ray_id,
-                train_idx=combined_train_idx,  # Use combined indices for encoding
-                enc=self.hub.get_encoding(snp),
-                snp=snp
+            print(f"Encoding SNP {snp} for final test...", flush=True)
+            snp1, snp2 = snp
+            ray_jobs.append(ray_utils.ray_interaction_encoder.remote(
+                self.hub.get_snp_ori_ray_id(snp1),
+                self.hub.get_snp_ori_ray_id(snp2),
+                self.all_y_ray_id,
+                combined_idx_ray_id,
+                self.hub.get_encoding(snp),
+                snp
             ))
 
         print(f"Encoding {len(snp_names)} SNPs for final test...", flush=True)
@@ -1129,10 +1179,10 @@ class K2_Evolver(EA):
         # Calculate train + validation R² using ray remote function
         print("Calculating train + validation R²...", flush=True)
         train_valid_r2_job = ray_utils.ray_eval_pipeline_r2.remote(
-            X=[transformed_snp_ray_ids[snp] for snp in snp_names],
+            component_map=self.hub.build_component_map(pipeline_data['pipeline'].get_branch_set()),
             y=self.all_y_ray_id,
             train_idx=combined_idx_ray_id,
-            valid_idx=combined_idx_ray_id,
+            valid_idx=test_idx_ray_id,
             pop_id=uint32_t(0)
         )
         train_val_r2, _, error = ray.get(train_valid_r2_job)
@@ -1144,7 +1194,7 @@ class K2_Evolver(EA):
         # Calculate test R² using ray remote function
         print("Calculating test R²...", flush=True)
         test_r2_job = ray_utils.ray_eval_pipeline_r2.remote(
-            X=[transformed_snp_ray_ids[snp] for snp in snp_names],
+            component_map=self.hub.build_component_map(pipeline_data['pipeline'].get_branch_set()),
             y=self.all_y_ray_id,
             train_idx=combined_idx_ray_id,
             valid_idx=test_idx_ray_id,
@@ -1168,10 +1218,11 @@ class K2_Evolver(EA):
 
         # Call ray_pfi
         pfi_job = ray_utils.ray_pfi.remote(
+            component_map=self.hub.build_component_map(pipeline_data['pipeline'].get_branch_set()),
             X=[transformed_snp_ray_ids[snp] for snp in snp_names],
             y=self.all_y_ray_id,
-            train_idx=combined_train_idx,
-            valid_idx=self.test_idx,
+            train_idx=combined_idx_ray_id,
+            valid_idx=test_idx_ray_id,
             new_column_names=column_names_with_encoding,
             root_node=ols_regressor,
             random_state=self.rng.integers(0, 100000),

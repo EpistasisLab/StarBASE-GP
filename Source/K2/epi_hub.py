@@ -56,11 +56,16 @@ class K2_Hub(Hub):
                 (2) enc_x (snp_t): the encoding type for the interaction
                 (3) gen_seen (int16_t): generation in which the interaction was seen
                 (4) active (bool): active value of the interaction
-                (5) pager_lut (Dict[snp_t, int32_t]): lookup table for pager values of each snp in the interaction #todo
+                (5) pager_lut (Dict[snp_t, int32_t]): lookup table for pager values of each snp in the interaction
+                (6) gen_pruned (int16_t): generation when the interaction was pruned (-1 if not pruned)
+                (7) pruned_reason (str): reason for pruning ("LD" or "CA" or "" if not pruned)
+                (8) ld_threshold (float32_t): LD threshold used for pruning
+                (9) ld_genomic_distance (int32_t): genomic distance used for LD pruning
+                (10) anchor_interaction (interaction_t or str): anchor interaction if pruned, empty string otherwise
             """
 
-            # add to hub
-            self.hub[interaction] = [r2, enc_rid, enc_x, gen_seen, active, pager_lut]
+            # add to hub with LD pruning fields initialized
+            self.hub[interaction] = [r2, enc_rid, enc_x, gen_seen, active, pager_lut, int16_t(-1), "", float32_t(-1.0), int32_t(-1), ""]
             return
 
         def get_r2(self, interaction: interaction_t) -> float32_t:
@@ -101,6 +106,34 @@ class K2_Hub(Hub):
 
         def does_interaction_exist(self, interaction: interaction_t) -> bool:
             return interaction in self.hub
+
+        def get_gen_pruned(self, interaction: interaction_t) -> int16_t:
+            """Get the generation when the interaction was pruned."""
+            assert interaction in self.hub
+            return self.hub[interaction][6]
+
+        def flip_activate_flag_ld(self, interaction: interaction_t, gen_pruned: int16_t) -> None:
+            """Mark an interaction as inactive due to LD pruning."""
+            assert interaction in self.hub
+            # Set active flag (index 4) to False and gen_pruned (index 6) to the generation
+            self.hub[interaction][4] = False
+            self.hub[interaction][6] = gen_pruned
+            return
+
+        def add_ld_details(self, interaction: interaction_t, reason: str, threshold: float, 
+                          genomic_distance: int, anchor_interaction: interaction_t | str) -> None:
+            """Add LD pruning details to the interaction hub."""
+            assert interaction in self.hub
+            # Update LD pruning details
+            # Index 7: pruned_reason
+            # Index 8: ld_threshold
+            # Index 9: ld_genomic_distance
+            # Index 10: anchor_interaction
+            self.hub[interaction][7] = reason
+            self.hub[interaction][8] = float32_t(threshold)
+            self.hub[interaction][9] = int32_t(genomic_distance)
+            self.hub[interaction][10] = anchor_interaction
+            return
 
     class SNP_DB:
         """
@@ -254,9 +287,9 @@ class K2_Hub(Hub):
                                            pager_lut=pager_lut)
         return
 
-    def get_encoding(self, snp: snp_t) -> snp_t:
-        # get best type of encoder for a given snp
-        return self.db.get_encoding(snp)
+    def get_encoding(self, interaction: interaction_t) -> snp_t:
+        # get best type of encoder for a given interaction
+        return self.epi_db.get_enc_x(interaction)
 
     def get_r2(self, interaction: interaction_t) -> float32_t:
         # get r2 for a given interaction from epi hub
@@ -265,107 +298,105 @@ class K2_Hub(Hub):
     # save the epi_hub and snp_hub to a file
     def save_hubs(self, save_dir: str) -> None:
         """
-        Save the SNP hub to a CSV file.
+        Save the interaction hub to a CSV file.
 
-        Header positions:
-               res_pos = 0 # position for r2 recived from evaluation
-               bin_pos = 1 # id for bin assigned to
-               idx_pos = 2 # position for bin number in hub value list
-               pos_pos = 3 # position for header position in hub value list
-               enc_pos = 4 # position for the corresponding encoder types in hub value list
-              seen_pos = 5 # position for the seen flag in hub value list
-            pruned_pos = 6 # position for the pruned flag in hub value list
-          gen_seen_pos = 7 # position for the seen flag in hub value list
-        gen_pruned_pos = 8 # position for the pruned flag in hub value list
-      pruned_reason_pos = 9 # position for the pruned reason in hub value list
-       ld_threshold_pos = 10 # position for the LD threshold in hub value list
-ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value list
-         anchor_snp_pos = 12 # position for the anchor snp in hub value list
+        EPI_DB structure (v = self.epi_db.hub[interaction]):
+            v[0]: r2 (float32_t)
+            v[1]: enc_rid (ray.ObjectID - not saved)
+            v[2]: enc_x (snp_t - encoding type)
+            v[3]: gen_seen (int16_t)
+            v[4]: active (bool)
+            v[5]: pager_lut (Dict or None)
+            v[6]: gen_pruned (int16_t)
+            v[7]: pruned_reason (str)
+            v[8]: ld_threshold (float32_t)
+            v[9]: ld_genomic_distance (int32_t)
+            v[10]: anchor_interaction (interaction_t or str)
         """
 
         save_start = time.time()
         print(f"[Timing] Starting save_hubs to {save_dir}...", flush=True)
 
-        # Save snp hub with headers
+        # Save interaction hub with headers
         collect_start = time.time()
-        snp_data = []
-        for k, v in self.db.hub.items():
-            # k: snp (row[0])
-            # v[0]: r2 (row[1])
-            # v[1]: bin (row[2])
-            # v[2]: idx (row[3])
-            # v[3]: pos (row[4])
-            # v[4]: enc (row[5])
-            # v[5]: seen (row[6])
-            # v[6]: prunned (row[7])
-            # v[7]: gen_seen (row[8])
-            # v[8]: gen_prunned (row[9])
-            # v[9]: pruned_reason (row[10])
-            # v[10]: ld_threshold (row[11])
-            # v[11]: ld_genomic_distance (row[12])
-            # v[12]: anchor_snp (row[13])
-            # v[13]: pager_0 (row[14])
-            # v[14]: pager_1 (row[15])
-            # v[15]: pager_2 (row[16])
-            snp_data.append([k, v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13], v[14], v[15]])
+        interaction_data = []
+        for k, v in self.epi_db.hub.items():
+            # k: interaction tuple (snp1, snp2)
+            # Extract SNP1 and SNP2 from the interaction tuple
+            snp1, snp2 = k
+            
+            # Extract pager values from pager_lut if it exists and is a dict
+            pager_lut = v[5]
+            if pager_lut is not None and isinstance(pager_lut, dict):
+                # pager_lut maps genotype combos to risk values
+                # For saving, we can store the mapping as a string or individual values
+                pager_str = str(pager_lut)
+            else:
+                pager_str = ''
+            
+            # Format anchor_interaction (v[10]) - could be tuple or string
+            anchor_interaction = v[10]
+            if isinstance(anchor_interaction, tuple):
+                anchor_str = f"{anchor_interaction[0]}:{anchor_interaction[1]}"
+            else:
+                anchor_str = str(anchor_interaction)
+            
+            # Append row: [interaction_str, snp1, snp2, r2, encoding, gen_seen, active, gen_pruned, pruned_reason, ld_threshold, ld_genomic_distance, anchor_interaction, pager_lut]
+            interaction_str = f"{snp1}:{snp2}"
+            interaction_data.append([
+                interaction_str,  # Combined interaction name
+                snp1,            # First SNP
+                snp2,            # Second SNP
+                v[0],            # r2
+                v[2],            # enc_x (encoding type)
+                v[3],            # gen_seen
+                v[4],            # active
+                v[6],            # gen_pruned
+                v[7],            # pruned_reason
+                v[8],            # ld_threshold
+                v[9],            # ld_genomic_distance
+                anchor_str,      # anchor_interaction
+                pager_str        # pager_lut
+            ])
 
         collect_time = time.time() - collect_start
-        print(f"  - Data collection: {collect_time:.4f}s for {len(snp_data)} SNPs", flush=True)
+        print(f"  - Data collection: {collect_time:.4f}s for {len(interaction_data)} interactions", flush=True)
 
-        # Sort snp_data by the second column (AVG_R2)
+        # Sort interaction_data by r2 (index 3 in the row)
         sort_start = time.time()
-        snp_data.sort(key=lambda x: x[1], reverse=True)  # reverse=True for descending order
+        interaction_data.sort(key=lambda x: x[3], reverse=True)  # reverse=True for descending order by r2
         sort_time = time.time() - sort_start
         print(f"  - Data sorting: {sort_time:.4f}s", flush=True)
 
-        # Write snp hub to file
+        # Write interaction hub to file
         write_start = time.time()
-        with open(save_dir+"snp_hub.csv", 'w') as f:
-            # Write the headers for the snp_file (removed bin_idx column)
-            f.write("snp,chr,bp,r2,bin_num,encoding,seen,active,gen_seen,gen_pruned,pruned_reason,ld_threshold,ld_genomic_distance,anchor_snp,pager_0,pager_1,pager_2\n")
-            for row in snp_data:
-                # split snp into chromosome and position
-                chrom, pos = row[0].split('.')
-                # Add 'chr' prefix to SNP name
-                snp_with_chr = f"chr{row[0]}"
-                # Get pager values from hub
-                # row[13] = anchor_snp, row[14] = pager_0, row[15] = pager_1, row[16] = pager_2
-                # Check if values are numeric (float) and not default -1
-                try:
-                    pager_0_val = float(row[14])
-                    pager_0 = '' if pager_0_val < 0 else str(pager_0_val)
-                except (ValueError, TypeError):
-                    pager_0 = ''
+        with open(save_dir+"interaction_hub.csv", 'w') as f:
+            # Write the headers
+            f.write("interaction,snp1,snp2,r2,encoding,gen_seen,active,gen_pruned,pruned_reason,ld_threshold,ld_genomic_distance,anchor_interaction,pager_lut\n")
+            for row in interaction_data:
+                # Add 'chr' prefix to interaction components
+                snp1_chr, snp1_pos = row[1].split('.')
+                snp2_chr, snp2_pos = row[2].split('.')
+                interaction_with_chr = f"chr{row[1]}:chr{row[2]}"
+                
+                # Write all columns
+                f.write(f"{interaction_with_chr},chr{row[1]},chr{row[2]},{row[3]},{row[4]},{row[5]},{row[6]},{row[7]},{row[8]},{row[9]},{row[10]},{row[11]},{row[12]}\n")
 
-                try:
-                    pager_1_val = float(row[15])
-                    pager_1 = '' if pager_1_val < 0 else str(pager_1_val)
-                except (ValueError, TypeError):
-                    pager_1 = ''
+        write_interaction_time = time.time() - write_start
+        print(f"  - Writing interaction_hub.csv: {write_interaction_time:.4f}s", flush=True)
 
-                try:
-                    pager_2_val = float(row[16])
-                    pager_2 = '' if pager_2_val < 0 else str(pager_2_val)
-                except (ValueError, TypeError):
-                    pager_2 = ''
-
-                # Write all columns (removed bin_idx which was row[4]): row[13] is anchor_snp, then pager_0, pager_1, pager_2
-                f.write(f"{snp_with_chr},{chrom},{pos},{row[1]},{row[2]},{row[5]},{row[6]},{row[7]},{row[8]},{row[9]},{row[10]},{row[11]},{row[12]},{row[13]},{pager_0},{pager_1},{pager_2}\n")
-
-        write_snp_time = time.time() - write_start
-        print(f"  - Writing snp_hub.csv: {write_snp_time:.4f}s", flush=True)
-
-        # save csv with both seen and not prunned snps
+        # save csv with both seen and active (not pruned) interactions
         # Write consideration hub to file
         consider_write_start = time.time()
         with open(save_dir+"consideration_hub.csv", 'w') as f:
-            # Write the headers for the snp_file
-            f.write("snp,r2,encoding\n")
-            for row in snp_data:
-                if row[6] == True and row[7] == False:
-                    # Add 'chr' prefix to SNP name
-                    snp_with_chr = f"chr{row[0]}"
-                    f.write(f"{snp_with_chr},{row[1]},{row[5]}\n")
+            # Write the headers
+            f.write("interaction,r2,encoding\n")
+            for row in interaction_data:
+                # Check if active (index 6) is True
+                if row[6] == True:
+                    # Add 'chr' prefix to interaction
+                    interaction_with_chr = f"chr{row[1]}:chr{row[2]}"
+                    f.write(f"{interaction_with_chr},{row[3]},{row[4]}\n")
 
         consider_write_time = time.time() - consider_write_start
         print(f"  - Writing consideration_hub.csv: {consider_write_time:.4f}s", flush=True)
@@ -462,13 +493,13 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         return self.epi_db.get_active(interaction)
 
     #todo: what do we want to store in the hub?
-    def process_pruned_interactions(self, interactions: Set[interaction_t], snp_details_after_ld: Dict[snp_t, Dict], gen_pruned: int16_t) -> None:
+    def process_pruned_interactions(self, interactions: Set[interaction_t], snp_details_after_ld: Dict[interaction_t, Dict], gen_pruned: int16_t) -> None:
         """
         Process pruned interactions by updating their status in the interaction hub and removing them from the consideration hub.
 
         Args:
             interactions (Set[interaction_t]): Set of interactions that have been pruned.
-            snp_details_after_ld (Dict[snp_t, Dict]): Dictionary containing details for each pruned SNP, including reason, threshold, genomic distance, and anchor SNP.
+            snp_details_after_ld (Dict[interaction_t, Dict]): Dictionary containing details for each pruned interaction, including reason, threshold, genomic distance, and anchor SNP.
             gen_pruned (int16_t): Generation number when the interactions were pruned.
         """
 
@@ -481,52 +512,68 @@ ld_genomic_distance_pos = 11 # position for the LD genomic distance in hub value
         remove_total = 0.0
 
         for interaction in interactions:
-            # get the snp from the interaction
-            snp = self.db.get_snp_from_interaction(interaction)
+            # check to make sure we have not prunned this interaction before
+            assert self.epi_db.get_gen_pruned(interaction) == int16_t(-1)
 
-            # check to make sure we have not prunned this snp before
-            assert self.db.get_gen_pruned(snp) == int16_t(-1)
-
-            # flip snp to pruned
+            # flip interaction to pruned
             flip_start = time.time()
-            self.db.flip_activate_flag_ld(snp, gen_pruned)
+            self.epi_db.flip_activate_flag_ld(interaction, gen_pruned)
             flip_total += time.time() - flip_start
 
             # add ld details to the snp hub
             add_start = time.time()
-            self.db.add_ld_details(
-                snp,
-                snp_details_after_ld[snp]["reason"],
-                snp_details_after_ld[snp]["threshold"],
-                snp_details_after_ld[snp]["genomic_distance"],
-                snp_details_after_ld[snp]["anchor_snp"]
+            self.epi_db.add_ld_details(
+                interaction,
+                snp_details_after_ld[interaction]["reason"],
+                snp_details_after_ld[interaction]["threshold"],
+                snp_details_after_ld[interaction]["genomic_distance"],
+                snp_details_after_ld[interaction]["anchor_interaction"]
             )
             add_details_total += time.time() - add_start
 
-            # delete snp from non pruned
+            # delete interaction from non pruned
             remove_start = time.time()
-            self.consider.remove_snp(snp)
+            self.consider.remove_interaction(interaction)
             remove_total += time.time() - remove_start
 
         total_time = time.time() - process_start
         print(f"[Timing] process_pruned_interactions completed: Flip flags={flip_total:.4f}s, Add LD details={add_details_total:.4f}s, Remove from consider={remove_total:.4f}s, Total={total_time:.4f}s", flush=True)
 
-    def at_least_one_active_snp(self, snps: List[snp_t]) -> bool:
+    def at_least_one_active_snp(self, snps: List[interaction_t]) -> bool:
         """
-        Function to check if at least one snp in the list is active.
+        Function to check if at least one interaction in the list is active.
 
         Parameters:
-            snps (List[snp_t]): List of snps to check
+            snps (List[interaction_t]): List of interactions to check (parameter name kept as 'snps' for compatibility, but actually interactions)
 
         Returns:
-            bool: True if at least one snp is active, False otherwise
+            bool: True if at least one interaction is active, False otherwise
         """
 
-        # if one snp is active return true
-        for snp in snps:
-            if self.db.get_active_flag(snp):
+        # if one interaction is active return true
+        for interaction in snps:
+            if self.epi_db.get_active(interaction):
                 return True
-        # return false if all snps are inactive
+        # return false if all interactions are inactive
+        return False
+
+    def at_least_one_active_interaction(self, interactions: List[interaction_t]) -> bool:
+        """
+        Function to check if at least one interaction in the provided list is active (not pruned).
+
+        Parameters:
+            interactions (List[interaction_t]): List of interactions to check
+
+        Returns:
+            bool: True if at least one interaction is active, False otherwise
+        """
+
+        # Check if at least one interaction in the list is active
+        for interaction in interactions:
+            if self.epi_db.get_active(interaction):
+                return True
+        
+        # Return false if all interactions are inactive
         return False
 
     def consideration_hub_size(self) -> uint32_t:

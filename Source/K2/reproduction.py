@@ -123,9 +123,11 @@ class K2_Reproduction(Reproduction):
         num_to_add = self.num_branches_to_add(rng, parent_branches)
 
         # list of anchor snps to append within the parent branches (could be duplicates)
+        # Note: rng.choice returns a 2D numpy array when selecting from tuples, so we need to convert each row back to tuple
         anchor_snps = rng.choice(list(parent_branches), size=num_to_add, replace=True)
         for anchor in anchor_snps:
-            parent_branches.add(self.mutate_branch(rng, anchor, hub))
+            anchor_tuple = tuple(anchor) if not isinstance(anchor, tuple) else anchor
+            parent_branches.add(self.mutate_branch(rng, anchor_tuple, hub))
 
         # generate offspring with mutated parent branches and pass through selector and ld nodes from parent
         offspring = Pipeline(branch_set=parent_branches, ld_node=cp.deepcopy(parent.ld_node), selector_node=cp.deepcopy(parent.selector_node))
@@ -165,9 +167,11 @@ class K2_Reproduction(Reproduction):
         num_to_add = self.num_branches_to_add(rng, offspring_new_branches)
 
         # list of anchor snps to append within the offspring branches (could be duplicates)
+        # Note: rng.choice returns a 2D numpy array when selecting from tuples, so we need to convert each row back to tuple
         anchor_snps = rng.choice(list(offspring_new_branches), size=num_to_add, replace=True)
         for anchor in anchor_snps:
-            offspring_new_branches.add(self.mutate_branch(rng, anchor, hub))
+            anchor_tuple = tuple(anchor) if not isinstance(anchor, tuple) else anchor
+            offspring_new_branches.add(self.mutate_branch(rng, anchor_tuple, hub))
         assert len(offspring.get_branch_set()) <= len(offspring_new_branches) <= len(offspring.get_branch_set()) + num_to_add \
             ,"Offspring branches after mutation must be correct size."
 
@@ -270,6 +274,10 @@ class K2_Reproduction(Reproduction):
         # convert to list once (cached for both random and smart crossover)
         combined_list = list(combined_branches)
 
-        return Pipeline(branch_set=set(rng.choice(combined_list, size=num_branches, replace=False)),
+        # Note: rng.choice returns a 2D numpy array when selecting from tuples, so we need to convert each row back to tuple
+        selected_branches = rng.choice(combined_list, size=num_branches, replace=False)
+        selected_branches_tuples = set(tuple(branch) if not isinstance(branch, tuple) else branch for branch in selected_branches)
+        
+        return Pipeline(branch_set=selected_branches_tuples,
                             ld_node=cp.deepcopy(parent1.ld_node if rng.random() < 0.5 else parent2.ld_node),
                             selector_node=cp.deepcopy(parent1.selector_node if rng.random() < 0.5 else parent2.selector_node))

@@ -681,11 +681,13 @@ def ray_preprocess_interaction_cartesian(X1, X2, y, train_idx, valid_idx, full_t
     return best_r2, interaction_name, failure_code, best_enc, correlation_r2, mdr_mapping
 
 @ray.remote
-def ray_pfi(X, y, train_idx, valid_idx, new_column_names, root_node, random_state, pop_id):
+def ray_pfi(component_map, X, y, train_idx, valid_idx, new_column_names, root_node, random_state, pop_id):
     """
     Compute permutation feature importance (PFI) for a fitted model using validation data.
 
     Args:
+        component_map (Dict[snp_t, Dict]): Dictionary mapping interaction names to their components:
+            {interaction_name: {'snp1_name', 'snp2_name', 'snp1_ray_id', 'snp2_ray_id', 'encoded_ray_id'}}
         X (List[ray.ObjectID]): List of Ray ObjectIDs for feature data arrays.
         y (np.ndarray): Phenotype data array.
         train_idx (np.ndarray): Indices for training data.
@@ -725,7 +727,7 @@ def ray_eval_pipeline_ld_fs(component_map: Dict[snp_t, Dict],
                             selector_node: SelectorNode,
                             ld_node: SelectorNode,
                             pop_id: uint32_t,
-                            interaction_r2_set: Set) -> Tuple[float32_t, int16_t, uint32_t, List[snp_t], Dict[snp_t, Dict]]:
+                            interaction_r2_set: Set) -> Tuple[float32_t, int16_t, uint32_t, List, Dict]:
     """
     Evaluate a pipeline with LD and feature selection nodes using Ray.
     Uses component map structure for efficient component SNP access.
@@ -749,69 +751,84 @@ def ray_eval_pipeline_ld_fs(component_map: Dict[snp_t, Dict],
             Dict[snp_t, Dict]: Details of interactions after LD node.
     """
 
-    # make dictionary to hold the interaction r2 scores
-    interaction_r2_dict = {p[0]: p[1] for p in interaction_r2_set}
+    # 1. HELPER: Ensure keys are standard Python types (Strings or Tuples of Strings)
+    def sanitize_key(k):
+        if isinstance(k, tuple):
+            return tuple(str(x.item()) if hasattr(x, 'item') else str(x) for x in k)
+        return str(k.item()) if hasattr(k, 'item') else str(k)
 
-    # hold feature counts
+    # 2. SANITIZE INPUTS IMMEDIATELY
+    # This prevents 'unhashable type' errors when creating dictionaries
+    clean_component_map = {sanitize_key(k): v for k, v in component_map.items()}
+    interaction_r2_dict = {sanitize_key(p[0]): p[1] for p in interaction_r2_set}
+
     feature_count = 0
     features_final = []
+    interaction_names = list(clean_component_map.keys())
+    # print(f"Evaluating pipeline with interactions: {interaction_names}")
 
-    # Extract interaction names
-    interaction_names = list(component_map.keys())
-
-    # Build local component map with actual data (resolve Ray ObjectIDs) for LD node
+    # 3. BUILD LOCAL MAP (Resolving Ray ObjectIDs)
     local_component_map = {}
-    for name in interaction_names:
-        local_component_map[name] = {
-            'snp1_name': component_map[name]['snp1_name'],
-            'snp2_name': component_map[name]['snp2_name'],
-            'snp1_data': ray.get(component_map[name]['snp1_ray_id'])[train_idx],
-            'snp2_data': ray.get(component_map[name]['snp2_ray_id'])[train_idx],
-            'encoded_data': ray.get(component_map[name]['encoded_ray_id'])[train_idx]
-        }
-
-    # Fit the LD node using component map
     try:
+        for name in interaction_names:
+            # Note: train_idx is used to slice the data immediately to save memory
+            local_component_map[name] = {
+                'snp1_name': clean_component_map[name]['snp1_name'],
+                'snp2_name': clean_component_map[name]['snp2_name'],
+                'snp1_data': ray.get(clean_component_map[name]['snp1_ray_id'])[train_idx].ravel(),
+                'snp2_data': ray.get(clean_component_map[name]['snp2_ray_id'])[train_idx].ravel(),
+                'encoded_data': ray.get(clean_component_map[name]['encoded_ray_id'])[train_idx].ravel()
+            }
+    except Exception as e:
+        logging.error(f"Error resolving Ray objects: {e}")
+        return float32_t(-1.0), int16_t(0), pop_id, [], {}
+
+    # 4. FIT LD NODE
+    try:
+        # Pass the sanitized dictionary and r2_dict
         ld_node.fit(local_component_map, y_train[train_idx], interaction_r2_dict)
         selected_features_after_ld = ld_node.selected_features_
+        
 
-        # If no features selected, return early
         if selected_features_after_ld is None or len(selected_features_after_ld) == 0:
             logging.warning("No features selected after LD node")
-            return float32_t(-1.0), int16_t(0), pop_id, [], ld_node.interaction_details_after_ld
+            return float32_t(-1.0), int16_t(0), pop_id, [], getattr(ld_node, 'interaction_details_after_ld', {})
 
-        # Create dataframe with only selected features for feature selector
+        # Create dataframe with only selected features
         interaction_transformed_df = pd.DataFrame({
             name: local_component_map[name]['encoded_data']
             for name in selected_features_after_ld
         })
 
     except Exception as e:
-        logging.error(f"Exception while fitting LD node: {e}")
+        # Logging the specific error helps identify if hashing is still an issue
+        logging.error(f"Exception while fitting LD node: {type(e).__name__}: {e}")
         return float32_t(-1.0), int16_t(0), pop_id, [], {}
 
-    # adding the selector nodes
+    # 5. FIT SELECTOR NODE
     try:
-        # get snps from selector node
         selector_node.fit(interaction_transformed_df, y_train[train_idx])
-        interaction_transformed_df = selector_node.transform(interaction_transformed_df) # this dataframe goes into regressor
-        feature_count = selector_node.get_feature_count() # number of selected features after the selector node
-        features_final = (selector_node.get_feature_names(selected_features_after_ld)) # get the names of the features after the selector node by sending the selected features after the LD node
+        interaction_transformed_df = selector_node.transform(interaction_transformed_df)
+        feature_count = selector_node.get_feature_count()
+        
+        # Get final names and ensure they are tuples of snp_t (interaction_t)
+        raw_features = selector_node.get_feature_names(selected_features_after_ld)
+        if isinstance(raw_features, list):
+            features_final = [tuple(f) if not isinstance(f, tuple) else f for f in raw_features]
+        else:
+            # .tolist() on numpy array converts rows to lists, so convert each to tuple
+            features_final = [tuple(f) for f in raw_features.tolist()]
 
     except Exception as e:
         logging.error(f"Exception while feature selector fits/transforms: {e}")
-        return float32_t(-1.0), int16_t(0), pop_id, [], ld_node.snp_details_after_ld
+        # Use getattr to safely handle case where interaction_details might not exist
+        details = getattr(ld_node, 'interaction_details_after_ld', {})
+        return float32_t(-1.0), int16_t(0), pop_id, [], details
 
-    # need this bc the root node would tell us if nothing was passed to it with the old implementation
     if feature_count == 0:
-        return float32_t(-1.0), int16_t(0), pop_id, [], ld_node.snp_details_after_ld
+        return float32_t(-1.0), int16_t(0), pop_id, [], ld_node.interaction_details_after_ld
 
-    # if features_final is not a list, convert it to a list
-    if not isinstance(features_final, list):
-        features_final = features_final.tolist()
-
-    # return features that made it passed ld and fs for this pipeline
-    return float32_t(1.0), int16_t(feature_count), pop_id, [snp_t(feature) for feature in features_final], ld_node.snp_details_after_ld
+    return float32_t(1.0), int16_t(feature_count), pop_id, features_final, ld_node.interaction_details_after_ld
 
 @ray.remote
 def ray_eval_pipeline_fs(snp_names: List[snp_t],
@@ -819,7 +836,7 @@ def ray_eval_pipeline_fs(snp_names: List[snp_t],
                          y_train: npt.NDArray,
                          train_idx: npt.NDArray,
                          selector_node: SelectorNode,   # error. feature count. pop_id. details after ld node. snp_after_ld (ignore for this one)
-                         pop_id: uint32_t) ->     Tuple[float32_t, int16_t, uint32_t, List[snp_t], Dict[snp_t, Dict]]:
+                         pop_id: uint32_t) -> Tuple[float32_t, int16_t, uint32_t, List, Dict]:
     """
     Evaluate a pipeline with only a feature selection node using Ray.
 
@@ -863,12 +880,16 @@ def ray_eval_pipeline_fs(snp_names: List[snp_t],
     if feature_count == 0:
         return float32_t(-1.0), int16_t(0), pop_id, [], {}
 
-    # if features_final is not a list, convert it to a list
+    # if features_final is not a list, convert it to a list, then ensure all elements are tuples
     if not isinstance(features_final, list):
-        features_final = features_final.tolist()
+        # .tolist() on numpy array converts rows to lists, so convert each to tuple
+        features_final = [tuple(f) for f in features_final.tolist()]
+    else:
+        # Already a list, but ensure each element is a tuple
+        features_final = [tuple(f) if not isinstance(f, tuple) else f for f in features_final]
 
     # return features that made it passed ld and fs for this pipeline
-    return float32_t(1.0), int16_t(feature_count), pop_id, [snp_t(feature) for feature in features_final], {}
+    return float32_t(1.0), int16_t(feature_count), pop_id, features_final, {}
 
 @ray.remote
 def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
@@ -915,8 +936,8 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
     X_univariate_matrix_train_centered = X_univariate_matrix[train_idx] - np.mean(X_univariate_matrix[train_idx], axis=0)
     X_interaction_matrix_valid_centered = X_interaction_matrix[valid_idx] - np.mean(X_interaction_matrix[train_idx], axis=0)
     X_univariate_matrix_valid_centered = X_univariate_matrix[valid_idx] - np.mean(X_univariate_matrix[train_idx], axis=0)
-    y_train_centered = ray.get(y)[train_idx] - np.mean(ray.get(y)[train_idx])
-    y_valid_centered = ray.get(y)[valid_idx] - np.mean(ray.get(y)[train_idx])
+    y_train_centered = y[train_idx] - np.mean(y[train_idx])
+    y_valid_centered = y[valid_idx] - np.mean(y[train_idx])
 
     # Step 1: Fit a ridge regression model on the univariate features to get residuals for phantom epistasis check
     try:
@@ -926,6 +947,7 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
         y_valid_residuals = y_valid_centered - results.predict(sm.add_constant(X_univariate_matrix_valid_centered, has_constant='add')) # use the training centered univariate features to get the predictions for the validation set to compute the residuals for phantom epistasis check
     except Exception as e:
         logging.error(f"Exception while fitting the base model ridge regression: {e}")
+        print(f"Error fitting ridge regression for pipeline evaluation: {e}")
         return float32_t(-1.0), pop_id, float32_t(-1.0)
 
     # Step 2: Fit OLS model on the interaction features using the residuals from the ridge regression and score on validation set to get the R² for the interaction while controlling for main effects (phantom epistasis check)
@@ -936,6 +958,7 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
         r2_score_value = r2_score(y_valid_residuals, y_pred)
     except Exception as e:
         logging.error(f"Error while scoring the pipeline: {e}")
+        print(f"Error scoring the pipeline: {e}")
         return float32_t(-1.0), pop_id, float32_t(-1.0)
 
     return float32_t(r2_score_value), pop_id, float32_t(1.0)

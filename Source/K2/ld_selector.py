@@ -3,7 +3,7 @@
 ##########################################################################################
 
 from ..Base.selectors import SelectorNode
-from ..Base.types import (rng_t, float32_t)
+from ..Base.types import (rng_t, float32_t, interaction_t, snp_t)
 
 from decimal import Decimal
 import numpy as np
@@ -172,24 +172,34 @@ class LDSelector(SelectorNode):
             self.selected_features_ = None
             return self
 
-        # Extract interaction names from component map
+        # Extract interaction names from component map - tuple containing SNP1 and SNP2 names (e.g., 2.191, 3.197)
         column_names = list(component_map.keys())
+        #print("Column names from component map:", column_names)  # Debugging statement to check the format of column names
+        #print("Type of column names:", type(column_names[0]))  # Check the type of the first column name to confirm if it's a tuple or string
         
-        # Build DataFrames from component map for easier access
+        # Build DataFrame for all the snp1 data with their corresponding names, and similarly for snp2 data and encoded interaction data, using the component map for efficient access
+        # Only the first part of the tuple should be the column name, not the entire tuple, since the entire tuple is the interaction name and we want to keep the original SNP names as column names for LD calculation
         inter_snp1_original = pd.DataFrame({
-            name: component_map[name]['snp1_data']
-            for name in column_names
-        })
+            key[0] if isinstance(key, tuple) else key: component_map[key]['snp1_data']
+            for key in column_names
+        }) 
+        #print("Shape of inter_snp1_original:", inter_snp1_original.shape)  # Debugging statement to check the shape of the DataFrame
+        #print("inter_snp1_original columns:", inter_snp1_original.columns)  # Debugging statement to check column names
         
         inter_snp2_original = pd.DataFrame({
-            name: component_map[name]['snp2_data']
-            for name in column_names
+            key[1] if isinstance(key, tuple) else key: component_map[key]['snp2_data']
+            for key in column_names
         })
+        #print("Shape of inter_snp2_original:", inter_snp2_original.shape)  # Debugging statement to check the shape of the DataFrame
+        #print("inter_snp2_original columns:", inter_snp2_original.columns)  # Debugging statement to check column names
         
+        # The column names for the encoded interaction data can be the same as the original interaction names (e.g., "2.191_3.197") since they are only used for conditional analysis and not for LD calculation, so we can keep them as is without needing to convert to string keys.
         inter_encoded = pd.DataFrame({
-            name: component_map[name]['encoded_data']
-            for name in column_names
+            f"{key[0]}_{key[1]}": component_map[key]['encoded_data']
+            for key in column_names
         })
+        #print("Shape of inter_encoded:", inter_encoded.shape)  # Debugging statement to check the shape of the DataFrame
+        #print("inter_encoded columns:", inter_encoded.columns)  # Debugging statement to check column names
 
         ld_threshold = self.threshold
         max_distance = self.genomic_distance
@@ -198,7 +208,7 @@ class LDSelector(SelectorNode):
         anchor_interaction_details = {}
         interaction_details_after_ld = {}
         
-        # Initialize the interaction_details_after_ld dictionary
+        # Initialize the interaction_details_after_ld dictionary (using original keys)
         for interaction in column_names:
             interaction_details_after_ld[interaction] = {
                 "pruned": False, 
@@ -211,11 +221,15 @@ class LDSelector(SelectorNode):
         # Parse interaction names to extract chromosome and position information
         interaction_info = []
         for interaction in column_names:
-            snp1, snp2 = interaction.split('_')
+            # Handle tuple format: (snp1, snp2) where each snp is like "chr.pos"
+            assert isinstance(interaction, tuple)
+            snp1, snp2 = interaction # interaction is a tuple of (snp1, snp2) where each snp is like "chr.pos"
+
             chr1, pos1 = int(snp1.split('.')[0]), int(snp1.split('.')[1])
             chr2, pos2 = int(snp2.split('.')[0]), int(snp2.split('.')[1])
             interaction_info.append({
                 'interaction': interaction,
+                'interaction_str': f"{snp1}_{snp2}",  # String representation for easier handling in DataFrames and dictionaries
                 'chr1': chr1,
                 'pos1': pos1,
                 'chr2': chr2,
@@ -224,7 +238,10 @@ class LDSelector(SelectorNode):
             })
         
         interaction_df = pd.DataFrame(interaction_info)
-        marginal_r2 = {interaction: interaction_r2_dict[interaction] for interaction in column_names}
+        
+        marginal_r2 = pd.Series({interaction: interaction_r2_dict[interaction] for interaction in column_names})
+        # Create a string-indexed version for easier access
+        marginal_r2_str = pd.Series({f"{k[0]}_{k[1]}": v for k, v in marginal_r2.items()})
 
         # Group interactions by chromosome pair
         chr_pair_groups = interaction_df.groupby('chr_pair')
@@ -264,14 +281,15 @@ class LDSelector(SelectorNode):
             # this is because if a group is a subset of another group, then the interactions in the smaller group will be pruned by the interactions in the larger group, so we can just keep the larger group and remove the smaller group
             # we can check for subsets by checking if the set of interactions in one group is a subset of the set of interactions in another group
             unique_groups = []
-            for group in groups:
-                group_interactions = set(row['interaction'] for row in group)
+            for i, group in enumerate(groups):
+                # Convert to native Python types to avoid numpy array issues
+                group_interactions = set(str(row['interaction_str']) if hasattr(row['interaction_str'], 'item') else row['interaction_str'] for row in group)
                 is_subset = False
-                for other_group in groups:
-                    if group == other_group:
+                for j, other_group in enumerate(groups):
+                    if i == j:  # Use index comparison instead of object comparison
                         continue
-                    other_group_interactions = set(row['interaction'] for row in other_group)
-                    if group_interactions.issubset(other_group_interactions):
+                    other_group_interactions = set(str(row['interaction_str']) if hasattr(row['interaction_str'], 'item') else row['interaction_str'] for row in other_group)
+                    if group_interactions.issubset(other_group_interactions) and group_interactions != other_group_interactions:
                         is_subset = True
                         break
                 if not is_subset:
@@ -279,12 +297,17 @@ class LDSelector(SelectorNode):
             
             # Process each sub-group for LD pruning and conditional analysis
             for group in unique_groups:
-                interactions_in_group = [row['interaction'] for row in group]
+                # Convert to native Python strings to avoid numpy issues
+                interactions_in_group = [
+                    str(row['interaction_str']) if hasattr(row['interaction_str'], 'item') else row['interaction_str'] 
+                    for row in group
+                ]  # Use string keys
                 final_group_interactions = [] # to store interactions that survive LD pruning and conditional analysis in this group
                 
                 # if only one interaction in the group, we can just keep it without LD checking or conditional analysis
                 if len(interactions_in_group) == 1:
                     final_group_interactions.append(interactions_in_group[0])
+                    final_selected_interactions.extend(final_group_interactions)
                     continue
 
                 # Pairwise LD checking within this sub-group
@@ -293,6 +316,7 @@ class LDSelector(SelectorNode):
                 
                 for i in range(len(interactions_in_group)):
                     int_a_name = interactions_in_group[i]
+                    #print(f"Processing interaction {int_a_name} in group with interactions: {interactions_in_group}")  # Debugging statement to track progress and check interaction names
                     
                     # Skip if already pruned
                     if int_a_name in ld_removed_in_group:
@@ -300,40 +324,49 @@ class LDSelector(SelectorNode):
                     
                     for j in range(i + 1, len(interactions_in_group)):
                         int_b_name = interactions_in_group[j]
+                        #print(f"Comparing interaction {int_a_name} with interaction {int_b_name} for LD pruning")  # Debugging statement to track which interactions are being compared
                         
                         # Skip if already pruned
                         if int_b_name in ld_removed_in_group:
                             continue
                         
                         # Calculate LD between the constituent SNP pairs using the original SNP encodings
-                        snp_a1 = inter_snp1_original[int_a_name].values
-                        snp_a2 = inter_snp2_original[int_a_name].values
-                        snp_b1 = inter_snp1_original[int_b_name].values
-                        snp_b2 = inter_snp2_original[int_b_name].values
+                        # Split interaction strings to get individual SNP names
+                        snp_a1_name, snp_a2_name = int_a_name.split('_')
+                        snp_b1_name, snp_b2_name = int_b_name.split('_')
+                        
+                        snp_a1 = inter_snp1_original[snp_a1_name].values
+                        snp_a2 = inter_snp2_original[snp_a2_name].values
+                        snp_b1 = inter_snp1_original[snp_b1_name].values
+                        snp_b2 = inter_snp2_original[snp_b2_name].values
 
                         # Get both correlation coefficients (r² values)
                         r2_a1_b1, r2_a2_b2 = calculate_ld_numba(snp_a1, snp_a2, snp_b1, snp_b2)
                         
                         # Both coefficients must exceed threshold to consider interactions redundant
                         if r2_a1_b1 > ld_threshold and r2_a2_b2 > ld_threshold:
-                            if marginal_r2[int_a_name] > marginal_r2[int_b_name]:
+                            if marginal_r2_str[int_a_name] > marginal_r2_str[int_b_name]:
                                 ld_removed_in_group.add(int_b_name)
-                                ld_removed_interactions.add(int_b_name)
+                                ld_removed_interactions.add(int_b_name)  # Add string key
                                 anchor_interaction_details[int_b_name] = int_a_name
                             else:
                                 ld_removed_in_group.add(int_a_name)
-                                ld_removed_interactions.add(int_a_name)
+                                ld_removed_interactions.add(int_a_name)  # Add string key
                                 anchor_interaction_details[int_a_name] = int_b_name
                                 break  # Move to next i since i is pruned
 
-                # Update interaction details for pruned interactions
-                for interaction in ld_removed_in_group:
-                    interaction_details_after_ld[interaction] = {
+                # Update interaction details for pruned interactions (convert string keys back to original)
+                for interaction_str in ld_removed_in_group:
+                    # Convert string back to tuple for original key
+                    original_key = tuple(interaction_str.split('_'))
+                    anchor_str = anchor_interaction_details[interaction_str]
+                    anchor_original = tuple(anchor_str.split('_'))
+                    interaction_details_after_ld[original_key] = {
                         "pruned": True,
                         "reason": "LD",
                         "threshold": self.threshold,
                         "genomic_distance": self.genomic_distance,
-                        "anchor_interaction": anchor_interaction_details[interaction]
+                        "anchor_interaction": anchor_original
                     }
 
                 # Get non-pruned interactions for conditional analysis
@@ -348,10 +381,11 @@ class LDSelector(SelectorNode):
                 # if only one interaction remains after LD pruning, we can just keep it without conditional analysis
                 if len(non_pruned_interactions) < 2:
                     final_group_interactions.extend(non_pruned_interactions)
+                    final_selected_interactions.extend(final_group_interactions)
                     continue
 
                 # Find peak interaction (highest marginal R²)
-                peak_interaction = max(non_pruned_interactions, key=lambda x: marginal_r2[x])
+                peak_interaction = max(non_pruned_interactions, key=lambda x: marginal_r2_str[x])
                 X_peak = inter_encoded[[peak_interaction]]
             
                 p_values = []
@@ -378,6 +412,7 @@ class LDSelector(SelectorNode):
 
                 if not p_values: # No interactions to test after LD pruning, just add the peak interaction
                     final_group_interactions.append(peak_interaction)
+                    final_selected_interactions.extend(final_group_interactions)
                     continue
 
                 # Multiple testing correction
@@ -390,16 +425,18 @@ class LDSelector(SelectorNode):
                 # Remove interactions that are not significant after conditioning on the peak interaction
                 to_remove = {i for i, r in zip(tested_interactions, rejected) if not r}
                 
-                for interaction in to_remove:
-                    interaction_details_after_ld[interaction] = {
+                for interaction_str in to_remove:
+                    original_key = tuple(interaction_str.split('_'))
+                    peak_original = tuple(peak_interaction.split('_'))
+                    interaction_details_after_ld[original_key] = {
                         "pruned": True,
                         "reason": "CA",
                         "threshold": self.threshold,
                         "genomic_distance": self.genomic_distance,
-                        "anchor_interaction": peak_interaction
+                        "anchor_interaction": peak_original
                     }
-                    ld_removed_interactions.add(interaction)
-                    anchor_interaction_details[interaction] = peak_interaction
+                    ld_removed_interactions.add(interaction_str)
+                    anchor_interaction_details[interaction_str] = peak_interaction
 
                 # Add peak interaction and significant interactions
                 final_group_interactions = [peak_interaction]
@@ -407,10 +444,18 @@ class LDSelector(SelectorNode):
                     if interaction not in to_remove and interaction != peak_interaction:
                         final_group_interactions.append(interaction)
                 
-            self.interaction_details_after_ld = interaction_details_after_ld
-            final_selected_interactions.extend(final_group_interactions)
+                # Add this group's interactions to the final list
+                final_selected_interactions.extend(final_group_interactions)
+                
+        # Store the interaction details after all chromosome pairs are processed
+        self.interaction_details_after_ld = interaction_details_after_ld
         
-        self.selected_features_ = np.array(final_selected_interactions)
+        # Convert final selected interactions to list of tuples for selected_features_ (convert string keys back to tuple keys)
+        self.selected_features_ = [tuple(str_key.split('_')) for str_key in final_selected_interactions]
+        # Create bool mask by checking if column_names (tuples) are in selected_features_ (tuples)
+        self.bool_mask = np.array([col in self.selected_features_ for col in column_names])
+        self.name_of_selected_features = [column_names[i] for i in range(len(column_names)) if self.bool_mask[i]]
+
         
         return self
 

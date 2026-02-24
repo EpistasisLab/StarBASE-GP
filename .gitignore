@@ -9,6 +9,7 @@ pareto_front_plot.png
 pareto_front_pipelines.csv
 snp_hub.csv
 utopia_pipeline_test_results.csv
+interaction_hub.csv
 .DS_Store
 generation_details.csv
 pareto_validation_plot.png
