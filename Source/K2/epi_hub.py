@@ -325,14 +325,14 @@ class K2_Hub(Hub):
             # Extract SNP1 and SNP2 from the interaction tuple
             snp1, snp2 = k
             
-            # Extract pager values from pager_lut if it exists and is a dict
-            pager_lut = v[5]
-            if pager_lut is not None and isinstance(pager_lut, dict):
-                # pager_lut maps genotype combos to risk values
-                # For saving, we can store the mapping as a string or individual values
-                pager_str = str(pager_lut)
+            # Extract MDR mapping from mdr_mapping if it exists and is a dict
+            mdr_mapping = v[5]
+            if mdr_mapping is not None and isinstance(mdr_mapping, dict):
+                # mdr_mapping maps genotype combos to risk values
+                # Use repr() to get a properly escaped string representation
+                mdr_str = repr(mdr_mapping)
             else:
-                pager_str = ''
+                mdr_str = ''
             
             # Format anchor_interaction (v[10]) - could be tuple or string
             anchor_interaction = v[10]
@@ -341,7 +341,7 @@ class K2_Hub(Hub):
             else:
                 anchor_str = str(anchor_interaction)
             
-            # Append row: [interaction_str, snp1, snp2, r2, encoding, gen_seen, active, gen_pruned, pruned_reason, ld_threshold, ld_genomic_distance, anchor_interaction, pager_lut]
+            # Append row: [interaction_str, snp1, snp2, r2, encoding, gen_seen, active, gen_pruned, pruned_reason, ld_threshold, ld_genomic_distance, anchor_interaction, mdr_mapping]
             interaction_str = f"{snp1}:{snp2}"
             interaction_data.append([
                 interaction_str,  # Combined interaction name
@@ -356,7 +356,7 @@ class K2_Hub(Hub):
                 v[8],            # ld_threshold
                 v[9],            # ld_genomic_distance
                 anchor_str,      # anchor_interaction
-                pager_str        # pager_lut
+                mdr_str          # mdr_mapping
             ])
 
         collect_time = time.time() - collect_start
@@ -372,15 +372,18 @@ class K2_Hub(Hub):
         write_start = time.time()
         with open(save_dir+"interaction_hub.csv", 'w') as f:
             # Write the headers
-            f.write("interaction,snp1,snp2,r2,encoding,gen_seen,active,gen_pruned,pruned_reason,ld_threshold,ld_genomic_distance,anchor_interaction,pager_lut\n")
+            f.write("interaction,snp1,snp2,r2,encoding,gen_seen,active,gen_pruned,pruned_reason,ld_threshold,ld_genomic_distance,anchor_interaction,mdr_mapping\n")
             for row in interaction_data:
                 # Add 'chr' prefix to interaction components
                 snp1_chr, snp1_pos = row[1].split('.')
                 snp2_chr, snp2_pos = row[2].split('.')
                 interaction_with_chr = f"chr{row[1]}:chr{row[2]}"
                 
-                # Write all columns
-                f.write(f"{interaction_with_chr},chr{row[1]},chr{row[2]},{row[3]},{row[4]},{row[5]},{row[6]},{row[7]},{row[8]},{row[9]},{row[10]},{row[11]},{row[12]}\n")
+                # Escape mdr_mapping field by wrapping in quotes (last field - row[12])
+                mdr_mapping_escaped = row[12].replace('"', '""') if row[12] else ''  # Escape quotes by doubling them
+                
+                # Write all columns, with mdr_mapping wrapped in quotes to handle commas
+                f.write(f"{interaction_with_chr},chr{row[1]},chr{row[2]},{row[3]},{row[4]},{row[5]},{row[6]},{row[7]},{row[8]},{row[9]},{row[10]},{row[11]},\"{mdr_mapping_escaped}\"\n")
 
         write_interaction_time = time.time() - write_start
         print(f"  - Writing interaction_hub.csv: {write_interaction_time:.4f}s", flush=True)

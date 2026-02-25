@@ -596,25 +596,27 @@ class K2_Evolver(EA):
     # function to check if a branch set have interactions in the same hyperchromosome (that SNP 1 and SNP3 are on the same chromosome and SNP2 and SNP4 are on the same chromosome) - if so, we can apply LD pruning, if not, we skip LD pruning and just evaluate with FS
     def interactions_on_same_hyperchromosome(self, branch_set: Set[interaction_t]) -> bool:
         """
-        Function to check if a branch set has interactions in the same hyperchromosome.
-        This is determined by checking if SNP1 and SNP3 are on the same chromosome and if SNP2 and SNP4 are on the same chromosome for each interaction.
+        Function to check if a branch set has interactions that share the same hyperchromosome.
+        This is determined by checking if at least 2 interactions involve the same pair of chromosomes.
+        LD pruning is useful when multiple interactions share the same hyperchromosome, as their
+        component SNPs may be in linkage disequilibrium.
 
         Args:
             branch_set (Set[interaction_t]): Set of interactions (tuples of SNP pairs) to check.
         Returns:
-            bool: True if all interactions in the branch set are on the same hyperchromosome, False otherwise.
+            bool: True if at least 2 interactions share the same hyperchromosome, False otherwise.
         """
-        hyperchromosome = set() # tuple of chromosomes for an interaction pair
+        hyperchromosome_count = {} # count of interactions per hyperchromosome
         for interaction in branch_set:
             snp1, snp2 = interaction # unpack the interaction tuple (snp1, snp2)
             snp1_chrom, _ = snp_chrm_pos(snp1)
             snp2_chrom, _ = snp_chrm_pos(snp2)
-            hyperchromosome.add((snp1_chrom, snp2_chrom))
-        # if there is more than one unique hyperchromosome, then we return False
-        if len(hyperchromosome) > 1:
-            return False
-
-        return True
+            hc = (snp1_chrom, snp2_chrom)
+            hyperchromosome_count[hc] = hyperchromosome_count.get(hc, 0) + 1
+        
+        # Return True if any hyperchromosome has 2 or more interactions
+        # (those interactions could be in LD and should be pruned)
+        return any(count >= 2 for count in hyperchromosome_count.values())
 
     def process_offspring(self, pipelines: List[Pipeline], gen_info: int16_t) -> List[Pipeline]:
         """
@@ -940,7 +942,7 @@ class K2_Evolver(EA):
         print(f"  Step 3 (Aggregate):   {aggregate_time:6.2f}s ({aggregate_time/total_time*100:5.1f}%)", flush=True)
         print(f"  Step 4 (Encode jobs): {encoding_job_time + encoding_exec_time:6.2f}s ({(encoding_job_time + encoding_exec_time)/total_time*100:5.1f}%)", flush=True)
         print(f"  Step 5 (Hub update):  {hub_update_time:6.2f}s ({hub_update_time/total_time*100:5.1f}%)", flush=True)
-        print(f"  Results: {len(passed_interactions)} passed, {len(failed_interactions)} failed, {len(interactions_to_encode)} above threshold\n", flush=True)
+        print(f"  Results: {len(passed_interactions)} passed preprocessing, {len(failed_interactions)} failed preprocessing, {len(interactions_to_encode)} above phantom epistasis threshold\n", flush=True)
 
     def post_analysis_with_good_snps(self):
         """
