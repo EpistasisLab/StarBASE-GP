@@ -448,7 +448,7 @@ class K2_Evolver(EA):
                 # Check if LD pruning should be applied:
                 # 1. ld_flag must be True
                 # 2. Pipeline must contain SNPs from the same chromosome
-                if self.ld_flag and self.interactions_on_same_hyperchromosome(pipeline.get_branch_set()):    
+                if self.ld_flag and self.interactions_on_same_hyperchromosome(pipeline.get_branch_set()):
                     ray_jobs.append(ray_utils.ray_eval_pipeline_ld_fs.remote(component_map=self.hub.build_component_map(pipeline.get_branch_set()),
                                                                              y_train=self.all_y_ray_id,
                                                                              train_idx=self.train_idx_ray,
@@ -457,9 +457,9 @@ class K2_Evolver(EA):
                                                                              pop_id=uint32_t(global_id),
                                                                              interaction_r2_set=self.hub.generate_r2_set(pipeline.get_branch_set())))
                     pipeline_evaluation_details[global_id][snp_t('ld_used')] = True
-                
+
                 # else, no need for ld pruner (either ld_flag is False or interactions are not on same hyperchromosome)
-                else: # todo: should this still be here? yes because of the pipelines which would have interaction pairs from different chromosomes, that will save time by not calling LD at all
+                else:
                     ray_jobs.append(ray_utils.ray_eval_pipeline_fs.remote(component_map=self.hub.build_component_map(pipeline.get_branch_set()),
                                                                          y_train=self.all_y_ray_id,
                                                                          train_idx=self.train_idx_ray,
@@ -504,6 +504,7 @@ class K2_Evolver(EA):
 
                 # create a ray job for each of the folds
                 for _, fold_data in self.train_fold_dict_ray.items():
+                    # todo: should pipelines[i].get_branch_set() be pipeline_evaluation_details[i][snp_t('features')] instead since we want to evaluate the final set of features after ld/fs pruning?
                     ray_jobs.append(ray_utils.ray_eval_pipeline_r2.remote(component_map=self.hub.build_component_map(pipelines[i].get_branch_set()),
                                                                           y = self.all_y_ray_id,
                                                                           train_idx = fold_data['train_idx'],
@@ -532,22 +533,27 @@ class K2_Evolver(EA):
 
         # update hubs with prunned interactions info
         hub_update_start = time.time()
-        #todo: what we doing here tho?
         self.hub.process_pruned_interactions(pruned_interactions, interactions_details_per_interaction, gen_info)
         hub_update_time = time.time() - hub_update_start
         print(f"  - Hub pruned interaction updates: {hub_update_time:.4f}s", flush=True)
 
         # print all the pipeline evaluation details for this generation
         for pipeline_id in pipeline_evaluation_details:
-            print(f"Pipeline {pipeline_id} evaluation details: R2={pipeline_evaluation_details[pipeline_id][snp_t('r2')]:.4f}, Feature Count={pipeline_evaluation_details[pipeline_id][snp_t('feature_cnt')]}, LD Used={pipeline_evaluation_details[pipeline_id][snp_t('ld_used')]}, Interactions {pipeline_evaluation_details[pipeline_id][snp_t('features')]}", flush=True)
+            print(f"Pipeline {pipeline_id} evaluation details: R2={pipeline_evaluation_details[pipeline_id][snp_t('r2')]:.4f}, \
+                Feature Count={pipeline_evaluation_details[pipeline_id][snp_t('feature_cnt')]}, \
+                    LD Used={pipeline_evaluation_details[pipeline_id][snp_t('ld_used')]}, \
+                        Interactions {pipeline_evaluation_details[pipeline_id][snp_t('features')]}", flush=True)
 
         # will hold the evaluated pipelines that passed evaluation
         evaluated_pipelines : List[Pipeline] = []
 
         # update pipelines with evaluation results
         for pipeline_id in pipeline_evaluation_details:
-            print(f"Final evaluation for Pipeline {pipeline_id}: R2={pipeline_evaluation_details[pipeline_id][snp_t('r2')]:.4f}, Feature Count={pipeline_evaluation_details[pipeline_id][snp_t('feature_cnt')]}, LD Used={pipeline_evaluation_details[pipeline_id][snp_t('ld_used')]}, Interactions {pipeline_evaluation_details[pipeline_id][snp_t('features')]}", flush=True)
-            
+            print(f"Final evaluation for Pipeline {pipeline_id}: R2={pipeline_evaluation_details[pipeline_id][snp_t('r2')]:.4f}, \
+                Feature Count={pipeline_evaluation_details[pipeline_id][snp_t('feature_cnt')]}, \
+                    LD Used={pipeline_evaluation_details[pipeline_id][snp_t('ld_used')]}, \
+                        Interactions {pipeline_evaluation_details[pipeline_id][snp_t('features')]}", flush=True)
+
             # skip pipelines with error, negative r2, or all snps are inactive
             if pipeline_evaluation_details[pipeline_id][snp_t('error')] or \
                 pipeline_evaluation_details[pipeline_id][snp_t('r2')] <= float32_t(0.0):
@@ -558,9 +564,10 @@ class K2_Evolver(EA):
             typed_features = []
             for feature in raw_features:
                 if isinstance(feature, tuple):
+                    assert len(feature) == 2, "Interaction feature tuple must have length 2."
                     typed_features.append(tuple(snp_t(f) for f in feature))
                 elif isinstance(feature, np.str_):
-                    typed_features.append(snp_t(str(feature)))
+                    typed_features.append(snp_t(str(feature))) # todo: when would this happen?
                 else:
                     raise ValueError(f"Unexpected feature type: {type(feature)} for feature {feature}")
 
@@ -592,7 +599,7 @@ class K2_Evolver(EA):
         print(f"  - Hub updates:   {hub_update_time:6.2f}s ({pct_hub_update:5.1f}%)\n", flush=True)
 
         return evaluated_pipelines, {'fs_only_count': fs_only_count, 'pipelines_evaluated': len(evaluated_pipelines)}
-    
+
     # function to check if a branch set have interactions in the same hyperchromosome (that SNP 1 and SNP3 are on the same chromosome and SNP2 and SNP4 are on the same chromosome) - if so, we can apply LD pruning, if not, we skip LD pruning and just evaluate with FS
     def interactions_on_same_hyperchromosome(self, branch_set: Set[interaction_t]) -> bool:
         """
@@ -611,9 +618,9 @@ class K2_Evolver(EA):
             snp1, snp2 = interaction # unpack the interaction tuple (snp1, snp2)
             snp1_chrom, _ = snp_chrm_pos(snp1)
             snp2_chrom, _ = snp_chrm_pos(snp2)
-            hc = (snp1_chrom, snp2_chrom)
+            hc = (snp1_chrom, snp2_chrom) # todo: does ordering matter here? should (chr1, chr2) be the same as (chr2, chr1), only matters if they are different?
             hyperchromosome_count[hc] = hyperchromosome_count.get(hc, 0) + 1
-        
+
         # Return True if any hyperchromosome has 2 or more interactions
         # (those interactions could be in LD and should be pruned)
         return any(count >= 2 for count in hyperchromosome_count.values())
@@ -645,7 +652,7 @@ class K2_Evolver(EA):
 
         # evaluate all unseen interactions if we have any to evaluate
         if len(unseen_interactions) > 0:
-            # break up unseen_branches into chunks of 2000 to avoid ray overload and then run evaluate_unseen_branches on each chunk
+            # break up unseen_branches into chunks of 1000 to avoid ray overload and then run evaluate_unseen_branches on each chunk
             unseen_branches_list = list(unseen_interactions)
             for i in range(0, len(unseen_branches_list), 1000):
                 print(f"Evaluating unseen branches chunk {i // 1000 + 1} / {(len(unseen_branches_list) - 1) // 1000 + 1}", flush=True)
@@ -813,7 +820,8 @@ class K2_Evolver(EA):
                 assert len(inter_perf[snp_pair]['xor_r2_folds']) == self.k, f"Expected {self.k} XOR R2 results for {snp_pair}, got {len(inter_perf[snp_pair]['xor_r2_folds'])}."
                 assert len(inter_perf[snp_pair]['mdr_r2_folds']) == self.k, f"Expected {self.k} MDR R2 results for {snp_pair}, got {len(inter_perf[snp_pair]['mdr_r2_folds'])}."
                 # Average R2 across folds for each encoding
-                avg_cartesian = np.mean([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0])if len([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0) 
+                # todo: why are we only adding positive r2 scores here?
+                avg_cartesian = np.mean([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0])if len([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
                 avg_xor = np.mean([r2 for r2 in inter_perf[snp_pair]['xor_r2_folds'] if r2 > 0]) if len([r2 for r2 in inter_perf[snp_pair]['xor_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
                 avg_mdr = np.mean([r2 for r2 in inter_perf[snp_pair]['mdr_r2_folds'] if r2 > 0]) if len([r2 for r2 in inter_perf[snp_pair]['mdr_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
 
@@ -837,7 +845,8 @@ class K2_Evolver(EA):
                 inter_perf[snp_pair]['best_enc'] = snp_t('cartesian')
 
             # Check threshold
-            if inter_perf[snp_pair]['avg_r2'] <= 0.004:
+            # todo: if phantom epistasis threshold is not met, should we set this interaction as inactive? Not sure if that is being captured in the epi hub.
+            if inter_perf[snp_pair]['avg_r2'] <= 0.004: # todo: should this threshold be a user-defined parameter different from the 'branch_explainability_threshold'? (phantom_epistasis_threshold)?
                 inter_perf[snp_pair]['failure_code'] = float32_t(-3.0)  # Phantom epistasis
 
         aggregate_time = time.time() - aggregate_start
@@ -851,7 +860,7 @@ class K2_Evolver(EA):
         interactions_to_encode = []
 
         for snp_pair in passed_interactions:
-            if inter_perf[snp_pair]['avg_r2'] >= self.branch_explainability_threshold:
+            if inter_perf[snp_pair]['avg_r2'] >= self.branch_explainability_threshold: # todo: is this if and the previous todo related?
                 interactions_to_encode.append(snp_pair)
                 snp_1, snp_2 = snp_pair
                 X1 = self.hub.get_snp_ori_ray_id(snp_1)
@@ -928,7 +937,7 @@ class K2_Evolver(EA):
                 enc_x=inter_perf[snp_pair]['best_enc'],
                 gen_seen=gen_seen,
                 explainability_threshold=self.branch_explainability_threshold,
-                mdr_mapping=mdr_mapping  
+                mdr_mapping=mdr_mapping
             )
 
         hub_update_time = time.time() - hub_update_start
@@ -982,10 +991,10 @@ class K2_Evolver(EA):
             ray_jobs.append(ray_utils.ray_eval_pipeline_r2.remote(component_map=self.hub.build_component_map(pipeline.get_branch_set()),
                                                                   y = self.all_y_ray_id,
                                                                   train_idx = self.train_idx_ray,  # Use all training data for final evaluation
-                                                                  valid_idx = self.val_idx_ray, 
+                                                                  valid_idx = self.val_idx_ray,
                                                                   pop_id = uint32_t(pipeline_id)))
 
-            
+
             # process results as they come in
             while len(ray_jobs) > 0:
                 finished, ray_jobs = ray.wait(ray_jobs)
@@ -1050,7 +1059,7 @@ class K2_Evolver(EA):
         for pid, data in pareto_validation_r2.items():
             # Convert interaction tuples to string format: chr1.123:chr2.456
             feature_set_str = ";".join(sorted([f"chr{interaction[0]}:chr{interaction[1]}" for interaction in data['feature_set']]))
-            
+
             pareto_data.append({
                 'Pipeline ID': pid + 1,  # Start from 1 instead of 0
                 'Cross-validated Train R2': data['train_r2'],
@@ -1225,7 +1234,7 @@ class K2_Evolver(EA):
 
         # Call ray_pfi
         pfi_job = ray_utils.ray_pfi.remote(
-            component_map=self.hub.build_component_map(pipeline_data['pipeline'].get_branch_set()),
+            # component_map=self.hub.build_component_map(pipeline_data['pipeline'].get_branch_set()),
             X=[transformed_snp_ray_ids[snp] for snp in snp_names],
             y=self.all_y_ray_id,
             train_idx=combined_idx_ray_id,
