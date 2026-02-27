@@ -12,12 +12,8 @@ from ..Base.considered import Considered
 
 from typeguard import typechecked
 from typing import List, Dict, Set
-import numpy as np
 import ray
 import time
-
-# todo
-# - add pager lut to the epi hub and update the add_interaction_to_hub function to take in pager lut and store it in the epi hub
 
 @typechecked
 class K2_Hub(Hub):
@@ -58,7 +54,7 @@ class K2_Hub(Hub):
                 (4) active (bool): active value of the interaction
                 (5) mdr_mapping (Dict[tuple, float32_t] | None): lookup table for MDR values of each snp in the interaction
                 (6) gen_pruned (int16_t): generation when the interaction was pruned (-1 if not pruned)
-                (7) pruned_reason (str): reason for pruning ("LD" or "CA" or "" if not pruned)
+                (7) pruned_reason (str): reason for pruning ("LD" or "CA" or "PE" or "" if not pruned)
                 (8) ld_threshold (float32_t): LD threshold used for pruning
                 (9) ld_genomic_distance (int32_t): genomic distance used for LD pruning
                 (10) anchor_interaction (interaction_t or str): anchor interaction if pruned, empty string otherwise
@@ -120,7 +116,25 @@ class K2_Hub(Hub):
             self.hub[interaction][6] = gen_pruned
             return
 
-        def add_ld_details(self, interaction: interaction_t, reason: str, threshold: float, 
+        def flip_activate_flag_pe(self, interaction: interaction_t, gen_pruned: int16_t) -> None:
+            """Mark an interaction as inactive due to poor performance pruning."""
+            assert interaction in self.hub
+            # Set active flag (index 4) to False and gen_pruned (index 6) to the generation
+            self.hub[interaction][4] = False
+            self.hub[interaction][6] = gen_pruned
+            self.hub[interaction][7] = "PE"
+            return
+
+        def flip_activate_flag_pre(self, interaction: interaction_t, gen_pruned: int16_t) -> None:
+            """Mark an interaction as inactive due to poor performance pruning."""
+            assert interaction in self.hub
+            # Set active flag (index 4) to False and gen_pruned (index 6) to the generation
+            self.hub[interaction][4] = False
+            self.hub[interaction][6] = gen_pruned
+            self.hub[interaction][7] = "PRE"
+            return
+
+        def add_ld_details(self, interaction: interaction_t, reason: str, threshold: float,
                           genomic_distance: int, anchor_interaction: interaction_t | str) -> None:
             """Add LD pruning details to the interaction hub."""
             assert interaction in self.hub
@@ -262,7 +276,6 @@ class K2_Hub(Hub):
                        enc_rid: ray.ObjectID | None,
                        enc_x: snp_t | None,
                        gen_seen: int16_t,
-                       explainability_threshold: float32_t,
                        mdr_mapping) -> None:
         """
         Update SNP hub with the r2 and encoding type & vector (if applicable).
@@ -283,7 +296,7 @@ class K2_Hub(Hub):
                                            enc_rid=enc_rid,
                                            enc_x=enc_x,
                                            gen_seen=gen_seen,
-                                           active=False if r2 < explainability_threshold and explainability_threshold >= float32_t(0.0) else True,
+                                           active=True,
                                            mdr_mapping=mdr_mapping)
         return
 
@@ -324,7 +337,7 @@ class K2_Hub(Hub):
             # k: interaction tuple (snp1, snp2)
             # Extract SNP1 and SNP2 from the interaction tuple
             snp1, snp2 = k
-            
+
             # Extract MDR mapping from mdr_mapping if it exists and is a dict
             mdr_mapping = v[5]
             if mdr_mapping is not None and isinstance(mdr_mapping, dict):
@@ -333,14 +346,14 @@ class K2_Hub(Hub):
                 mdr_str = repr(mdr_mapping)
             else:
                 mdr_str = ''
-            
+
             # Format anchor_interaction (v[10]) - could be tuple or string
             anchor_interaction = v[10]
             if isinstance(anchor_interaction, tuple):
                 anchor_str = f"{anchor_interaction[0]}:{anchor_interaction[1]}"
             else:
                 anchor_str = str(anchor_interaction)
-            
+
             # Append row: [interaction_str, snp1, snp2, r2, encoding, gen_seen, active, gen_pruned, pruned_reason, ld_threshold, ld_genomic_distance, anchor_interaction, mdr_mapping]
             interaction_str = f"{snp1}:{snp2}"
             interaction_data.append([
@@ -375,13 +388,13 @@ class K2_Hub(Hub):
             f.write("interaction,snp1,snp2,r2,encoding,gen_seen,active,gen_pruned,pruned_reason,ld_threshold,ld_genomic_distance,anchor_interaction,mdr_mapping\n")
             for row in interaction_data:
                 # Add 'chr' prefix to interaction components
-                snp1_chr, snp1_pos = row[1].split('.')
-                snp2_chr, snp2_pos = row[2].split('.')
+                # snp1_chr, snp1_pos = row[1].split('.')
+                # snp2_chr, snp2_pos = row[2].split('.')
                 interaction_with_chr = f"chr{row[1]}:chr{row[2]}"
-                
+
                 # Escape mdr_mapping field by wrapping in quotes (last field - row[12])
                 mdr_mapping_escaped = row[12].replace('"', '""') if row[12] else ''  # Escape quotes by doubling them
-                
+
                 # Write all columns, with mdr_mapping wrapped in quotes to handle commas
                 f.write(f"{interaction_with_chr},chr{row[1]},chr{row[2]},{row[3]},{row[4]},{row[5]},{row[6]},{row[7]},{row[8]},{row[9]},{row[10]},{row[11]},\"{mdr_mapping_escaped}\"\n")
 
@@ -495,7 +508,6 @@ class K2_Hub(Hub):
         # is this interaction active?
         return self.epi_db.get_active(interaction)
 
-    #todo: what do we want to store in the hub?
     def process_pruned_interactions(self, interactions: Set[interaction_t], snp_details_after_ld: Dict[interaction_t, Dict], gen_pruned: int16_t) -> None:
         """
         Process pruned interactions by updating their status in the interaction hub and removing them from the consideration hub.
@@ -575,7 +587,7 @@ class K2_Hub(Hub):
         for interaction in interactions:
             if self.epi_db.get_active(interaction):
                 return True
-        
+
         # Return false if all interactions are inactive
         return False
 
@@ -599,6 +611,39 @@ class K2_Hub(Hub):
         # print count of seen interactions in the epi_hub
         print(f"Seen interactions count: {len(self.epi_db.hub)}")
         return
+
+    def flip_active_flag_pe(self, interaction: interaction_t, gen_pruned: int16_t) -> None:
+        """
+        Function to flip the active flag of an interaction in the epi_hub.
+
+        Parameters:
+            interaction (interaction_t): The interaction for which to flip the active flag.
+            gen_pruned (int16_t): The generation in which the interaction was pruned.
+        """
+
+        self.epi_db.flip_activate_flag_pe(interaction, gen_pruned)
+        return
+
+    def flip_active_flag_pre(self, interaction: interaction_t, gen_pruned: int16_t) -> None:
+        """
+        Function to flip the active flag of an interaction in the epi_hub.
+
+        Parameters:
+            interaction (interaction_t): The interaction for which to flip the active flag.
+            gen_pruned (int16_t): The generation in which the interaction was pruned.
+        """
+
+        self.epi_db.flip_activate_flag_pre(interaction, gen_pruned)
+        return
+
+    def get_epi_db_size(self) -> uint32_t:
+        """
+        Function to get the size of the epi_db.
+
+        Returns:
+            uint32_t: The number of interactions stored in the epi_db.
+        """
+        return uint32_t(len(self.epi_db.hub))
 
     def get_unseen_interactions(self, interactions: Set[interaction_t]) -> Set[interaction_t]:
         """

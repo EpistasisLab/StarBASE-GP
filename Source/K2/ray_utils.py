@@ -102,10 +102,6 @@ def ray_interaction_encoder(X1: np.ndarray,
         X_encoded: Encoded interaction vector
         snp: SNP pair identifier
     """
-    # assert isinstance(X1, np.ndarray), "X1 should be a numpy array"
-    # assert isinstance(X2, np.ndarray), "X2 should be a numpy array"
-    # assert isinstance(y, np.ndarray), "y should be a numpy array"
-    # assert isinstance(enc, snp_t), "enc should be a numpy string"
 
     # Get the encoding string
     enc_str = str(enc) if isinstance(enc, np.str_) else enc
@@ -119,9 +115,6 @@ def ray_interaction_encoder(X1: np.ndarray,
         return X_encoded, snp
 
     elif enc_str == 'mdr':
-        # fit MDR mapping if not provided (should have been computed during evaluation)
-        # if mdr_mapping is None:
-        #     mdr_mapping = encode_mdr(X1[train_idx], X2[train_idx], y[train_idx])[2]  # get the mapping from the tuple returned by encode_mdr
         mdr_fitted_object = encode_mdr(X1[train_idx], X2[train_idx], y[train_idx])[1]  # get the fitted MDR object to use for transform
         X_encoded = mdr_fitted_object.transform(np.column_stack((X1, X2))) # mdr package has built in transform function to apply the mapping to the full dataset
         return X_encoded, snp
@@ -180,7 +173,7 @@ def ray_evaluate_interaction_encodings(X1: np.ndarray,
                                        y: np.ndarray,
                                        train_idx: npt.NDArray,
                                        valid_idx: npt.NDArray,
-                                       snp1: snp_t, snp2: snp_t) -> Tuple[Dict[str, float32_t], Dict | None]:
+                                       snp1: snp_t, snp2: snp_t) -> Tuple[Dict[str, float32_t], Dict | None, Dict | None]:
     """
     Evaluate all three encoding types (Cartesian, XOR, MDR) for an interaction on a single CV fold.
     Performs phantom epistasis check by fitting main effects first, then interaction effects on residuals.
@@ -197,9 +190,8 @@ def ray_evaluate_interaction_encodings(X1: np.ndarray,
             Failed encodings have R² = -1.0
         mdr_mapping (Dict): MDR feature_map if MDR succeeded, else None
     """
-
-    # todo: If it's possible for the .predict to be negative, how will we distinguish between a failed encoding and a valid encoding with negative R²? We could set a different failure code (e.g. -2.0) for failed encodings to distinguish from valid negative R² scores.
     results = {'cartesian': float32_t(-1.0), 'xor': float32_t(-1.0), 'mdr': float32_t(-1.0)}
+    error = {'cartesian': False, 'xor': False, 'mdr': False, 'base_model': False}
     mdr_mapping = None
 
     # Step 1: Fit base model for phantom epistasis check (main effects only)
@@ -223,7 +215,8 @@ def ray_evaluate_interaction_encodings(X1: np.ndarray,
         y_valid_residuals = y_valid_centered - y_base_valid_pred
     except Exception as e:
         logging.error(f"Error fitting base model for phantom epistasis check for SNPs {snp1}, {snp2}: {e}")
-        return results, mdr_mapping
+        error['base_model'] = True
+        return results, mdr_mapping, error
 
     # Step 2: Evaluate Cartesian encoding
     try:
@@ -237,6 +230,7 @@ def ray_evaluate_interaction_encodings(X1: np.ndarray,
         results['cartesian'] = float32_t(r2_score(y_valid_residuals, y_pred))
     except Exception as e:
         logging.error(f"Error evaluating cartesian for SNP pair {snp1}, {snp2}: {e}")
+        error['cartesian'] = True
 
     # Step 3: Evaluate XOR encoding
     try:
@@ -250,6 +244,7 @@ def ray_evaluate_interaction_encodings(X1: np.ndarray,
         results['xor'] = float32_t(r2_score(y_valid_residuals, y_pred))
     except Exception as e:
         logging.error(f"Error evaluating xor for SNP pair {snp1}, {snp2}: {e}")
+        error['xor'] = True
 
     # Step 4: Evaluate MDR encoding
     try:
@@ -266,8 +261,9 @@ def ray_evaluate_interaction_encodings(X1: np.ndarray,
         mdr_mapping = temp_mdr_mapping
     except Exception as e:
         logging.error(f"Error evaluating MDR for SNP pair {snp1}, {snp2}: {e}")
+        error['mdr'] = True
 
-    return results, mdr_mapping
+    return results, mdr_mapping, error
 
 # ray remote function to evaluate only cartesian encoding for a single CV fold (ablation study)
 @ray.remote
@@ -276,7 +272,7 @@ def ray_evaluate_interaction_cartesian(X1: np.ndarray,
                                        y: np.ndarray,
                                        train_idx: npt.NDArray,
                                        valid_idx: npt.NDArray,
-                                       snp1: snp_t, snp2: snp_t) -> float32_t:
+                                       snp1: snp_t, snp2: snp_t) -> Tuple[float32_t, bool]:
     """
     Evaluate only Cartesian encoding for an interaction on a single CV fold.
     Used for ablation studies. Does NOT perform phantom epistasis check.
@@ -313,7 +309,7 @@ def ray_evaluate_interaction_cartesian(X1: np.ndarray,
         y_valid_residuals = y_valid_centered - y_base_valid_pred
     except Exception as e:
         logging.error(f"Error fitting base model for phantom epistasis check for SNPs {snp1}, {snp2}: {e}")
-        return float32_t(-1.0)
+        return float32_t(-1.0), True
 
     try:
         X_encoded = encode_cartesian(X1, X2)
@@ -323,10 +319,10 @@ def ray_evaluate_interaction_cartesian(X1: np.ndarray,
         regressor = sm.OLS(y_train_residuals, sm.add_constant(X_encoded_train_centered, has_constant='add'))
         fit_results = regressor.fit()
         y_pred = fit_results.predict(sm.add_constant(X_encoded_valid_centered, has_constant='add'))
-        return float32_t(r2_score(y_valid_residuals, y_pred))
+        return float32_t(r2_score(y_valid_residuals, y_pred)), False
     except Exception as e:
         logging.error(f"Error evaluating cartesian for SNP pair {snp1}, {snp2}: {e}")
-        return float32_t(-1.0)
+        return float32_t(-1.0), True
 
 @ray.remote
 def ray_pfi(X: List[ray.ObjectID],
@@ -420,7 +416,6 @@ def ray_eval_pipeline_ld_fs(component_map: Dict[snp_t, Dict],
     feature_count = 0
     features_final = []
     interaction_names = list(clean_component_map.keys())
-    # print(f"Evaluating pipeline with interactions: {interaction_names}")
 
     # 3. BUILD LOCAL MAP (Resolving Ray ObjectIDs)
     local_component_map = {}
@@ -622,7 +617,7 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
     # Step 1: Fit a ridge regression model on the univariate features to get residuals for phantom epistasis check
     try:
         regressor = sm.OLS(y_train_centered, sm.add_constant(X_univariate_matrix_train_centered, has_constant='add'))
-        results = regressor.fit_regularized(L1_wt=0.0, alpha=np.float32(1e-4))
+        results = regressor.fit_regularized(L1_wt=0.0, alpha=1e-4)
         y_train_residuals = y_train_centered - results.predict(sm.add_constant(X_univariate_matrix_train_centered, has_constant='add'))
         y_valid_residuals = y_valid_centered - results.predict(sm.add_constant(X_univariate_matrix_valid_centered, has_constant='add')) # use the training centered univariate features to get the predictions for the validation set to compute the residuals for phantom epistasis check
     except Exception as e:

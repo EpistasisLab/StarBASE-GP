@@ -20,7 +20,6 @@ import pandas as pd
 import os
 import ray
 from typing import List, Tuple
-import numpy.typing as npt
 import matplotlib.pyplot as plt
 import time
 
@@ -45,6 +44,7 @@ class K2_Evolver(EA):
                  save_directory: str = "",
                  window_distance: int32_t = int32_t(1000000),
                  branch_explainability_threshold: float32_t = float32_t(0.0),
+                 phantom_epistasis_threshold: float32_t = float32_t(0.0004),
                  ld_flag: bool = True,
                  encoding_flag: bool = True,
                  regression: bool = True
@@ -75,6 +75,7 @@ class K2_Evolver(EA):
                          ld_flag=ld_flag)
         self.regression = regression
         self.encoding_flag = encoding_flag
+        self.phantom_epistasis_threshold = phantom_epistasis_threshold
 
         self.encoder_types = [ snp_t('additive'), snp_t('dominant'), snp_t('recessive'),
                               snp_t('heterosis'), snp_t('underdominant'), snp_t('overdominant'),
@@ -98,7 +99,6 @@ class K2_Evolver(EA):
 
         return
 
-    # todo: modify it when epi_hub classes are defined
     def initialize_hubs(self) -> None:
         """
         Initialize the hubs needed for the run.
@@ -192,7 +192,7 @@ class K2_Evolver(EA):
             gen_stats = {
                 'generation': g,
                 'front_zero_size': count,
-                'consideration_set_size': self.hub.consideration_hub_size()
+                'interactions_seen_so_far': self.hub.get_epi_db_size()
             }
 
             # get order of mutation/crossover to do with the extra offspring
@@ -504,8 +504,11 @@ class K2_Evolver(EA):
 
                 # create a ray job for each of the folds
                 for _, fold_data in self.train_fold_dict_ray.items():
-                    # todo: should pipelines[i].get_branch_set() be pipeline_evaluation_details[i][snp_t('features')] instead since we want to evaluate the final set of features after ld/fs pruning?
-                    ray_jobs.append(ray_utils.ray_eval_pipeline_r2.remote(component_map=self.hub.build_component_map(pipelines[i].get_branch_set()),
+                    feature = set()
+                    for f in pipeline_evaluation_details[i][snp_t('features')]:
+                        feature.add((snp_t(f[0]), snp_t(f[1])))
+
+                    ray_jobs.append(ray_utils.ray_eval_pipeline_r2.remote(component_map=self.hub.build_component_map(feature),
                                                                           y = self.all_y_ray_id,
                                                                           train_idx = fold_data['train_idx'],
                                                                           valid_idx = fold_data['val_idx'],
@@ -549,10 +552,10 @@ class K2_Evolver(EA):
 
         # update pipelines with evaluation results
         for pipeline_id in pipeline_evaluation_details:
-            print(f"Final evaluation for Pipeline {pipeline_id}: R2={pipeline_evaluation_details[pipeline_id][snp_t('r2')]:.4f}, \
-                Feature Count={pipeline_evaluation_details[pipeline_id][snp_t('feature_cnt')]}, \
-                    LD Used={pipeline_evaluation_details[pipeline_id][snp_t('ld_used')]}, \
-                        Interactions {pipeline_evaluation_details[pipeline_id][snp_t('features')]}", flush=True)
+            # print(f"Final evaluation for Pipeline {pipeline_id}: R2={pipeline_evaluation_details[pipeline_id][snp_t('r2')]:.4f}, \
+            #     Feature Count={pipeline_evaluation_details[pipeline_id][snp_t('feature_cnt')]}, \
+            #         LD Used={pipeline_evaluation_details[pipeline_id][snp_t('ld_used')]}, \
+            #             Interactions {pipeline_evaluation_details[pipeline_id][snp_t('features')]}", flush=True)
 
             # skip pipelines with error, negative r2, or all snps are inactive
             if pipeline_evaluation_details[pipeline_id][snp_t('error')] or \
@@ -567,7 +570,7 @@ class K2_Evolver(EA):
                     assert len(feature) == 2, "Interaction feature tuple must have length 2."
                     typed_features.append(tuple(snp_t(f) for f in feature))
                 elif isinstance(feature, np.str_):
-                    typed_features.append(snp_t(str(feature))) # todo: when would this happen?
+                    typed_features.append(snp_t(str(feature)))
                 else:
                     raise ValueError(f"Unexpected feature type: {type(feature)} for feature {feature}")
 
@@ -618,7 +621,7 @@ class K2_Evolver(EA):
             snp1, snp2 = interaction # unpack the interaction tuple (snp1, snp2)
             snp1_chrom, _ = snp_chrm_pos(snp1)
             snp2_chrom, _ = snp_chrm_pos(snp2)
-            hc = (snp1_chrom, snp2_chrom) # todo: does ordering matter here? should (chr1, chr2) be the same as (chr2, chr1), only matters if they are different?
+            hc = (snp1_chrom, snp2_chrom) if snp1_chrom <= snp2_chrom else (snp2_chrom, snp1_chrom) # create a hyperchromosome tuple with ordered chromosome names
             hyperchromosome_count[hc] = hyperchromosome_count.get(hc, 0) + 1
 
         # Return True if any hyperchromosome has 2 or more interactions
@@ -751,7 +754,8 @@ class K2_Evolver(EA):
                 'correlation_r2': failed_interactions.get(snp_pair, (None, float32_t(-1.0)))[1] if snp_pair in failed_interactions else passed_interactions.get(snp_pair, float32_t(-1.0)),
                 'failure_code': failed_interactions.get(snp_pair, (None, None))[0] if snp_pair in failed_interactions else None,
                 'avg_r2': float32_t(-1.0),
-                'best_enc': None
+                'best_enc': None,
+                'error': False
             }
 
         # Create encoding evaluation jobs only for passed interactions
@@ -794,15 +798,22 @@ class K2_Evolver(EA):
             snp_pair = encoding_jobs[job_idx][1] # get the corresponding snp_pair for the finished job
 
             if self.encoding_flag:
-                results, mdr_mapping = ray.get(done[0])
+                results, mdr_mapping, error = ray.get(done[0])
                 inter_perf[snp_pair]['cartesian_r2_folds'].append(results['cartesian'])
                 inter_perf[snp_pair]['xor_r2_folds'].append(results['xor'])
                 inter_perf[snp_pair]['mdr_r2_folds'].append(results['mdr'])
+
+                if error['cartesian'] or error['xor'] or error['mdr'] or error['base_model']:
+                    inter_perf[snp_pair]['error'] = True
+
                 if mdr_mapping is not None:
                     inter_perf[snp_pair]['mdr_mappings'].append(mdr_mapping) # mdr_mapping is a dict with keys (0.0, 0.0), (0.0, 1.0), (1.0, 0.0), (1.0, 1.0) and values are the corresponding case/control ratios for that genotype combination
             else:
-                cartesian_r2 = ray.get(done[0])
+                cartesian_r2, error = ray.get(done[0])
                 inter_perf[snp_pair]['cartesian_r2_folds'].append(cartesian_r2)
+
+                if error:
+                    inter_perf[snp_pair]['error'] = True
 
             encoding_jobs = [encoding_jobs[i] for i in range(len(encoding_jobs)) if i != job_idx] # remove the finished job from the list
 
@@ -819,11 +830,11 @@ class K2_Evolver(EA):
                 assert len(inter_perf[snp_pair]['cartesian_r2_folds']) == self.k, f"Expected {self.k} Cartesian R2 results for {snp_pair}, got {len(inter_perf[snp_pair]['cartesian_r2_folds'])}."
                 assert len(inter_perf[snp_pair]['xor_r2_folds']) == self.k, f"Expected {self.k} XOR R2 results for {snp_pair}, got {len(inter_perf[snp_pair]['xor_r2_folds'])}."
                 assert len(inter_perf[snp_pair]['mdr_r2_folds']) == self.k, f"Expected {self.k} MDR R2 results for {snp_pair}, got {len(inter_perf[snp_pair]['mdr_r2_folds'])}."
+
                 # Average R2 across folds for each encoding
-                # todo: why are we only adding positive r2 scores here?
-                avg_cartesian = np.mean([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0])if len([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
-                avg_xor = np.mean([r2 for r2 in inter_perf[snp_pair]['xor_r2_folds'] if r2 > 0]) if len([r2 for r2 in inter_perf[snp_pair]['xor_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
-                avg_mdr = np.mean([r2 for r2 in inter_perf[snp_pair]['mdr_r2_folds'] if r2 > 0]) if len([r2 for r2 in inter_perf[snp_pair]['mdr_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
+                avg_cartesian = np.mean(inter_perf[snp_pair]['cartesian_r2_folds'])
+                avg_xor = np.mean([r2 for r2 in inter_perf[snp_pair]['xor_r2_folds']])
+                avg_mdr = np.mean([r2 for r2 in inter_perf[snp_pair]['mdr_r2_folds']])
 
                 # Select best encoding
                 best_r2 = max(avg_cartesian, avg_xor, avg_mdr)
@@ -840,13 +851,12 @@ class K2_Evolver(EA):
                 # Only cartesian encoding
                 # assert that we have k R2 results for cartesian encoding
                 assert len(inter_perf[snp_pair]['cartesian_r2_folds']) == self.k, f"Expected {self.k} Cartesian R2 results for {snp_pair}, got {len(inter_perf[snp_pair]['cartesian_r2_folds'])}."
-                avg_cartesian = np.mean([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0]) if len([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds'] if r2 > 0]) > 0 else float32_t(-1.0)
+                avg_cartesian = np.mean([r2 for r2 in inter_perf[snp_pair]['cartesian_r2_folds']])
                 inter_perf[snp_pair]['avg_r2'] = float32_t(avg_cartesian)
                 inter_perf[snp_pair]['best_enc'] = snp_t('cartesian')
 
             # Check threshold
-            # todo: if phantom epistasis threshold is not met, should we set this interaction as inactive? Not sure if that is being captured in the epi hub.
-            if inter_perf[snp_pair]['avg_r2'] <= 0.004: # todo: should this threshold be a user-defined parameter different from the 'branch_explainability_threshold'? (phantom_epistasis_threshold)?
+            if inter_perf[snp_pair]['avg_r2'] <= self.phantom_epistasis_threshold:
                 inter_perf[snp_pair]['failure_code'] = float32_t(-3.0)  # Phantom epistasis
 
         aggregate_time = time.time() - aggregate_start
@@ -860,7 +870,7 @@ class K2_Evolver(EA):
         interactions_to_encode = []
 
         for snp_pair in passed_interactions:
-            if inter_perf[snp_pair]['avg_r2'] >= self.branch_explainability_threshold: # todo: is this if and the previous todo related?
+            if inter_perf[snp_pair]['avg_r2'] >= self.branch_explainability_threshold:
                 interactions_to_encode.append(snp_pair)
                 snp_1, snp_2 = snp_pair
                 X1 = self.hub.get_snp_ori_ray_id(snp_1)
@@ -936,9 +946,17 @@ class K2_Evolver(EA):
                 enc_rid=encoded_ray_id,
                 enc_x=inter_perf[snp_pair]['best_enc'],
                 gen_seen=gen_seen,
-                explainability_threshold=self.branch_explainability_threshold,
                 mdr_mapping=mdr_mapping
             )
+
+        # update hub with interactions that failed for phantom epistasis (error code -3)
+        for snp_pair in inter_perf:
+            if inter_perf[snp_pair]['failure_code'] == float32_t(-3.0):
+                self.hub.flip_active_flag_pe(snp_pair, gen_seen)
+
+        # update hub wit interactions that filed during preprocessing (failed_interactions)
+        for snp_pair in failed_interactions:
+            self.hub.flip_active_flag_pre(snp_pair, gen_seen)
 
         hub_update_time = time.time() - hub_update_start
         print(f"    Hub updates complete ({hub_update_time:.2f}s)", flush=True)
