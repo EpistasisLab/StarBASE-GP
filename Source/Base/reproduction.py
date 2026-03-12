@@ -24,9 +24,7 @@ class Reproduction(ABC):
                  cross_prob: prob_t = prob_t(.5),
                  mut_selector_p: prob_t = prob_t(.5),
                  mut_ld_p: prob_t = prob_t(.5),
-                 mut_regressor_p: prob_t = prob_t(.5),
                  mut_ran_p: prob_t = prob_t(.45),
-                 mut_smt_p: prob_t = prob_t(.45),
                  m_in_win_p: prob_t = prob_t(.1),
                  m_out_win_p: prob_t = prob_t(.45),
                  m_out_chr_p: prob_t = prob_t(.45),
@@ -39,9 +37,7 @@ class Reproduction(ABC):
         self.cross_prob = cross_prob
         self.mut_selector_p = mut_selector_p
         self.mut_ld_p = mut_ld_p
-        self.mut_regressor_p = mut_regressor_p
         self.mut_ran_p = mut_ran_p
-        self.mut_smt_p = mut_smt_p
         self.m_in_win_p = m_in_win_p
         self.m_out_win_p = m_out_win_p
         self.m_out_chr_p = m_out_chr_p

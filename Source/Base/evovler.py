@@ -39,9 +39,7 @@ class EA(ABC):
                  cross_prob: prob_t = prob_t(.5), # probability of crossover
                  mut_selector_p: prob_t = prob_t(.5), # probability of mutating the feature selector
                  mut_ld_p: prob_t = prob_t(.5), # probability of mutating the ld pruner
-                 mut_root_p: prob_t = prob_t(.5), # probability of mutating the root node (regressor or classifier)
                  mut_ran_p: prob_t = prob_t(0.0), # probability of random mutation
-                 mut_smt_p: prob_t = prob_t(1.0), # probability of smart mutation
                  m_in_win_p: prob_t = prob_t(.33), # probability for smart in window mutation
                  m_out_win_p: prob_t = prob_t(.33), # probability for smart out window mutation
                  m_out_chr_p: prob_t = prob_t(.33), # probability for smart out of chromosome mutation
@@ -73,8 +71,6 @@ class EA(ABC):
             Probability for mutating the feature selector.
         mut_ld_p: prob_t
             Probability for mutating the LD pruner.
-        mut_root_p: prob_t
-            Probability for mutating the root node (regressor or classifier).
         mut_ran_p: prob_t
             Probability for random mutation.
         mut_smt_p: prob_t
@@ -122,14 +118,8 @@ class EA(ABC):
         assert 0.0 <= mut_ld_p <= 1.0, "mut_ld_p must be between 0 and 1."
         self.mut_ld_p = mut_ld_p
 
-        assert 0.0 <= mut_root_p <= 1.0, "mut_root_p must be between 0 and 1."
-        self.mut_root_p = mut_root_p
-
         assert 0.0 <= mut_ran_p <= 1.0, "mut_ran_p must be between 0 and 1."
         self.mut_ran_p = mut_ran_p
-
-        assert 0.0 <= mut_smt_p <= 1.0, "mut_smt_p must be between 0 and 1."
-        self.mut_smt_p = mut_smt_p
 
         assert 0.0 <= m_in_win_p <= 1.0, "m_in_win_p must be between 0 and 1."
         self.m_in_win_p = m_in_win_p

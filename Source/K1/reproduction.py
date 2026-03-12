@@ -39,9 +39,7 @@ class K1_Reproduction(Reproduction):
                  cross_prob: prob_t = prob_t(.5),
                  mut_selector_p: prob_t = prob_t(.5),
                  mut_ld_p: prob_t = prob_t(.5),
-                 mut_regressor_p: prob_t = prob_t(.5),
                  mut_ran_p: prob_t = prob_t(.45),
-                 mut_smt_p: prob_t = prob_t(.45),
                  m_in_win_p: prob_t = prob_t(.1),
                  m_out_win_p: prob_t = prob_t(.45),
                  m_out_chr_p: prob_t = prob_t(.45),
@@ -57,21 +55,12 @@ class K1_Reproduction(Reproduction):
                          cross_prob=cross_prob,
                          mut_selector_p=mut_selector_p,
                          mut_ld_p=mut_ld_p,
-                         mut_regressor_p=mut_regressor_p,
                          mut_ran_p=mut_ran_p,
-                         mut_smt_p=mut_smt_p,
                          m_in_win_p=m_in_win_p,
                          m_out_win_p=m_out_win_p,
                          m_out_chr_p=m_out_chr_p,
                          window_distance=window_distance)
-        
-        # # precompute probability arrays for performance
-        # total_m = m_in_win_p + m_out_win_p + m_out_chr_p
-        # self._mutation_type_probs = np.array([m_in_win_p / total_m, m_out_win_p / total_m, m_out_chr_p / total_m])
-        # total_ran_smt = mut_ran_p + mut_smt_p
-        # self._ran_threshold = mut_ran_p / total_ran_smt  # for binary choice optimization
-    
-        
+
         return
 
     def generate_random_pipeline(self, rng: rng_t, branches: Set, seed: int) -> Pipeline:
@@ -218,7 +207,7 @@ class K1_Reproduction(Reproduction):
         else: # out_chrom
             result = hub.get_ran_snp_out_chrm(branch, rng)
             mutation_type = 'out_chrom'
-           
+
         # Record timing
         elapsed_time = time.time() - start_time
         self.mutation_timings[mutation_type].append(elapsed_time)
@@ -261,7 +250,7 @@ class K1_Reproduction(Reproduction):
 
         # convert to list once (cached for both random and smart crossover)
         combined_list = list(combined_branches)
-        
+
 
         return Pipeline(branch_set=set(rng.choice(combined_list, size=num_branches, replace=False)),
                             ld_node=cp.deepcopy(parent1.ld_node if rng.random() < 0.5 else parent2.ld_node),
