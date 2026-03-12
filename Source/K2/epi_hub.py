@@ -59,6 +59,8 @@ class K2_Hub(Hub):
                 (9) ld_genomic_distance (int32_t): genomic distance used for LD pruning
                 (10) anchor_interaction (interaction_t or str): anchor interaction if pruned, empty string otherwise
             """
+            # assert that the interaction does not contain the same snp twice (e.g., chr1.1000:chr1.1000)
+            assert interaction[0] != interaction[1], f"Interaction {interaction} should not contain the same SNP twice."
 
             # add to hub with LD pruning fields initialized
             self.hub[interaction] = [r2, enc_rid, enc_x, gen_seen, active, mdr_mapping, int16_t(-1), "", float32_t(-1.0), int32_t(-1), ""]

@@ -35,9 +35,12 @@ class K2_Evolver(EA):
                  cross_prob: prob_t = prob_t(.5), # probability of crossover
                  mut_selector_p: prob_t = prob_t(.5), # probability of mutating the feature selector
                  mut_ld_p: prob_t = prob_t(.5), # probability of mutating the ld pruner
-                 mut_root_p: prob_t = prob_t(.5), # probability of mutating the root node (regressor or classifier)
-                 mut_ran_p: prob_t = prob_t(1.0), # probability of random mutation
-                 mut_smt_p: prob_t = prob_t(0.0), # probability of smart mutation
+                 mut_ran_p: prob_t = prob_t(0.3), # probability of random mutation
+                 mut_neighbor_p: prob_t = prob_t(.5),
+                 m_keep_left: prob_t = prob_t(.33),
+                 m_keep_right: prob_t = prob_t(.33),
+                 m_climb_both: prob_t = prob_t(.33),
+                 mut_ioc_p: prob_t = prob_t(.2), # probability of interaction out of chromosome mutation
                  m_in_win_p: prob_t = prob_t(.33), # probability for smart in window mutation
                  m_out_win_p: prob_t = prob_t(.33), # probability for smart out window mutation
                  m_out_chr_p: prob_t = prob_t(.33), # probability for smart out of chromosome mutation
@@ -63,9 +66,7 @@ class K2_Evolver(EA):
                          cross_prob=cross_prob,
                          mut_selector_p=mut_selector_p,
                          mut_ld_p=mut_ld_p,
-                         mut_root_p=mut_root_p,
                          mut_ran_p=mut_ran_p,
-                         mut_smt_p=mut_smt_p,
                          m_in_win_p=m_in_win_p,
                          m_out_win_p=m_out_win_p,
                          m_out_chr_p=m_out_chr_p,
@@ -89,9 +90,7 @@ class K2_Evolver(EA):
                                            cross_prob=self.cross_prob,
                                            mut_selector_p=self.mut_selector_p,
                                            mut_ld_p=self.mut_ld_p,
-                                           mut_regressor_p=self.mut_root_p,
                                            mut_ran_p=self.mut_ran_p,
-                                           mut_smt_p=self.mut_smt_p,
                                            m_in_win_p=self.m_in_win_p,
                                            m_out_win_p=self.m_out_win_p,
                                            m_out_chr_p=self.m_out_chr_p,

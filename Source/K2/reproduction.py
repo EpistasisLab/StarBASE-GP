@@ -39,19 +39,48 @@ class K2_Reproduction(Reproduction):
                  cross_prob: prob_t = prob_t(.5),
                  mut_selector_p: prob_t = prob_t(.5),
                  mut_ld_p: prob_t = prob_t(.5),
-                 mut_regressor_p: prob_t = prob_t(.5),
-                 mut_ran_p: prob_t = prob_t(.45),
-                 mut_smt_p: prob_t = prob_t(.45),
-                 m_in_win_p: prob_t = prob_t(.1),
-                 m_out_win_p: prob_t = prob_t(.45),
-                 m_out_chr_p: prob_t = prob_t(.45),
-                 keep_pair_interactions_p: prob_t = prob_t(.5),
+                 mut_ran_p: prob_t = prob_t(.3),
+                 mut_neighbor_p: prob_t = prob_t(.5),
+                 m_keep_left: prob_t = prob_t(.33),
+                 m_keep_right: prob_t = prob_t(.33),
+                 m_climb_both: prob_t = prob_t(.33),
+                 mut_ioc_p: prob_t = prob_t(.2),
+                 m_in_win_p: prob_t = prob_t(0.0),
+                 m_out_win_p: prob_t = prob_t(.5),
+                 m_out_chr_p: prob_t = prob_t(.5),
                  window_distance: int32_t = int32_t(1000000)) -> None:
         """
         K2 Reproduction class that extends the Base Reproduction class.
+
+        Parameters:
+            branch_max (uint16_t): The maximum number of branches in a pipeline
+            branch_min (uint16_t): The minimum number of branches in a pipeline
+            mut_prob (prob_t): The probability of mutation
+            cross_prob (prob_t): The probability of crossover
+            mut_selector_p (prob_t): The probability of mutating the selector node
+            mut_ld_p (prob_t): The probability of mutating the ld node
+            mut_regressor_p (prob_t): The probability of mutating the regressor node (not implemented yet)
+            mut_ran_p (prob_t): The probability of mutating to a completely random interaction
+            mut_neighbor_p (prob_t): The probability of mutating within the neighborhood of the current interaction
+            m_keep_left (prob_t): The probability of keeping the left snp in an interaction and mutating the right snp
+            m_keep_right (prob_t): The probability of keeping the right snp in an interaction and mutating the left snp
+            m_climb_both (prob_t): The probability of mutating both snps in an interaction and keeping the interaction (i.e., climbing both snps)
+            mut_ioc_p (prob_t): The probability of picking a new snp from either in or out of the chromosome to include within an interaction
+            m_in_win_p (prob_t): The probability of picking a new snp from the same chromosome and within the window of a snp (NOT USED)
+            m_out_win_p (prob_t): The probability of picking a new snp from the same chromosome
+            m_out_chr_p (prob_t): The probability of picking a new snp from a different chromosome from the anchor snp when mutating within the neighborhood
+            window_distance (int32_t): The distance in base pairs for the interaction window when mutating within the neighborhood
+            mut_smt_p (prob_t): The probability of mutating to a completely random interaction from the hub
         """
 
-        self.keep_pair_interactions_p = keep_pair_interactions_p
+        # additional probabilities for K2 specific mutation operations
+        self.mut_neighbor_p = mut_neighbor_p
+        self.m_keep_left = m_keep_left
+        self.m_keep_right = m_keep_right
+        self.m_climb_both = m_climb_both
+        self.mut_ioc_p = mut_ioc_p
+
+
         # pass all variables to the Base Reproduction class
         super().__init__(branch_max=branch_max,
                          branch_min=branch_min,
@@ -59,13 +88,32 @@ class K2_Reproduction(Reproduction):
                          cross_prob=cross_prob,
                          mut_selector_p=mut_selector_p,
                          mut_ld_p=mut_ld_p,
-                         mut_regressor_p=mut_regressor_p,
                          mut_ran_p=mut_ran_p,
-                         mut_smt_p=mut_smt_p,
                          m_in_win_p=m_in_win_p,
                          m_out_win_p=m_out_win_p,
                          m_out_chr_p=m_out_chr_p,
                          window_distance=window_distance)
+
+        # normalize the mut_ran_p, mut_neighbor_p, and mut_ioc_p to ensure they sum to 1
+        total = mut_ran_p + mut_neighbor_p + mut_ioc_p
+        self.mut_ran_p = mut_ran_p / total
+        self.mut_neighbor_p = mut_neighbor_p / total
+        self.mut_ioc_p = mut_ioc_p / total
+
+        print(f'mut_ran_p: {self.mut_ran_p}, mut_neighbor_p: {self.mut_neighbor_p}, mut_ioc_p: {self.mut_ioc_p}')
+
+        # normalize the m_keep_left, m_keep_right, and m_climb_both to ensure they sum to 1
+        total = m_keep_left + m_keep_right + m_climb_both
+        self.m_keep_left = m_keep_left / total
+        self.m_keep_right = m_keep_right / total
+        self.m_climb_both = m_climb_both / total
+
+        # normalize the m_in_win_p, m_out_win_p, and m_out_chr_p to ensure they sum to 1
+        total = m_in_win_p + m_out_win_p + m_out_chr_p
+        self.m_in_win_p = m_in_win_p / total
+        self.m_out_win_p = m_out_win_p / total
+        self.m_out_chr_p = m_out_chr_p / total
+
         return
 
     def generate_random_pipeline(self, rng: rng_t, branches: Set, seed: int) -> Pipeline:
@@ -207,17 +255,33 @@ class K2_Reproduction(Reproduction):
         pair = None
         start_time = time.time()
 
-        # roll to see if we are keeping pair interactions (if the branch is an interaction) or not
-        if self.keep_pair_interactions_p < rng.random():
+        # roll to see if we do a neighborhood mutation
+        mut_roll = rng.random()
+        if mut_roll < self.mut_neighbor_p:
+            roll = rng.random()
+            # keep left and mutate right via neighborhood
+            if roll < self.m_keep_left:
+                replace = hub.get_ran_snp_in_window(branch[1], rng)
+                pair = (branch[0], replace) if branch[0] < replace else (replace, branch[0])
+            # keep right and mutate left via neighborhood
+            elif roll < self.m_keep_left + self.m_keep_right:
+                replace = hub.get_ran_snp_in_window(branch[0], rng)
+                pair = (branch[1], replace) if branch[1] < replace else (replace, branch[1])
+            # replace both via neighborhood (i.e., climb both)
+            else: # climb both
+                left_replace = hub.get_ran_snp_in_window(branch[0], rng)
+                right_replace = hub.get_ran_snp_in_window(branch[1], rng)
+                pair = (left_replace, right_replace) if left_replace < right_replace else (right_replace, left_replace)
+            mutation_type = 'in_window'
+
+        # roll to see if we are doing an in/out chromosome mutation
+        elif mut_roll < self.mut_neighbor_p + self.mut_ioc_p:
             # roll to pick which snp in the interaction we want to keep
             anchor_snp = rng.choice(list(branch))
 
             # perform mutation based on type
-            r = rng.random()
-            if r < self.m_in_win_p:
-                result = hub.get_ran_snp_in_window(anchor_snp, rng)
-                mutation_type = 'in_window'
-            elif r < self.m_out_win_p + self.m_in_win_p:
+            roll = rng.random()
+            if roll < self.m_out_win_p:
                 result = hub.get_ran_snp_in_chrm(anchor_snp, rng)
                 mutation_type = 'out_window'
             else: # out_chrom
@@ -226,7 +290,9 @@ class K2_Reproduction(Reproduction):
 
             assert result != anchor_snp, f"Mutated SNP should not be the same as the anchor SNP. Got result: {result} and anchor_snp: {anchor_snp}"
             pair = (anchor_snp, result) if anchor_snp < result else (result, anchor_snp)  # maintain sorted order in interaction
+
         else:
+            # print(f'mut_roll: {mut_roll}')
             # return a completely random interaction from the hub
             pair = hub.get_ran_interaction(rng)
             mutation_type = 'new_pair'
@@ -277,7 +343,7 @@ class K2_Reproduction(Reproduction):
         # Note: rng.choice returns a 2D numpy array when selecting from tuples, so we need to convert each row back to tuple
         selected_branches = rng.choice(combined_list, size=num_branches, replace=False)
         selected_branches_tuples = set(tuple(branch) if not isinstance(branch, tuple) else branch for branch in selected_branches)
-        
+
         return Pipeline(branch_set=selected_branches_tuples,
                             ld_node=cp.deepcopy(parent1.ld_node if rng.random() < 0.5 else parent2.ld_node),
                             selector_node=cp.deepcopy(parent1.selector_node if rng.random() < 0.5 else parent2.selector_node))
