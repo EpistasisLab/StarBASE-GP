@@ -41,10 +41,10 @@ class K2_Evolver(EA):
                  m_keep_right: prob_t = prob_t(.33),
                  m_climb_both: prob_t = prob_t(.33),
                  mut_ioc_p: prob_t = prob_t(.2), # probability of interaction out of chromosome mutation
-                 m_in_win_p: prob_t = prob_t(.33), # probability for smart in window mutation
-                 m_out_win_p: prob_t = prob_t(.33), # probability for smart out window mutation
-                 m_out_chr_p: prob_t = prob_t(.33), # probability for smart out of chromosome mutation
-                 save_directory: str = "",
+                 m_in_win_p: prob_t = prob_t(0.0), # probability for smart in window mutation
+                 m_out_win_p: prob_t = prob_t(.5), # probability for smart out window mutation
+                 m_out_chr_p: prob_t = prob_t(.5), # probability for smart out of chromosome mutation
+                 save_directory: str = "./", # directory to save results in
                  window_distance: int32_t = int32_t(1000000),
                  branch_explainability_threshold: float32_t = float32_t(0.0),
                  phantom_epistasis_threshold: float32_t = float32_t(0.0004),
@@ -78,11 +78,6 @@ class K2_Evolver(EA):
         self.encoding_flag = encoding_flag
         self.phantom_epistasis_threshold = phantom_epistasis_threshold
 
-        self.encoder_types = [ snp_t('additive'), snp_t('dominant'), snp_t('recessive'),
-                              snp_t('heterosis'), snp_t('underdominant'), snp_t('overdominant'),
-                              snp_t('subadditive'), snp_t('superadditive'),
-                              snp_t('pager')
-                              ]
         # initialize reproduction class
         self.reproduction = K2_Reproduction(branch_max=self.branch_max,
                                            branch_min=self.branch_min,
