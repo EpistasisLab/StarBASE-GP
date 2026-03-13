@@ -94,7 +94,12 @@ class K2_Evolver(EA):
                                            m_in_win_p=self.m_in_win_p,
                                            m_out_win_p=self.m_out_win_p,
                                            m_out_chr_p=self.m_out_chr_p,
-                                           window_distance=self.window_distance)
+                                           window_distance=self.window_distance,
+                                           mut_neighbor_p=mut_neighbor_p,
+                                           m_keep_left=m_keep_left,
+                                           m_keep_right=m_keep_right,
+                                           m_climb_both=m_climb_both,
+                                           mut_ioc_p=mut_ioc_p)
 
         return
 
