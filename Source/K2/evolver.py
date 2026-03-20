@@ -367,8 +367,10 @@ class K2_Evolver(EA):
                 while len(branches) < self.branch_max:
                     # sample a two random interactions using numpy without replacement based on the weights provided in the csv file
                     snp1, snp2 = self.rng.choice(snp_bases, size=2, replace=False, p=weights)
+                    snp1 = snp_t(snp1[3:])
+                    snp2 = snp_t(snp2[3:])
                     # create interaction
-                    interaction = (snp_t(snp1), snp_t(snp2)) if snp1 < snp2 else (snp_t(snp2), snp_t(snp1))
+                    interaction = (snp1, snp2) if snp1 < snp2 else (snp2, snp1)
                     # add the interaction to the branch set
                     branches.add(interaction)
 

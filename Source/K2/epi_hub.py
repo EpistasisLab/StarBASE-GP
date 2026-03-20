@@ -189,13 +189,13 @@ class K2_Hub(Hub):
 
         def get_ori_ray_id(self, snp: snp_t) -> ray.ObjectID:
             # assert that snp is in hub
-            assert snp in self.hub
+            assert snp in self.hub, f"SNP {snp} not found in SNP_DB hub."
             # return data
             return self.hub[snp][0]
 
         def get_neighbors(self, snp: snp_t) -> List[snp_t]:
             # assert that snp is in hub
-            assert snp in self.hub
+            assert snp in self.hub, f"SNP {snp} not found in SNP_DB hub."
 
             if self.hub[snp][1] is not None and self.hub[snp][2] is not None:
                 return [self.hub[snp][1], self.hub[snp][2]]
@@ -653,7 +653,7 @@ class K2_Hub(Hub):
 
         Parameters:
             interaction (interaction_t): The interaction to check for existence.
-            
+
         Returns:
             bool: True if the interaction exists in the epi_db, False otherwise.
         """
