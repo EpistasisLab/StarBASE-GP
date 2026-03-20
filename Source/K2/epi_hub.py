@@ -647,6 +647,18 @@ class K2_Hub(Hub):
         """
         return uint32_t(len(self.epi_db.hub))
 
+    def does_interaction_exist(self, interaction: interaction_t) -> bool:
+        """
+        Function to check if an interaction exists in the epi_db.
+
+        Parameters:
+            interaction (interaction_t): The interaction to check for existence.
+            
+        Returns:
+            bool: True if the interaction exists in the epi_db, False otherwise.
+        """
+        return self.epi_db.does_interaction_exist(interaction)
+
     def get_unseen_interactions(self, interactions: Set[interaction_t]) -> Set[interaction_t]:
         """
         Function to get all unseen interactions from the given set.

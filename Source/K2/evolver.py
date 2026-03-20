@@ -50,7 +50,8 @@ class K2_Evolver(EA):
                  phantom_epistasis_threshold: float32_t = float32_t(0.0004),
                  ld_flag: bool = True,
                  encoding_flag: bool = True,
-                 regression: bool = True
+                 regression: bool = True,
+                 starting_snps_csv_path: str | None = None # optional path to csv containing starting snps for the initial population (with column name 'snp')
                  ) -> None:
         """
         K2 Evolver class that extends the EA base class.
@@ -77,6 +78,7 @@ class K2_Evolver(EA):
         self.regression = regression
         self.encoding_flag = encoding_flag
         self.phantom_epistasis_threshold = phantom_epistasis_threshold
+        self.starting_snps_csv_path = starting_snps_csv_path
 
         # initialize reproduction class
         self.reproduction = K2_Reproduction(branch_max=self.branch_max,
@@ -320,23 +322,62 @@ class K2_Evolver(EA):
 
         # create initial set of branch sets to integrate within pipelines
         sampling_start = time.time()
-        while len(pop_branch_sets) < self.pop_size:
-            # current set of branches - set of tuples where each tuple is (snp1, snp2) for an interaction branch
-            branches = set()
 
-            while len(branches) < self.branch_max:
-                # sample a random interaction from the hub
-                interaction = self.hub.get_ran_interaction(self.rng)
-                # add the interaction to the branch set
-                branches.add(interaction)
+        if self.starting_snps_csv_path == None:
+            print('No starting SNPs CSV provided, initializing population with random branches.', flush=True)
+            while len(pop_branch_sets) < self.pop_size:
+                # current set of branches - set of tuples where each tuple is (snp1, snp2) for an interaction branch
+                branches = set()
 
-            assert len(branches) == self.branch_max, "Number of branches in initial pipeline does not match branch_max."
+                while len(branches) < self.branch_max:
+                    # sample a random interaction from the hub
+                    interaction = self.hub.get_ran_interaction(self.rng)
+                    # add the interaction to the branch set
+                    branches.add(interaction)
 
-            # update unseen branches with all new branches
-            # bc all branches are new at this point, we can just add them directly
-            unseen_branches.update(branches)
-            # add the current branch set to the population list
-            pop_branch_sets.append(branches)
+                assert len(branches) == self.branch_max, "Number of branches in initial pipeline does not match branch_max."
+
+                # update unseen branches with all new branches
+                # bc all branches are new at this point, we can just add them directly
+                unseen_branches.update(branches)
+                # add the current branch set to the population list
+                pop_branch_sets.append(branches)
+        else:
+            print('Starting SNPs CSV provided, initializing population with branches from CSV.', flush=True)
+
+            # assert to make sure the csv file exists
+            assert os.path.exists(self.starting_snps_csv_path), f"Starting SNPs CSV file not found at {self.starting_snps_csv_path}"
+
+            # read in the csv file and extract the 'SNP_Base' and 'weight' columns as lists
+            starting_snps_df = pd.read_csv(self.starting_snps_csv_path)
+            assert 'SNP_Base' in starting_snps_df.columns, "Starting SNPs CSV must contain 'SNP_Base' column."
+            assert 'weight' in starting_snps_df.columns, "Starting SNPs CSV must contain 'weight' column."
+
+            snp_bases = starting_snps_df['SNP_Base'].tolist()
+            weights = starting_snps_df['weight'].tolist()
+
+            # normalize the weights to sum to 1
+            total_weight = sum(weights)
+            weights = [weight / total_weight for weight in weights]
+
+            while len(pop_branch_sets) < self.pop_size:
+                # current set of branches - set of tuples where each tuple is (snp1, snp2) for an interaction branch
+                branches = set()
+
+                while len(branches) < self.branch_max:
+                    # sample a two random interactions using numpy without replacement based on the weights provided in the csv file
+                    snp1, snp2 = self.rng.choice(snp_bases, size=2, replace=False, p=weights)
+                    # create interaction
+                    interaction = (snp_t(snp1), snp_t(snp2)) if snp1 < snp2 else (snp_t(snp2), snp_t(snp1))
+                    # add the interaction to the branch set
+                    branches.add(interaction)
+
+                assert len(branches) == self.branch_max, "Number of branches in initial pipeline does not match branch_max."
+
+                # update unseen branches with all new branches
+                unseen_branches.update(branches)
+                # add the current branch set to the population list
+                pop_branch_sets.append(branches)
 
         sampling_time = time.time() - sampling_start
 

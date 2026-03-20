@@ -297,6 +297,59 @@ class K2_Reproduction(Reproduction):
             pair = hub.get_ran_interaction(rng)
             mutation_type = 'new_pair'
 
+        # if pair consists of the same snp get a random interaction
+        if pair[0] == pair[1]:
+            for _ in range(hub.mutation_tries):
+                # will automatically ensure that the same snp is not returned as a pair
+                new_pair = hub.get_ran_interaction(rng)
+
+                # if pair and new_pair are the same, try again
+                if new_pair == pair:
+                    continue
+
+                # have we seen this new_pair before in the hub
+                if hub.does_interaction_exist(new_pair):
+                    # if so and not active, try again
+                    if hub.get_active_flag(new_pair) == False:
+                        continue
+                    # if so and active, we can roll with it
+                    else:
+                        elapsed_time = time.time() - start_time
+                        self.mutation_timings[mutation_type].append(elapsed_time)
+                        return new_pair
+                # if not seen before, we can add it to the hub and return it
+                else:
+                    # if interaction doesn't exist, we can add it to the hub and return it
+                    elapsed_time = time.time() - start_time
+                    self.mutation_timings[mutation_type].append(elapsed_time)
+                    return new_pair
+
+        # if we have a pair that we have seen before in the hub but is not active, get random interaction
+        if hub.does_interaction_exist(pair):
+            if hub.get_active_flag(pair) == False:
+                for _ in range(hub.mutation_tries):
+                    new_pair = hub.get_ran_interaction(rng)
+
+                    # if pair and new_pair are the same, try again
+                    if new_pair == pair:
+                        continue
+
+                    # have we seen this new_pair before in the hub
+                    if hub.does_interaction_exist(new_pair):
+                        # if so and not active, try again
+                        if hub.get_active_flag(new_pair) == False:
+                            continue
+                        # if so and active, we can roll with it
+                        else:
+                            elapsed_time = time.time() - start_time
+                            self.mutation_timings[mutation_type].append(elapsed_time)
+                            return new_pair
+                    # if not seen before, we can add it to the hub and return it
+                    else:
+                        elapsed_time = time.time() - start_time
+                        self.mutation_timings[mutation_type].append(elapsed_time)
+                        return new_pair
+
         # Record timing
         elapsed_time = time.time() - start_time
         self.mutation_timings[mutation_type].append(elapsed_time)
