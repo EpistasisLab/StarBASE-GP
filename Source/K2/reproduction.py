@@ -272,6 +272,8 @@ class K2_Reproduction(Reproduction):
                 left_replace = hub.get_ran_snp_in_window(branch[0], rng)
                 right_replace = hub.get_ran_snp_in_window(branch[1], rng)
                 pair = (left_replace, right_replace) if left_replace < right_replace else (right_replace, left_replace)
+
+            assert pair[0] != pair[1], f"Mutated SNPs in neighborhood mutation should not be the same. Got pair: {pair} from branch: {branch}"
             mutation_type = 'in_window'
 
         # roll to see if we are doing an in/out chromosome mutation
@@ -291,11 +293,13 @@ class K2_Reproduction(Reproduction):
             assert result != anchor_snp, f"Mutated SNP should not be the same as the anchor SNP. Got result: {result} and anchor_snp: {anchor_snp}"
             pair = (anchor_snp, result) if anchor_snp < result else (result, anchor_snp)  # maintain sorted order in interaction
 
+            assert pair[0] != pair[1], f"Mutated SNPs in in/out chromosome mutation should not be the same. Got pair: {pair} from branch: {branch} with anchor_snp: {anchor_snp}"
+
         else:
-            # print(f'mut_roll: {mut_roll}')
             # return a completely random interaction from the hub
             pair = hub.get_ran_interaction(rng)
             mutation_type = 'new_pair'
+            assert pair[0] != pair[1], f"Mutated SNPs in random interaction mutation should not be the same. Got pair: {pair} from branch: {branch}"
 
         # if pair consists of the same snp get a random interaction
         if pair[0] == pair[1]:
@@ -316,12 +320,14 @@ class K2_Reproduction(Reproduction):
                     else:
                         elapsed_time = time.time() - start_time
                         self.mutation_timings[mutation_type].append(elapsed_time)
+                        assert new_pair[0] != new_pair[1], f"Mutated SNPs in random interaction mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
                         return new_pair
                 # if not seen before, we can add it to the hub and return it
                 else:
                     # if interaction doesn't exist, we can add it to the hub and return it
                     elapsed_time = time.time() - start_time
                     self.mutation_timings[mutation_type].append(elapsed_time)
+                    assert new_pair[0] != new_pair[1], f"Mutated SNPs in random interaction mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
                     return new_pair
 
         # if we have a pair that we have seen before in the hub but is not active, get random interaction
@@ -343,17 +349,20 @@ class K2_Reproduction(Reproduction):
                         else:
                             elapsed_time = time.time() - start_time
                             self.mutation_timings[mutation_type].append(elapsed_time)
+                            assert new_pair[0] != new_pair[1], f"Mutated SNPs in random interaction mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
                             return new_pair
                     # if not seen before, we can add it to the hub and return it
                     else:
                         elapsed_time = time.time() - start_time
                         self.mutation_timings[mutation_type].append(elapsed_time)
+                        assert new_pair[0] != new_pair[1], f"Mutated SNPs in random interaction mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
                         return new_pair
 
         # Record timing
         elapsed_time = time.time() - start_time
         self.mutation_timings[mutation_type].append(elapsed_time)
 
+        assert pair[0] != pair[1], f"Mutated SNPs should not be the same. Got pair: {pair} from branch: {branch}"
         return pair
 
     def crossover(self, rng: rng_t, parent1: Pipeline, parent2: Pipeline, hub: K2_Hub) -> Pipeline:
