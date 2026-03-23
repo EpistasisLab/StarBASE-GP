@@ -258,25 +258,49 @@ class K2_Reproduction(Reproduction):
         # roll to see if we do a neighborhood mutation
         mut_roll = rng.random()
         if mut_roll < self.mut_neighbor_p:
+            mutation_type = 'in_window'
             roll = rng.random()
             # keep left and mutate right via neighborhood
             if roll < self.m_keep_left:
                 replace = hub.get_ran_snp_in_window(branch[1], rng)
                 pair = (branch[0], replace) if branch[0] < replace else (replace, branch[0])
-                assert pair[0] != pair[1], f"Mutated SNPs in neighborhood mutation should not be the same. Got pair: {pair} from branch: {branch}"
             # keep right and mutate left via neighborhood
             elif roll < self.m_keep_left + self.m_keep_right:
                 replace = hub.get_ran_snp_in_window(branch[0], rng)
                 pair = (branch[1], replace) if branch[1] < replace else (replace, branch[1])
-                assert pair[0] != pair[1], f"Mutated SNPs in neighborhood mutation should not be the same. Got pair: {pair} from branch: {branch}"
             # replace both via neighborhood (i.e., climb both)
             else: # climb both
                 left_replace = hub.get_ran_snp_in_window(branch[0], rng)
                 right_replace = hub.get_ran_snp_in_window(branch[1], rng)
                 pair = (left_replace, right_replace) if left_replace < right_replace else (right_replace, left_replace)
-                assert pair[0] != pair[1], f"Mutated SNPs in neighborhood mutation should not be the same. Got pair: {pair} from branch: {branch}"
 
-            mutation_type = 'in_window'
+            # if pair consists of the same snp get a random interaction
+            # this can only happen in the keep left or keep right scenarios if the snp we are mutating is in a very tight cluster of snps
+            if pair[0] == pair[1]:
+                print(f"Warning: Mutated pair {pair} consists of the same SNP. This can happen in tight clusters when mutating within the neighborhood. Getting a random interaction from the hub instead.")
+                for _ in range(hub.mutation_tries):
+                    # will automatically ensure that the same snp is not returned as a pair
+                    new_pair = hub.get_ran_interaction(rng, branch)
+
+                    # if pair and new_pair are the same, try again
+                    if new_pair == branch:
+                        continue
+
+                    # have we seen this new_pair before in the hub
+                    if hub.does_interaction_exist(new_pair):
+                        # if so and not active, try again
+                        if hub.get_active_flag(new_pair) == False:
+                            continue
+                        # if so and active, we can roll with it
+                        else:
+                            assert new_pair[0] != new_pair[1], f"Mutated SNPs in neighborhood mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
+                            pair = new_pair
+                            break
+                    # if not seen before, we can add it to the hub and return it
+                    else:
+                        assert new_pair[0] != new_pair[1], f"Mutated SNPs in neighborhood mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
+                        pair = new_pair
+                        break
 
         # roll to see if we are doing an in/out chromosome mutation
         elif mut_roll < self.mut_neighbor_p + self.mut_ioc_p:
@@ -293,50 +317,21 @@ class K2_Reproduction(Reproduction):
                 mutation_type = 'out_chrom'
 
             assert result != anchor_snp, f"Mutated SNP should not be the same as the anchor SNP. Got result: {result} and anchor_snp: {anchor_snp}"
-            pair = (anchor_snp, result) if anchor_snp < result else (result, anchor_snp)  # maintain sorted order in interaction
-
+            pair = (anchor_snp, result) if anchor_snp < result else (result, anchor_snp)
             assert pair[0] != pair[1], f"Mutated SNPs in in/out chromosome mutation should not be the same. Got pair: {pair} from branch: {branch} with anchor_snp: {anchor_snp}"
 
         else:
             # return a completely random interaction from the hub
-            pair = hub.get_ran_interaction(rng)
+            pair = hub.get_ran_interaction(rng, branch)
             mutation_type = 'new_pair'
             assert pair[0] != pair[1], f"Mutated SNPs in random interaction mutation should not be the same. Got pair: {pair} from branch: {branch}"
-
-        # if pair consists of the same snp get a random interaction
-        if pair[0] == pair[1]:
-            for _ in range(hub.mutation_tries):
-                # will automatically ensure that the same snp is not returned as a pair
-                new_pair = hub.get_ran_interaction(rng)
-
-                # if pair and new_pair are the same, try again
-                if new_pair == pair:
-                    continue
-
-                # have we seen this new_pair before in the hub
-                if hub.does_interaction_exist(new_pair):
-                    # if so and not active, try again
-                    if hub.get_active_flag(new_pair) == False:
-                        continue
-                    # if so and active, we can roll with it
-                    else:
-                        elapsed_time = time.time() - start_time
-                        self.mutation_timings[mutation_type].append(elapsed_time)
-                        assert new_pair[0] != new_pair[1], f"Mutated SNPs in random interaction mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
-                        return new_pair
-                # if not seen before, we can add it to the hub and return it
-                else:
-                    # if interaction doesn't exist, we can add it to the hub and return it
-                    elapsed_time = time.time() - start_time
-                    self.mutation_timings[mutation_type].append(elapsed_time)
-                    assert new_pair[0] != new_pair[1], f"Mutated SNPs in random interaction mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
-                    return new_pair
 
         # if we have a pair that we have seen before in the hub but is not active, get random interaction
         if hub.does_interaction_exist(pair):
             if hub.get_active_flag(pair) == False:
+                mutation_type = 'new_pair'
                 for _ in range(hub.mutation_tries):
-                    new_pair = hub.get_ran_interaction(rng)
+                    new_pair = hub.get_ran_interaction(rng, branch)
 
                     # if pair and new_pair are the same, try again
                     if new_pair == pair:
@@ -349,21 +344,16 @@ class K2_Reproduction(Reproduction):
                             continue
                         # if so and active, we can roll with it
                         else:
-                            elapsed_time = time.time() - start_time
-                            self.mutation_timings[mutation_type].append(elapsed_time)
                             assert new_pair[0] != new_pair[1], f"Mutated SNPs in random interaction mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
-                            return new_pair
+                            pair = new_pair
                     # if not seen before, we can add it to the hub and return it
                     else:
-                        elapsed_time = time.time() - start_time
-                        self.mutation_timings[mutation_type].append(elapsed_time)
                         assert new_pair[0] != new_pair[1], f"Mutated SNPs in random interaction mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
-                        return new_pair
+                        pair = new_pair
 
         # Record timing
         elapsed_time = time.time() - start_time
         self.mutation_timings[mutation_type].append(elapsed_time)
-
         assert pair[0] != pair[1], f"Mutated SNPs should not be the same. Got pair: {pair} from branch: {branch}"
         return pair
 
