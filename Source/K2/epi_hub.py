@@ -425,24 +425,32 @@ class K2_Hub(Hub):
         print(f"[Timing] save_hubs completed in {total_save_time:.4f}s\n", flush=True)
         return
 
-    def get_ran_interaction(self, rng: rng_t) -> interaction_t:
+    def get_ran_interaction(self, rng: rng_t, interaction: interaction_t | None = None) -> interaction_t:
         """
         Get a random interaction composed of completely random snps.
 
         Args:
             rng (rng_t): Numpy random generator.
+            interaction (interaction_t | None): An optional existing interaction to use as a starting point.
 
         Returns:
             interaction_t: A tuple of two SNPs that interact with each other.
         """
-        # get first random snp from considered hub
-        snp1 = self.consider.get_ran_snp(rng, snp_t('nada'), self.mutation_tries)
-        # get second random snp from considered hub based on the first snp
-        snp2 = self.consider.get_ran_snp(rng, snp1, self.mutation_tries)
 
-        # return the interaction as a tuple of the two snps with snp_x < snp_y for consistency
-        assert snp1 != snp2, f"Random interaction mutation should not return the same SNP twice. Got snp1: {snp1} and snp2: {snp2}"
-        return (snp1, snp2) if snp1 < snp2 else (snp2, snp1)
+        for _ in range(self.mutation_tries):
+            # get first random snp from considered hub
+            snp1 = self.consider.get_ran_snp(rng, snp_t('nada'), self.mutation_tries)
+            # get second random snp from considered hub based on the first snp
+            snp2 = self.consider.get_ran_snp(rng, snp1, self.mutation_tries)
+            # make pair
+            pair = (snp_t(snp1), snp_t(snp2)) if snp1 < snp2 else (snp_t(snp2), snp_t(snp1))
+
+            if pair != interaction:
+                # return the interaction as a tuple of the two snps with snp_x < snp_y for consistency
+                assert snp1 != snp2, f"Random interaction mutation should not return the same SNP twice. Got snp1: {snp1} and snp2: {snp2}"
+                return pair
+
+        assert False, f"Failed to get a random interaction different from the input interaction {interaction} after {self.mutation_tries} tries."
 
     def get_ran_snp_in_window(self, anchor: snp_t, rng: rng_t) -> snp_t:
         """
