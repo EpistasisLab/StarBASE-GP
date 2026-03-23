@@ -184,6 +184,8 @@ class K2_Hub(Hub):
             """
 
             # add to hub
+            assert snp != left_neighbor, f"SNP {snp} cannot be the same as its left neighbor {left_neighbor} in the SNP_DB hub."
+            assert snp != right_neighbor, f"SNP {snp} cannot be the same as its right neighbor {right_neighbor} in the SNP_DB hub."
             self.hub[snp] = [ori_rid, left_neighbor, right_neighbor]
             return
 
@@ -439,6 +441,7 @@ class K2_Hub(Hub):
         snp2 = self.consider.get_ran_snp(rng, snp1, self.mutation_tries)
 
         # return the interaction as a tuple of the two snps with snp_x < snp_y for consistency
+        assert snp1 != snp2, f"Random interaction mutation should not return the same SNP twice. Got snp1: {snp1} and snp2: {snp2}"
         return (snp1, snp2) if snp1 < snp2 else (snp2, snp1)
 
     def get_ran_snp_in_window(self, anchor: snp_t, rng: rng_t) -> snp_t:
@@ -461,7 +464,9 @@ class K2_Hub(Hub):
         assert len(neighbors) > 0, f"Anchor SNP {anchor} should have at least one neighbor in the SNP_DB to get a random SNP in the window. Got neighbors: {neighbors}"
 
         # roll a random snp from the list of snps
-        return rng.choice(neighbors)
+        snp = rng.choice(neighbors)
+        assert snp != anchor, f"Selected SNP {snp} cannot be the same as the anchor SNP {anchor} in the SNP_DB hub."
+        return snp
 
     def get_ran_snp_in_chrm(self, anchor: snp_t, rng: rng_t) -> snp_t:
         """
@@ -483,7 +488,9 @@ class K2_Hub(Hub):
         chrom, pos = snp_chrm_pos(anchor)
 
         # return same snp
-        return self.consider.get_random_snp_in_chromosome(chrom, pos, rng)
+        snp = self.consider.get_random_snp_in_chromosome(chrom, pos, rng)
+        assert snp != anchor, f"Selected SNP {snp} cannot be the same as the anchor SNP {anchor} when selecting a random SNP from the same chromosome in the consideration hub."
+        return snp
 
     def get_ran_snp_out_chrm(self, anchor: snp_t, rng: rng_t) -> snp_t:
         """
@@ -504,7 +511,9 @@ class K2_Hub(Hub):
         chrom, _ = snp_chrm_pos(anchor)
 
         # roll a random snp from the list of snps
-        return self.consider.get_ran_snp_out_chrm(chrom, rng)
+        snp = self.consider.get_ran_snp_out_chrm(chrom, rng)
+        assert snp != anchor, f"Selected SNP {snp} cannot be the same as the anchor SNP {anchor} when selecting a random SNP from a different chromosome in the consideration hub."
+        return snp
 
     def get_active_flag(self, interaction: interaction_t) -> bool:
         # is this interaction active?
