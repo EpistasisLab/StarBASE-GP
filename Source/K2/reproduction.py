@@ -263,17 +263,19 @@ class K2_Reproduction(Reproduction):
             if roll < self.m_keep_left:
                 replace = hub.get_ran_snp_in_window(branch[1], rng)
                 pair = (branch[0], replace) if branch[0] < replace else (replace, branch[0])
+                assert pair[0] != pair[1], f"Mutated SNPs in neighborhood mutation should not be the same. Got pair: {pair} from branch: {branch}"
             # keep right and mutate left via neighborhood
             elif roll < self.m_keep_left + self.m_keep_right:
                 replace = hub.get_ran_snp_in_window(branch[0], rng)
                 pair = (branch[1], replace) if branch[1] < replace else (replace, branch[1])
+                assert pair[0] != pair[1], f"Mutated SNPs in neighborhood mutation should not be the same. Got pair: {pair} from branch: {branch}"
             # replace both via neighborhood (i.e., climb both)
             else: # climb both
                 left_replace = hub.get_ran_snp_in_window(branch[0], rng)
                 right_replace = hub.get_ran_snp_in_window(branch[1], rng)
                 pair = (left_replace, right_replace) if left_replace < right_replace else (right_replace, left_replace)
+                assert pair[0] != pair[1], f"Mutated SNPs in neighborhood mutation should not be the same. Got pair: {pair} from branch: {branch}"
 
-            assert pair[0] != pair[1], f"Mutated SNPs in neighborhood mutation should not be the same. Got pair: {pair} from branch: {branch}"
             mutation_type = 'in_window'
 
         # roll to see if we are doing an in/out chromosome mutation
