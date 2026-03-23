@@ -277,6 +277,7 @@ class K2_Reproduction(Reproduction):
             # if pair consists of the same snp get a random interaction
             # this can only happen in the keep left or keep right scenarios if the snp we are mutating is in a very tight cluster of snps
             if pair[0] == pair[1]:
+                mutation_type = 'new_pair'
                 print(f"Warning: Mutated pair {pair} consists of the same SNP. This can happen in tight clusters when mutating within the neighborhood. Getting a random interaction from the hub instead.")
                 for _ in range(hub.mutation_tries):
                     # will automatically ensure that the same snp is not returned as a pair
