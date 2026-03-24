@@ -301,6 +301,8 @@ class K2_Reproduction(Reproduction):
                         assert new_pair[0] != new_pair[1], f"Mutated SNPs in neighborhood mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
                         pair = new_pair
                         break
+                # if this assert get's hit, we have exhausted all tries to find a new pair
+                assert pair[0] != pair[1], f"Mutated SNPs in random interaction mutation should not be the same. Got pair: {pair} from branch: {branch}"
 
         # roll to see if we are doing an in/out chromosome mutation
         elif mut_roll < self.mut_neighbor_p + self.mut_ioc_p:
