@@ -12,7 +12,7 @@
 
 # imports from Base
 from ..Base.pipeline import Pipeline
-from ..Base.types import (rng_t, prob_t, int32_t, uint16_t, snp_t, interaction_t)
+from ..Base.types import (rng_t, prob_t, int32_t, uint16_t, interaction_t)
 from ..Base.reproduction import Reproduction
 from ..Base.selectors import (VarianceThresholdNode, SelectPercentileNode, SelectFweNode, SelectFromModelLasso,
                               SelectFromModelTree, FeatureEncodingFrequencySelector)
@@ -24,7 +24,6 @@ from .epi_hub import K2_Hub
 # additional imports
 from typeguard import typechecked
 from typing import Set
-import numpy as np
 import copy as cp
 # Start timing
 import time
@@ -278,7 +277,7 @@ class K2_Reproduction(Reproduction):
             # this can only happen in the keep left or keep right scenarios if the snp we are mutating is in a very tight cluster of snps
             if pair[0] == pair[1]:
                 mutation_type = 'new_pair'
-                print(f"Warning: Mutated pair {pair} consists of the same SNP. This can happen in tight clusters when mutating within the neighborhood. Getting a random interaction from the hub instead.")
+                print(f"Warning: Mutated pair {pair} consists of the same SNP. In window mutation.")
                 for _ in range(hub.mutation_tries):
                     # will automatically ensure that the same snp is not returned as a pair
                     new_pair = hub.get_ran_interaction(rng, branch)
@@ -352,10 +351,13 @@ class K2_Reproduction(Reproduction):
                         assert new_pair[0] != new_pair[1], f"Mutated SNPs in random interaction mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
                         pair = new_pair
 
+                # if this assert get's hit, we have exhausted all tries to find a new pair
+                assert pair[0] != pair[1], f"Mutated SNPs in random interaction mutation should not be the same. Got pair: {pair} from branch: {branch}"
+
         # Record timing
         elapsed_time = time.time() - start_time
         self.mutation_timings[mutation_type].append(elapsed_time)
-        assert pair[0] != pair[1], f"Mutated SNPs should not be the same. Got pair: {pair} from branch: {branch}"
+        assert pair[0] != pair[1], f"Mutated SNPs should not be the same. Got pair: {pair} from branch: {branch} and mutation_type: {mutation_type}"
         return pair
 
     def crossover(self, rng: rng_t, parent1: Pipeline, parent2: Pipeline, hub: K2_Hub) -> Pipeline:
