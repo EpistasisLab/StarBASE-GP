@@ -27,6 +27,7 @@ from typing import Set
 import copy as cp
 # Start timing
 import time
+from typing import Dict, List
 
 
 @typechecked
@@ -112,6 +113,17 @@ class K2_Reproduction(Reproduction):
         self.m_in_win_p = m_in_win_p / total
         self.m_out_win_p = m_out_win_p / total
         self.m_out_chr_p = m_out_chr_p / total
+
+        # update mutation timings dictionary to include new mutation types
+        # Dictionary to track mutation timing statistics
+        self.mutation_timings: Dict[str, List[float]] = {
+            'in_window': [],
+            'out_window': [],
+            'out_chrom': [],
+            'new_pair': [],
+            'ran_pair': [],
+            'via_pair': []
+        }
 
         return
 
@@ -273,37 +285,6 @@ class K2_Reproduction(Reproduction):
                 right_replace = hub.get_ran_snp_in_window(branch[1], rng)
                 pair = (left_replace, right_replace) if left_replace < right_replace else (right_replace, left_replace)
 
-            # if pair consists of the same snp get a random interaction
-            # this can only happen in the keep left or keep right scenarios if the snp we are mutating is in a very tight cluster of snps
-            if pair[0] == pair[1]:
-                mutation_type = 'new_pair'
-                print(f"Warning: Mutated pair {pair} consists of the same SNP. In window mutation.")
-                for _ in range(hub.mutation_tries):
-                    # will automatically ensure that the same snp is not returned as a pair
-                    new_pair = hub.get_ran_interaction(rng, branch)
-
-                    # if pair and new_pair are the same, try again
-                    if new_pair == branch:
-                        continue
-
-                    # have we seen this new_pair before in the hub
-                    if hub.does_interaction_exist(new_pair):
-                        # if so and not active, try again
-                        if hub.get_active_flag(new_pair) == False:
-                            continue
-                        # if so and active, we can roll with it
-                        else:
-                            assert new_pair[0] != new_pair[1], f"Mutated SNPs in neighborhood mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
-                            pair = new_pair
-                            break
-                    # if not seen before, we can add it to the hub and return it
-                    else:
-                        assert new_pair[0] != new_pair[1], f"Mutated SNPs in neighborhood mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
-                        pair = new_pair
-                        break
-                # if this assert get's hit, we have exhausted all tries to find a new pair
-                assert pair[0] != pair[1], f"Mutated SNPs in random interaction mutation should not be the same. Got pair: {pair} from branch: {branch}"
-
         # roll to see if we are doing an in/out chromosome mutation
         elif mut_roll < self.mut_neighbor_p + self.mut_ioc_p:
             # roll to pick which snp in the interaction we want to keep
@@ -328,33 +309,38 @@ class K2_Reproduction(Reproduction):
             mutation_type = 'new_pair'
             assert pair[0] != pair[1], f"Mutated SNPs in random interaction mutation should not be the same. Got pair: {pair} from branch: {branch}"
 
-        # if we have a pair that we have seen before in the hub but is not active, get random interaction
-        if hub.does_interaction_exist(pair):
-            if hub.get_active_flag(pair) == False:
-                mutation_type = 'new_pair'
-                for _ in range(hub.mutation_tries):
-                    new_pair = hub.get_ran_interaction(rng, branch)
+        # if pair consists of the same snp get a random interaction (hub.mutation_tries) times to try to get a different pair
+        if pair[0] == pair[1]:
+            mutation_type = 'ran_pair'
+            for _ in range(hub.mutation_tries):
+                # will automatically ensure that the same snp is not returned as a pair
+                new_pair = hub.get_ran_interaction(rng, branch)
 
-                    # if pair and new_pair are the same, try again
-                    if new_pair == pair:
+                # if pair and new_pair are the same, try again
+                if new_pair == branch:
+                    continue
+
+                # have we seen this new_pair before in the hub
+                if hub.does_interaction_exist(new_pair):
+                    # if so and not active, try again
+                    if hub.get_active_flag(new_pair) == False:
                         continue
-
-                    # have we seen this new_pair before in the hub
-                    if hub.does_interaction_exist(new_pair):
-                        # if so and not active, try again
-                        if hub.get_active_flag(new_pair) == False:
-                            continue
-                        # if so and active, we can roll with it
-                        else:
-                            assert new_pair[0] != new_pair[1], f"Mutated SNPs in random interaction mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
-                            pair = new_pair
-                    # if not seen before, we can add it to the hub and return it
+                    # if so and active, we can roll with it
                     else:
-                        assert new_pair[0] != new_pair[1], f"Mutated SNPs in random interaction mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
+                        assert new_pair[0] != new_pair[1], f"Mutated SNPs in neighborhood mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
                         pair = new_pair
+                        break
+                # if not seen before, we can add it to the hub and return it
+                else:
+                    assert new_pair[0] != new_pair[1], f"Mutated SNPs in neighborhood mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
+                    pair = new_pair
+                    break
 
-                # if this assert get's hit, we have exhausted all tries to find a new pair
-                assert pair[0] != pair[1], f"Mutated SNPs in random interaction mutation should not be the same. Got pair: {pair} from branch: {branch}"
+        # if pair still consists of the same snp then we randomly pull one from the viable interactions hub
+        if pair[0] == pair[1]:
+            mutation_type = 'via_pair'
+            pair = hub.get_ran_viable_interaction(rng)
+            assert pair[0] != pair[1], f"Mutated SNPs from viable interactions hub should not be the same. Got pair: {pair} from branch: {branch}"
 
         # Record timing
         elapsed_time = time.time() - start_time

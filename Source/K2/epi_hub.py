@@ -4,6 +4,8 @@
 #
 #####################################################################################################
 
+from random import random
+
 from ..Base.hub import Hub
 from ..Base.ordered_hub import Ordered_Hub
 from ..Base.types import (snp_t, int32_t, rng_t, uint32_t, float32_t, int16_t, uint16_t, interaction_t)
@@ -208,6 +210,49 @@ class K2_Hub(Hub):
             else:
                 assert False, f"SNP should have at least one neighbor in the hub. Got {snp} with neighbors {self.hub[snp][1]} and {self.hub[snp][2]}"
 
+    class VIABLE_INTERACTIONS:
+        """
+        Data base to hold all viable interactions that we have seen so far.
+        """
+        def __init__(self) -> None:
+            """
+            self.interaction_list: list to hold all interactions for random access
+            self.interaction_dict: dictionary to hold all interactions and values for O(1) access
+            """
+
+            self.interaction_list = []
+            self.interaction_dict = {}
+            return
+
+        def add(self, interaction) -> None:
+            assert interaction not in self.interaction_dict, f"Interaction {interaction} already exists in viable interactions hub."
+
+            self.interaction_dict[interaction] = len(self.interaction_list)
+            self.interaction_list.append(interaction)
+            return
+
+        def remove(self, interaction) -> None:
+            assert interaction in self.interaction_dict, f"Interaction {interaction} not found in viable interactions hub."
+
+            idx = self.interaction_dict[interaction]
+            last_interaction = self.interaction_list[-1]
+
+            # Move last interaction into idx
+            self.interaction_list[idx] = last_interaction
+            self.interaction_dict[last_interaction] = idx
+
+            # Remove old last slot
+            self.interaction_list.pop()
+            del self.interaction_dict[interaction]
+            return
+
+        def get_random_interaction(self, rng: rng_t) -> interaction_t:
+            return rng.choice(self.interaction_list)
+
+        def get_size(self):
+            assert len(self.interaction_list) == len(self.interaction_dict), "Length of interaction list and dict should be the same."
+            return len(self.interaction_list)
+
     def __init__(self, snp_list: List[snp_t], snps_ray_ids:Dict[snp_t, ray.ObjectRef]) -> None:
         """
         Create all required Hubs: Ordered, Considered, and Interfact specific tools
@@ -221,6 +266,13 @@ class K2_Hub(Hub):
 
         # how many rolls do we try for mutations
         self.mutation_tries = uint16_t(20)
+
+        # initialize viable interactions hub
+        print('Initializing Viable Interactions Hub')
+        viable_start = time.time()
+        self.viable_interactions = self.VIABLE_INTERACTIONS()
+        viable_time = time.time() - viable_start
+        print(f'Viable Interactions Hub Initialized in {viable_time:.4f} seconds\n')
 
         # initialize non pruned hub
         print('Initializing Considered Hub')
@@ -294,7 +346,7 @@ class K2_Hub(Hub):
             mdr_mapping (Dict | None): MDR mapping values if encoding is 'mdr'.
         """
 
-        # if r2 is below the explainability threshold and the threshold is non-negative, add hub with active flag
+        # add interaction to epi hub with all details (r2, encoding ray id, encoding type, generation seen, mdr mapping)
         self.epi_db.add_interaction_to_hub(interaction=interaction,
                                            r2=r2,
                                            enc_rid=enc_rid,
@@ -302,6 +354,9 @@ class K2_Hub(Hub):
                                            gen_seen=gen_seen,
                                            active=True,
                                            mdr_mapping=mdr_mapping)
+
+        # add interaction to viable interactions hub
+        self.viable_interactions.add(interaction)
         return
 
     def get_encoding(self, interaction: interaction_t) -> snp_t:
@@ -523,6 +578,18 @@ class K2_Hub(Hub):
         assert snp != anchor, f"Selected SNP {snp} cannot be the same as the anchor SNP {anchor} when selecting a random SNP from a different chromosome in the consideration hub."
         return snp
 
+    def get_ran_viable_interaction(self, rng: rng_t) -> interaction_t:
+        """
+        Get a random viable interaction from the viable interactions hub.
+
+        Args:
+            rng (rng_t): Numpy random generator.
+
+        Returns:
+            interaction_t: A randomly selected viable interaction.
+        """
+        return self.viable_interactions.get_random_interaction(rng)
+
     def get_active_flag(self, interaction: interaction_t) -> bool:
         # is this interaction active?
         return self.epi_db.get_active(interaction)
@@ -639,8 +706,12 @@ class K2_Hub(Hub):
             interaction (interaction_t): The interaction for which to flip the active flag.
             gen_pruned (int16_t): The generation in which the interaction was pruned.
         """
-
+        # flip interaction active flag for phantom epistasis
         self.epi_db.flip_activate_flag_pe(interaction, gen_pruned)
+
+        # remove interaction from viable interactions hub
+        self.viable_interactions.remove(interaction)
+
         return
 
     def flip_active_flag_pre(self, interaction: interaction_t, gen_pruned: int16_t) -> None:
@@ -651,8 +722,11 @@ class K2_Hub(Hub):
             interaction (interaction_t): The interaction for which to flip the active flag.
             gen_pruned (int16_t): The generation in which the interaction was pruned.
         """
-
+        # flip interaction active flag for preprocessing failure
         self.epi_db.flip_activate_flag_pre(interaction, gen_pruned)
+
+        # remove interaction from viable interactions hub
+        self.viable_interactions.remove(interaction)
         return
 
     def get_epi_db_size(self) -> uint32_t:
