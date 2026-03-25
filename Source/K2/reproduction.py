@@ -101,8 +101,6 @@ class K2_Reproduction(Reproduction):
         self.mut_neighbor_p = mut_neighbor_p / total
         self.mut_ioc_p = mut_ioc_p / total
 
-        print(f'mut_ran_p: {self.mut_ran_p}, mut_neighbor_p: {self.mut_neighbor_p}, mut_ioc_p: {self.mut_ioc_p}')
-
         # normalize the m_keep_left, m_keep_right, and m_climb_both to ensure they sum to 1
         total = m_keep_left + m_keep_right + m_climb_both
         self.m_keep_left = m_keep_left / total
