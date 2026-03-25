@@ -578,17 +578,24 @@ class K2_Hub(Hub):
         assert snp != anchor, f"Selected SNP {snp} cannot be the same as the anchor SNP {anchor} when selecting a random SNP from a different chromosome in the consideration hub."
         return snp
 
-    def get_ran_viable_interaction(self, rng: rng_t) -> interaction_t:
+    def get_ran_viable_interaction(self, rng: rng_t, interaction: interaction_t) -> interaction_t:
         """
         Get a random viable interaction from the viable interactions hub.
 
         Args:
             rng (rng_t): Numpy random generator.
+            interaction (interaction_t): The interaction to be replaced.
 
         Returns:
             interaction_t: A randomly selected viable interaction.
         """
-        return self.viable_interactions.get_random_interaction(rng)
+
+        for _ in range(self.mutation_tries):
+            viable_interaction = self.viable_interactions.get_random_interaction(rng)
+            if viable_interaction != interaction:
+                return viable_interaction
+
+        return interaction
 
     def get_active_flag(self, interaction: interaction_t) -> bool:
         # is this interaction active?

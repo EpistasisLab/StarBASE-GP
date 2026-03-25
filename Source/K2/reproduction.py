@@ -27,7 +27,6 @@ from typing import Set
 import copy as cp
 # Start timing
 import time
-from typing import Dict, List
 
 
 @typechecked
@@ -324,11 +323,47 @@ class K2_Reproduction(Reproduction):
                     pair = new_pair
                     break
 
-        # if pair still consists of the same snp then we randomly pull one from the viable interactions hub
-        if pair[0] == pair[1]:
-            mutation_type = 'via_pair'
-            pair = hub.get_ran_viable_interaction(rng)
-            assert pair[0] != pair[1], f"Mutated SNPs from viable interactions hub should not be the same. Got pair: {pair} from branch: {branch}"
+            # if pair still consists of the same snp then we randomly pull one from the viable interactions hub
+            if pair[0] == pair[1]:
+                mutation_type = 'via_pair'
+                pair = hub.get_ran_viable_interaction(rng, branch)
+                assert pair[0] != pair[1], f"Mutated SNPs from viable interactions hub should not be the same. Got pair: {pair} from branch: {branch}"
+
+        # if pair exists in the hub but is not active, roll to get a random interaction and get a pair from the viable interactions hub if that fails (hub.mutation_tries) times
+        if hub.does_interaction_exist(pair):
+            if hub.get_active_flag(pair) == False:
+                mutation_type = 'ran_pair'
+                found_new_pair = False
+                for _ in range(hub.mutation_tries):
+                    new_pair = hub.get_ran_interaction(rng, branch)
+
+                    # if pair and new_pair are the same, try again
+                    if new_pair == branch:
+                        continue
+
+                    # have we seen this new_pair before in the hub
+                    if hub.does_interaction_exist(new_pair):
+                        # if so and not active, try again
+                        if hub.get_active_flag(new_pair) == False:
+                            continue
+                        # if so and active, we can roll with it
+                        else:
+                            assert new_pair[0] != new_pair[1], f"Mutated SNPs in neighborhood mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
+                            pair = new_pair
+                            found_new_pair = True
+                            break
+                    # if not seen before, we can add it to the hub and return it
+                    else:
+                        assert new_pair[0] != new_pair[1], f"Mutated SNPs in neighborhood mutation should not be the same. Got new_pair: {new_pair} from branch: {branch}"
+                        pair = new_pair
+                        found_new_pair = True
+                        break
+
+                # if pair still consists of the same snp then we randomly pull one from the viable interactions hub
+                if found_new_pair == False:
+                    mutation_type = 'via_pair'
+                    pair = hub.get_ran_viable_interaction(rng, branch)
+                    assert pair[0] != pair[1], f"Mutated SNPs from viable interactions hub should not be the same. Got pair: {pair} from branch: {branch}"
 
         # Record timing
         elapsed_time = time.time() - start_time
