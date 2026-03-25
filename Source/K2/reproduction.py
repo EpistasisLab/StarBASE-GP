@@ -116,7 +116,7 @@ class K2_Reproduction(Reproduction):
 
         # update mutation timings dictionary to include new mutation types
         # Dictionary to track mutation timing statistics
-        self.mutation_timings: Dict[str, List[float]] = {
+        self.mutation_timings = {
             'in_window': [],
             'out_window': [],
             'out_chrom': [],
