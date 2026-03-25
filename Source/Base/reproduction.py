@@ -28,7 +28,8 @@ class Reproduction(ABC):
                  m_in_win_p: prob_t = prob_t(.1),
                  m_out_win_p: prob_t = prob_t(.45),
                  m_out_chr_p: prob_t = prob_t(.45),
-                 window_distance: int32_t = int32_t(1000000)) -> None:
+                 window_distance: int32_t = int32_t(1000000),
+                 timings_list: List[str] = ['in_window', 'out_window', 'out_chrom']) -> None:
 
         # save all the variables
         self.branch_max = branch_max
@@ -44,12 +45,7 @@ class Reproduction(ABC):
         self.window_distance = window_distance
 
         # Dictionary to track mutation timing statistics
-        self.mutation_timings: Dict[str, List[float]] = {
-            'in_window': [],
-            'out_window': [],
-            'out_chrom': [],
-            'new_pair': []
-        }
+        self.mutation_timings: Dict[str, List[float]] = {var: [] for var in timings_list}
 
         return
 

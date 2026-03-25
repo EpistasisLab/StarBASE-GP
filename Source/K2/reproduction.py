@@ -92,7 +92,8 @@ class K2_Reproduction(Reproduction):
                          m_in_win_p=m_in_win_p,
                          m_out_win_p=m_out_win_p,
                          m_out_chr_p=m_out_chr_p,
-                         window_distance=window_distance)
+                         window_distance=window_distance,
+                         timings_list=['in_window', 'out_window', 'out_chrom', 'new_pair', 'ran_pair', 'via_pair'])
 
         # normalize the mut_ran_p, mut_neighbor_p, and mut_ioc_p to ensure they sum to 1
         total = mut_ran_p + mut_neighbor_p + mut_ioc_p
@@ -113,17 +114,6 @@ class K2_Reproduction(Reproduction):
         self.m_in_win_p = m_in_win_p / total
         self.m_out_win_p = m_out_win_p / total
         self.m_out_chr_p = m_out_chr_p / total
-
-        # update mutation timings dictionary to include new mutation types
-        # Dictionary to track mutation timing statistics
-        self.mutation_timings = {
-            'in_window': [],
-            'out_window': [],
-            'out_chrom': [],
-            'new_pair': [],
-            'ran_pair': [],
-            'via_pair': []
-        }
 
         return
 
