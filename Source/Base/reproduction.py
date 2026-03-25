@@ -46,6 +46,7 @@ class Reproduction(ABC):
 
         # Dictionary to track mutation timing statistics
         self.mutation_timings: Dict[str, List[float]] = {var: [] for var in timings_list}
+        print(f'mutation_timings initialized with keys: {list(self.mutation_timings.keys())}')
 
         return
 
