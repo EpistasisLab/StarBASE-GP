@@ -224,14 +224,14 @@ class K2_Hub(Hub):
             self.interaction_dict = {}
             return
 
-        def add(self, interaction) -> None:
+        def add(self, interaction: interaction_t) -> None:
             assert interaction not in self.interaction_dict, f"Interaction {interaction} already exists in viable interactions hub."
 
             self.interaction_dict[interaction] = len(self.interaction_list)
             self.interaction_list.append(interaction)
             return
 
-        def remove(self, interaction) -> None:
+        def remove(self, interaction: interaction_t) -> None:
             assert interaction in self.interaction_dict, f"Interaction {interaction} not found in viable interactions hub."
 
             idx = self.interaction_dict[interaction]
@@ -247,7 +247,8 @@ class K2_Hub(Hub):
             return
 
         def get_random_interaction(self, rng: rng_t) -> interaction_t:
-            return rng.choice(self.interaction_list)
+            idx = rng.integers(0, len(self.interaction_list))
+            return self.interaction_list[idx]
 
         def get_size(self):
             assert len(self.interaction_list) == len(self.interaction_dict), "Length of interaction list and dict should be the same."
