@@ -51,7 +51,9 @@ class K2_Evolver(EA):
                  ld_flag: bool = True,
                  encoding_flag: bool = True,
                  regression: bool = True,
-                 starting_snps_csv_path: str | None = None # optional path to csv containing starting snps for the initial population (with column name 'snp')
+                 starting_snps_csv_path: str | None = None, # optional path to csv containing starting snps for the initial population (with column name 'snp')
+                 branch_batch_eval_size: int32_t = int32_t(500),
+                 pipeline_batch_eval_size: int32_t = int32_t(1000)
                  ) -> None:
         """
         K2 Evolver class that extends the EA base class.
@@ -74,7 +76,9 @@ class K2_Evolver(EA):
                          save_directory=save_directory,
                          window_distance=window_distance,
                          branch_explainability_threshold=branch_explainability_threshold,
-                         ld_flag=ld_flag)
+                         ld_flag=ld_flag,
+                         branch_batch_eval_size=branch_batch_eval_size,
+                         pipeline_batch_eval_size=pipeline_batch_eval_size)
         self.regression = regression
         self.encoding_flag = encoding_flag
         self.phantom_epistasis_threshold = phantom_epistasis_threshold
@@ -383,12 +387,12 @@ class K2_Evolver(EA):
 
         sampling_time = time.time() - sampling_start
 
-        # break up unseen_branches into chunks of 2000 to avoid ray overload and then run evaluate_unseen_branches on each chunk
+        # break up unseen_branches into chunks of self.branch_batch_eval_size to avoid ray overload and then run evaluate_unseen_branches on each chunk
         eval_unseen_start = time.time()
         unseen_branches_list = list(unseen_branches)
-        for i in range(0, len(unseen_branches_list), 1000):
-            print(f"Evaluating unseen branches chunk {i // 1000 + 1} / {(len(unseen_branches_list) - 1) // 1000 + 1}", flush=True)
-            chunk = set(unseen_branches_list[i:i+1000])
+        for i in range(0, len(unseen_branches_list), self.branch_batch_eval_size):
+            print(f"Evaluating unseen branches chunk {i // self.branch_batch_eval_size + 1} / {(len(unseen_branches_list) - 1) // self.branch_batch_eval_size + 1}", flush=True)
+            chunk = set(unseen_branches_list[i:i+self.branch_batch_eval_size])
             self.evaluate_unseen_branches(chunk, gen_seen=int16_t(0))
         eval_unseen_time = time.time() - eval_unseen_start
 
@@ -463,8 +467,7 @@ class K2_Evolver(EA):
         interactions_details_per_interaction = {}
 
         # Batch size for processing
-        batch_size = 1000
-        num_batches = (len(pipelines) - 1) // batch_size + 1
+        num_batches = (len(pipelines) - 1) // self.pipeline_batch_eval_size + 1
 
         # Timing accumulators
         total_job_creation_time = 0.0
@@ -474,8 +477,8 @@ class K2_Evolver(EA):
 
         # Process pipelines in batches
         for batch_idx in range(num_batches):
-            start_idx = batch_idx * batch_size
-            end_idx = min(start_idx + batch_size, len(pipelines))
+            start_idx = batch_idx * self.pipeline_batch_eval_size
+            end_idx = min(start_idx + self.pipeline_batch_eval_size, len(pipelines))
             batch = pipelines[start_idx:end_idx]
 
             print(f"  Processing batch {batch_idx + 1}/{num_batches} (pipelines {start_idx} to {end_idx - 1})...", flush=True)
@@ -697,11 +700,11 @@ class K2_Evolver(EA):
 
         # evaluate all unseen interactions if we have any to evaluate
         if len(unseen_interactions) > 0:
-            # break up unseen_branches into chunks of 1000 to avoid ray overload and then run evaluate_unseen_branches on each chunk
+            # break up unseen_branches into chunks of self.branch_batch_eval_size to avoid ray overload and then run evaluate_unseen_branches on each chunk
             unseen_branches_list = list(unseen_interactions)
-            for i in range(0, len(unseen_branches_list), 1000):
-                print(f"Evaluating unseen branches chunk {i // 1000 + 1} / {(len(unseen_branches_list) - 1) // 1000 + 1}", flush=True)
-                chunk = set(unseen_branches_list[i:i+1000])
+            for i in range(0, len(unseen_branches_list), self.branch_batch_eval_size):
+                print(f"Evaluating unseen branches chunk {i // self.branch_batch_eval_size + 1} / {(len(unseen_branches_list) - 1) // self.branch_batch_eval_size + 1}", flush=True)
+                chunk = set(unseen_branches_list[i:i+self.branch_batch_eval_size])
                 self.evaluate_unseen_branches(chunk, gen_seen=int16_t(gen_info))
 
         # offspring pipelines with no good interactions

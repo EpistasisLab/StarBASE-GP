@@ -48,6 +48,8 @@ class EA(ABC):
                  branch_explainability_threshold: float32_t = float32_t(0.0),
                  encoding_flag: bool = True,
                  ld_flag: bool = True,
+                 branch_batch_eval_size: int32_t = int32_t(500),
+                 pipeline_batch_eval_size: int32_t = int32_t(1000)
                  ) -> None:
         """
         Main class for the evolutionary algorithm.
@@ -89,6 +91,10 @@ class EA(ABC):
             Flag to indicate whether to use LD pruning or not.
         encoding_flag: bool
             Flag to indicate whether to use all encodings or not (only additive encoding).
+        branch_batch_eval_size: int32_t
+            Number of branch nodes to evaluate in each batch.
+        pipeline_batch_eval_size: int32_t
+            Number of pipelines to evaluate in each batch.
         """
         # initial population
         self.population: List[Pipeline] = []
@@ -141,6 +147,12 @@ class EA(ABC):
 
         assert isinstance(encoding_flag, bool), "encoding_flag must be a boolean."
         self.encoding_flag = encoding_flag
+
+        assert 0 < branch_batch_eval_size, "branch_batch_eval_size must be greater than 0."
+        self.branch_batch_eval_size = branch_batch_eval_size
+
+        assert 0 < pipeline_batch_eval_size, "pipeline_batch_eval_size must be greater than 0."
+        self.pipeline_batch_eval_size = pipeline_batch_eval_size
 
         # random number generator to be passed to all other stochastic functions
         self.rng = np.random.default_rng(seed)
