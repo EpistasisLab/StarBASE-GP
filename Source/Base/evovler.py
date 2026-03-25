@@ -48,7 +48,7 @@ class EA(ABC):
                  branch_explainability_threshold: float32_t = float32_t(0.0),
                  encoding_flag: bool = True,
                  ld_flag: bool = True,
-                 branch_batch_eval_size: int32_t = int32_t(500),
+                 branch_batch_eval_size: int32_t = int32_t(400),
                  pipeline_batch_eval_size: int32_t = int32_t(1000)
                  ) -> None:
         """

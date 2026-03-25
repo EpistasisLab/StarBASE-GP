@@ -52,7 +52,7 @@ class K2_Evolver(EA):
                  encoding_flag: bool = True,
                  regression: bool = True,
                  starting_snps_csv_path: str | None = None, # optional path to csv containing starting snps for the initial population (with column name 'snp')
-                 branch_batch_eval_size: int32_t = int32_t(500),
+                 branch_batch_eval_size: int32_t = int32_t(400),
                  pipeline_batch_eval_size: int32_t = int32_t(1000)
                  ) -> None:
         """
