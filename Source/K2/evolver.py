@@ -587,7 +587,7 @@ class K2_Evolver(EA):
 
         # print all the pipeline evaluation details for this generation
         for pipeline_id in pipeline_evaluation_details:
-            print(f"Pipeline {pipeline_id} evaluation details: R2={pipeline_evaluation_details[pipeline_id][snp_t('r2')]:.4f}, \
+            print(f"Pipeline {pipeline_id} evaluation details: R2={pipeline_evaluation_details[pipeline_id][snp_t('r2')]/float32_t(self.k):.4f}, \
                 Feature Count={pipeline_evaluation_details[pipeline_id][snp_t('feature_cnt')]}, \
                     LD Used={pipeline_evaluation_details[pipeline_id][snp_t('ld_used')]}, \
                         Interactions {pipeline_evaluation_details[pipeline_id][snp_t('features')]}", flush=True)
