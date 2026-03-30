@@ -194,59 +194,71 @@ def ray_evaluate_interaction_encodings(X1: np.ndarray,
     error = {'cartesian': False, 'xor': False, 'mdr': False, 'base_model': False}
     mdr_mapping = None
 
-    # Step 1: Fit base model for phantom epistasis check (main effects only)
+    # Step 1: Modified Calculation: Calculate base_r2 on the extact phenotype instead of extracting residuals
     try:
+        # Center the training data for the main effects model
         X1_train_centered = X1[train_idx] - np.mean(X1[train_idx])
         X2_train_centered = X2[train_idx] - np.mean(X2[train_idx])
         y_train_centered = y[train_idx] - np.mean(y[train_idx])
 
-        base_model = sm.OLS(y_train_centered, sm.add_constant(np.column_stack((X1_train_centered, X2_train_centered)), has_constant='add'))
+        # training model with main effects (univariate) SNPs
+        X_base_train = np.column_stack((X1_train_centered, X2_train_centered))
+        base_model = sm.OLS(y_train_centered, sm.add_constant(X_base_train, has_constant='add'))
         base_results = base_model.fit()
 
-        # Get residuals on training data
-        y_base_train_pred = base_results.predict(sm.add_constant(np.column_stack((X1_train_centered, X2_train_centered)), has_constant='add'))
-        y_train_residuals = y_train_centered - y_base_train_pred
-
-        # Get residuals on validation data
+        # Center the validation data using the training means 
         X1_valid_centered = X1[valid_idx] - np.mean(X1[train_idx])
         X2_valid_centered = X2[valid_idx] - np.mean(X2[train_idx])
         y_valid_centered = y[valid_idx] - np.mean(y[train_idx])
-        y_base_valid_pred = base_results.predict(sm.add_constant(np.column_stack((X1_valid_centered, X2_valid_centered)), has_constant='add'))
-        y_valid_residuals = y_valid_centered - y_base_valid_pred
+        
+        # get the predictions on the validation set from the trained main effects model
+        X_base_valid = np.column_stack((X1_valid_centered, X2_valid_centered))
+        y_base_valid_pred = base_results.predict(sm.add_constant(X_base_valid, has_constant='add'))
+        
+        # compute the validation r2 of the main effects model to use as the baseline for phantom epistasis check
+        base_r2 = r2_score(y_valid_centered, y_base_valid_pred)
     except Exception as e:
         logging.error(f"Error fitting base model for phantom epistasis check for SNPs {snp1}, {snp2}: {e}")
         error['base_model'] = True
         return results, mdr_mapping, error
 
-    # Step 2: Evaluate Cartesian encoding
+    # Step 2: Evaluate Cartesian encoding - Modified: Fit joint model (main + cartesian) on y_train_centered, score on y_valid_centered and subtract the base_r2 to get the incremental r2 contributed by the interaction while controlling for main effects (phantom epistasis check)
     try:
         X_encoded = encode_cartesian(X1, X2)
         X_encoded_train_centered = X_encoded[train_idx] - np.mean(X_encoded[train_idx])
         X_encoded_valid_centered = X_encoded[valid_idx] - np.mean(X_encoded[train_idx])
 
-        regressor = sm.OLS(y_train_residuals, sm.add_constant(X_encoded_train_centered, has_constant='add'))
+        X_joint_train = np.column_stack((X_base_train, X_encoded_train_centered))
+        X_joint_valid = np.column_stack((X_base_valid, X_encoded_valid_centered))
+
+        regressor = sm.OLS(y_train_centered, sm.add_constant(X_joint_train, has_constant='add'))
         fit_results = regressor.fit()
-        y_pred = fit_results.predict(sm.add_constant(X_encoded_valid_centered, has_constant='add'))
-        results['cartesian'] = float32_t(r2_score(y_valid_residuals, y_pred))
+        y_pred = fit_results.predict(sm.add_constant(X_joint_valid, has_constant='add'))
+
+        joint_r2 = r2_score(y_valid_centered, y_pred)
+        results['cartesian'] = float32_t(joint_r2 - base_r2)
     except Exception as e:
         logging.error(f"Error evaluating cartesian for SNP pair {snp1}, {snp2}: {e}")
         error['cartesian'] = True
 
-    # Step 3: Evaluate XOR encoding
+    # Step 3: Evaluate XOR encoding: Modified: Fit joint model (main + xor) on y_train_centered, score on y_valid_centered and subtract the base_r2 to get the incremental r2 contributed by the interaction while controlling for main effects (phantom epistasis check)
     try:
         X_encoded = encode_xor(X1, X2)
         X_encoded_train_centered = X_encoded[train_idx] - np.mean(X_encoded[train_idx])
         X_encoded_valid_centered = X_encoded[valid_idx] - np.mean(X_encoded[train_idx])
 
-        regressor = sm.OLS(y_train_residuals, sm.add_constant(X_encoded_train_centered, has_constant='add'))
+        X_joint_train = np.column_stack((X_base_train, X_encoded_train_centered))
+        X_joint_valid = np.column_stack((X_base_valid, X_encoded_valid_centered))
+        regressor = sm.OLS(y_train_centered, sm.add_constant(X_joint_train, has_constant='add'))
         fit_results = regressor.fit()
-        y_pred = fit_results.predict(sm.add_constant(X_encoded_valid_centered, has_constant='add'))
-        results['xor'] = float32_t(r2_score(y_valid_residuals, y_pred))
+        y_pred = fit_results.predict(sm.add_constant(X_joint_valid, has_constant='add'))
+        joint_r2 = r2_score(y_valid_centered, y_pred)
+        results['xor'] = float32_t(joint_r2 - base_r2)
     except Exception as e:
         logging.error(f"Error evaluating xor for SNP pair {snp1}, {snp2}: {e}")
         error['xor'] = True
 
-    # Step 4: Evaluate MDR encoding
+    # Step 4: Evaluate MDR encoding: Modified: Fit joint model (main + mdr) on y_train_centered, score on y_valid_centered and subtract the base_r2 to get the incremental r2 contributed by the interaction while controlling for main effects (phantom epistasis check). Also return the MDR mapping if successful for encoding the validation/test set in downstream analyses.
     try:
         X_encoded_train, mdr_fitted_object, temp_mdr_mapping = encode_mdr(X1[train_idx], X2[train_idx], y[train_idx])
         X_encoded_valid = mdr_fitted_object.transform(np.column_stack((X1[valid_idx], X2[valid_idx])))
@@ -254,10 +266,13 @@ def ray_evaluate_interaction_encodings(X1: np.ndarray,
         X_encoded_train_centered = X_encoded_train - np.mean(X_encoded_train)
         X_encoded_valid_centered = X_encoded_valid - np.mean(X_encoded_train)
 
-        regressor = sm.OLS(y_train_residuals, sm.add_constant(X_encoded_train_centered, has_constant='add'))
+        X_joint_train = np.column_stack((X_base_train, X_encoded_train_centered))
+        X_joint_valid = np.column_stack((X_base_valid, X_encoded_valid_centered))
+        regressor = sm.OLS(y_train_centered, sm.add_constant(X_joint_train, has_constant='add'))
         fit_results = regressor.fit()
-        y_pred = fit_results.predict(sm.add_constant(X_encoded_valid_centered, has_constant='add'))
-        results['mdr'] = float32_t(r2_score(y_valid_residuals, y_pred))
+        y_pred = fit_results.predict(sm.add_constant(X_joint_valid, has_constant='add'))
+        joint_r2 = r2_score(y_valid_centered, y_pred)
+        results['mdr'] = float32_t(joint_r2 - base_r2)
         mdr_mapping = temp_mdr_mapping
     except Exception as e:
         logging.error(f"Error evaluating MDR for SNP pair {snp1}, {snp2}: {e}")
@@ -614,26 +629,35 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
     y_train_centered = y[train_idx] - np.mean(y[train_idx])
     y_valid_centered = y[valid_idx] - np.mean(y[train_idx])
 
-    # Step 1: Fit a ridge regression model on the univariate features to get residuals for phantom epistasis check
+    # Fit a base model and then a joint model to correctly calculate the pipeline epistasis R2.
+
+    # Step 1: Fit base model (main effects only) to get baseline validation R2
     try:
-        regressor = sm.OLS(y_train_centered, sm.add_constant(X_univariate_matrix_train_centered, has_constant='add'))
-        results = regressor.fit_regularized(L1_wt=0.0, alpha=1e-4)
-        y_train_residuals = y_train_centered - results.predict(sm.add_constant(X_univariate_matrix_train_centered, has_constant='add'))
-        y_valid_residuals = y_valid_centered - results.predict(sm.add_constant(X_univariate_matrix_valid_centered, has_constant='add')) # use the training centered univariate features to get the predictions for the validation set to compute the residuals for phantom epistasis check
+        base_regressor = sm.OLS(y_train_centered, sm.add_constant(X_univariate_matrix_train_centered, has_constant='add'))
+        base_results = base_regressor.fit_regularized(L1_wt=0.0, alpha=1.0) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
+        base_pred = base_results.predict(sm.add_constant(X_univariate_matrix_valid_centered, has_constant='add'))
+        base_r2 = r2_score(y_valid_centered, base_pred)
+     
     except Exception as e:
         logging.error(f"Exception while fitting the base model ridge regression: {e}")
         print(f"Error fitting ridge regression for pipeline evaluation: {e}")
         return float32_t(-1.0), pop_id, float32_t(-1.0)
 
-    # Step 2: Fit OLS model on the interaction features using the residuals from the ridge regression and score on validation set to get the R² for the interaction while controlling for main effects (phantom epistasis check)
+    # Step 2: Fit joint model (main effects + interactions) and calculate the incremental R2 contributed by the interactions while controlling for main effects (phantom epistasis check)
     try:
-        regressor = sm.OLS(y_train_residuals, sm.add_constant(X_interaction_matrix_train_centered, has_constant='add'))
-        fit_results = regressor.fit()
-        y_pred = fit_results.predict(sm.add_constant(X_interaction_matrix_valid_centered, has_constant='add'))
-        r2_score_value = r2_score(y_valid_residuals, y_pred)
+        X_joint_train = np.column_stack((X_univariate_matrix_train_centered, X_interaction_matrix_train_centered))
+        X_joint_valid = np.column_stack((X_univariate_matrix_valid_centered, X_interaction_matrix_valid_centered))
+
+        joint_regressor = sm.OLS(y_train_centered, sm.add_constant(X_joint_train, has_constant='add'))
+        joint_results = joint_regressor.fit_regularized(L1_wt=0.0, alpha=1.0) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
+        joint_pred = joint_results.predict(sm.add_constant(X_joint_valid, has_constant='add'))
+        joint_r2 = r2_score(y_valid_centered, joint_pred)
+
+        # Epistais R2 is strictly the variance added by the interaction features beyond the main effects, so we subtract the base_r2 from the joint_r2 to get the incremental R2 contributed by the interactions while controlling for main effects (phantom epistasis check)
+        epistasis_r2 = float32_t(joint_r2 - base_r2)
     except Exception as e:
         logging.error(f"Error while scoring the pipeline: {e}")
         print(f"Error scoring the pipeline: {e}")
         return float32_t(-1.0), pop_id, float32_t(-1.0)
 
-    return float32_t(r2_score_value), pop_id, float32_t(1.0)
+    return epistasis_r2, pop_id, float32_t(1.0)
