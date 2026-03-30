@@ -631,10 +631,17 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
 
     # Fit a base model and then a joint model to correctly calculate the pipeline epistasis R2.
 
+    # dynamic regularization, c is the scaling constant; incraese this is the maximum size pipelines are still overfitting
+    c = 0.05
+
     # Step 1: Fit base model (main effects only) to get baseline validation R2
     try:
+        # calculate dynamic alpha for base model
+        p_base = X_univariate_matrix_train_centered.shape[1]
+        alpha_base = c * p_base
+
         base_regressor = sm.OLS(y_train_centered, sm.add_constant(X_univariate_matrix_train_centered, has_constant='add'))
-        base_results = base_regressor.fit_regularized(L1_wt=0.0, alpha=1.0) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
+        base_results = base_regressor.fit_regularized(L1_wt=0.0, alpha=alpha_base) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
         base_pred = base_results.predict(sm.add_constant(X_univariate_matrix_valid_centered, has_constant='add'))
         base_r2 = r2_score(y_valid_centered, base_pred)
      
@@ -648,8 +655,12 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
         X_joint_train = np.column_stack((X_univariate_matrix_train_centered, X_interaction_matrix_train_centered))
         X_joint_valid = np.column_stack((X_univariate_matrix_valid_centered, X_interaction_matrix_valid_centered))
 
+        # calculate dynamic alpha for joint model
+        p_joint = X_joint_train.shape[1]
+        alpha_joint = c * p_joint
+
         joint_regressor = sm.OLS(y_train_centered, sm.add_constant(X_joint_train, has_constant='add'))
-        joint_results = joint_regressor.fit_regularized(L1_wt=0.0, alpha=1.0) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
+        joint_results = joint_regressor.fit_regularized(L1_wt=0.0, alpha=alpha_joint) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
         joint_pred = joint_results.predict(sm.add_constant(X_joint_valid, has_constant='add'))
         joint_r2 = r2_score(y_valid_centered, joint_pred)
 
