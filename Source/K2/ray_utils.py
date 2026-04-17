@@ -634,7 +634,7 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
     # Step 1: Fit base model (main effects only) to get baseline validation R2
     try:
         base_regressor = sm.OLS(y_train_centered, sm.add_constant(X_univariate_matrix_train_centered, has_constant='add'))
-        base_results = base_regressor.fit_regularized(L1_wt=0.0, alpha=1.0) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
+        base_results = base_regressor.fit_regularized(L1_wt=0.5, alpha=1.0) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
         base_pred = base_results.predict(sm.add_constant(X_univariate_matrix_valid_centered, has_constant='add'))
         base_r2 = r2_score(y_valid_centered, base_pred)
      
@@ -649,7 +649,7 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
         X_joint_valid = np.column_stack((X_univariate_matrix_valid_centered, X_interaction_matrix_valid_centered))
 
         joint_regressor = sm.OLS(y_train_centered, sm.add_constant(X_joint_train, has_constant='add'))
-        joint_results = joint_regressor.fit_regularized(L1_wt=0.0, alpha=1.0) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
+        joint_results = joint_regressor.fit_regularized(L1_wt=0.5, alpha=1.5) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
         joint_pred = joint_results.predict(sm.add_constant(X_joint_valid, has_constant='add'))
         joint_r2 = r2_score(y_valid_centered, joint_pred)
 
