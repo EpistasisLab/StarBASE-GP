@@ -1248,20 +1248,24 @@ class K2_Evolver(EA):
         transformed_snp_ray_ids = {}
         while len(ray_jobs) > 0:
             finished, ray_jobs = ray.wait(ray_jobs)
-            encoded_x, snp_name = ray.get(finished)[0]
+            encoded_x, snp_name = ray.get(finished)[0] # 
             # Put encoded array into Ray object store
             transformed_snp_ray_ids[snp_name] = ray.put(encoded_x)
+        
+        # update hub with the new encodings based on full train+validation data
+        for snp in snp_names:
+            self.hub.update_enc_ray_id(snp, transformed_snp_ray_ids[snp])
 
         # Create column names for PFI (include encoding type)
         column_names_with_encoding = [f'chr{snp}_{self.hub.get_encoding(snp)}' for snp in snp_names]
 
-        # Calculate train + validation R² using ray remote function
+        # Calculate train + validation R² using ray remote function - this will be the R² of the final model trained on combined train+validation data and evaluated on the same combined train+validation data (to check for overfitting)
         print("Calculating train + validation R²...", flush=True)
         train_valid_r2_job = ray_utils.ray_eval_pipeline_r2.remote(
             component_map=self.hub.build_component_map(pipeline_data['pipeline'].get_branch_set()),
             y=self.all_y_ray_id,
             train_idx=combined_idx_ray_id,
-            valid_idx=test_idx_ray_id,
+            valid_idx=combined_idx_ray_id,  # Use combined train+validation indices for evaluation
             pop_id=uint32_t(0)
         )
         train_val_r2, _, error = ray.get(train_valid_r2_job)

@@ -87,7 +87,7 @@ def ray_interaction_encoder(X1: np.ndarray,
                             snp: snp_t) -> Tuple[np.ndarray, snp_t]:
     """
     Efficiently encode interaction features using specified encoding pattern.
-    For MDR encoding, uses pre-computed mapping from evaluation phase.
+    For MDR encoding, fits the MDR model on the training data to get the mapping, then applies it to the full dataset.
     For Cartesian/XOR, encodes directly.
     Optimized with numba for maximum speed.
 
@@ -591,11 +591,11 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
     Evaluate a pipeline with only a regression node using Ray.
 
     Parameters:
-        X_interaction (List[ray.ObjectID]): List of Ray ObjectIDs for encoded interaction data.
-        X_univariate (List[ray.ObjectID]): List of Ray ObjectIDs for all the univariate features that make up the interactions in the pipeline (used for phantom epistasis check).
-        y (ray.ObjectID): Ray ObjectID for phenotype data array.
-        train_idx (np.ndarray): Indices for training data.
-        valid_idx (np.ndarray): Indices for validation data.
+        component_map (Dict[snp_t, Dict]): Dictionary mapping interaction names to their component information
+            (snp1_name, snp2_name, snp1_ray_id, snp2_ray_id, encoded_ray_id).
+        y (npt.NDArray): Phenotype data array.
+        train_idx (npt.NDArray): Indices for training data.
+        valid_idx (npt.NDArray): Indices for validation data.
         pop_id (uint32_t): Population ID for tracking.
 
     Returns:
@@ -631,15 +631,12 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
 
     # Fit a base model and then a joint model to correctly calculate the pipeline epistasis R2.
 
-  
-
     # Step 1: Fit base model (main effects only) to get baseline validation R2
     try:
 
-
-        base_regressor = sm.OLS(y_train_centered, sm.add_constant(X_univariate_matrix_train_centered, has_constant='add'))
+        base_regressor = sm.OLS(y_train_centered, sm.add_constant(X_univariate_matrix_train_centered, has_constant='add')) # uses the training data
         base_results = base_regressor.fit_regularized(L1_wt=0.0, alpha=1) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
-        base_pred = base_results.predict(sm.add_constant(X_univariate_matrix_valid_centered, has_constant='add'))
+        base_pred = base_results.predict(sm.add_constant(X_univariate_matrix_valid_centered, has_constant='add')) # score on the validation data
         base_r2 = r2_score(y_valid_centered, base_pred)
      
     except Exception as e:
@@ -660,9 +657,9 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
         # Dynamically scale the alpha penalty based on the true feature ratio
         dynamic_joint_alpha = 1.0 * feature_ratio
 
-        joint_regressor = sm.OLS(y_train_centered, sm.add_constant(X_joint_train, has_constant='add'))
+        joint_regressor = sm.OLS(y_train_centered, sm.add_constant(X_joint_train, has_constant='add')) # uses the training data, note that the main effects and interactions are already centered together to ensure they are on the same scale for regularization
         joint_results = joint_regressor.fit_regularized(L1_wt=0.0, alpha=dynamic_joint_alpha) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
-        joint_pred = joint_results.predict(sm.add_constant(X_joint_valid, has_constant='add'))
+        joint_pred = joint_results.predict(sm.add_constant(X_joint_valid, has_constant='add')) # score on the validation data
         joint_r2 = r2_score(y_valid_centered, joint_pred)
 
         # Epistais R2 is strictly the variance added by the interaction features beyond the main effects, so we subtract the base_r2 from the joint_r2 to get the incremental R2 contributed by the interactions while controlling for main effects (phantom epistasis check)

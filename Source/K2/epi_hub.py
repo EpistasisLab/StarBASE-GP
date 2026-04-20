@@ -79,6 +79,7 @@ class K2_Hub(Hub):
             assert interaction in self.hub
             # return ray id for encoded feature values
             return self.hub[interaction][1]
+        
 
         def get_enc_x(self, interaction: interaction_t) -> snp_t | None:
             # assert that interaction is in hub
@@ -811,6 +812,13 @@ class K2_Hub(Hub):
 
 
         return component_map
+    
+    def update_enc_ray_id(self, interaction: interaction_t, enc_rid: ray.ObjectID) -> None:
+        # assert that interaction is in hub
+        assert interaction in self.hub
+        # update ray id for encoded feature values
+        self.hub[interaction][1] = enc_rid
+        return
 
     def generate_r2_set(self, interactions: Set[interaction_t]) -> List:
         """
