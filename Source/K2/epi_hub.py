@@ -815,9 +815,9 @@ class K2_Hub(Hub):
     
     def update_enc_ray_id(self, interaction: interaction_t, enc_rid: ray.ObjectID) -> None:
         # assert that interaction is in hub
-        assert interaction in self.hub
+        assert interaction in self.epi_db.hub
         # update ray id for encoded feature values
-        self.hub[interaction][1] = enc_rid
+        self.epi_db.hub[interaction][1] = enc_rid
         return
 
     def generate_r2_set(self, interactions: Set[interaction_t]) -> List:
