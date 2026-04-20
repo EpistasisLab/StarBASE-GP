@@ -21,6 +21,7 @@ import os
 import ray
 from typing import List, Tuple
 import matplotlib.pyplot as plt
+import seaborn as sns
 import time
 
 @typechecked
@@ -553,11 +554,11 @@ class K2_Evolver(EA):
                     for f in pipeline_evaluation_details[i][snp_t('features')]:
                         feature.add((snp_t(f[0]), snp_t(f[1])))
 
-                    ray_jobs.append(ray_utils.ray_eval_pipeline_r2.remote(component_map=self.hub.build_component_map(feature),
-                                                                          y = self.all_y_ray_id,
-                                                                          train_idx = fold_data['train_idx'],
-                                                                          valid_idx = fold_data['val_idx'],
-                                                                          pop_id = uint32_t(i)))
+                    ray_jobs.append(ray_utils.ray_eval_pipeline_r2_gcv.remote(component_map=self.hub.build_component_map(feature),
+                                                                              y = self.all_y_ray_id,
+                                                                              train_idx = fold_data['train_idx'],
+                                                                              valid_idx = fold_data['val_idx'],
+                                                                              pop_id = uint32_t(i)))
             r2_job_time = time.time() - r2_job_start
             total_r2_job_time += r2_job_time
 
@@ -565,7 +566,7 @@ class K2_Evolver(EA):
             r2_eval_start = time.time()
             while len(ray_jobs) > 0:
                 finished, ray_jobs = ray.wait(ray_jobs)
-                r2, pop_id, error = ray.get(finished[0])
+                r2, pop_id, error, _, _, _, _, _, _ = ray.get(finished[0])
                 if error < float32_t(0.0):
                     pipeline_evaluation_details[pop_id][snp_t('error')] = True
 
@@ -1051,22 +1052,41 @@ class K2_Evolver(EA):
                                                  'pipeline': pipeline  # Store pipeline object to access root node
                                                  }
             # create ray job for evaluating the pipeline on the validation set
-            ray_jobs.append(ray_utils.ray_eval_pipeline_r2.remote(component_map=self.hub.build_component_map(pipeline.get_branch_set()),
-                                                                  y = self.all_y_ray_id,
-                                                                  train_idx = self.train_idx_ray,  # Use all training data for final evaluation
-                                                                  valid_idx = self.val_idx_ray,
-                                                                  pop_id = uint32_t(pipeline_id)))
+            ray_jobs.append(ray_utils.ray_eval_pipeline_r2_gcv.remote(component_map=self.hub.build_component_map(pipeline.get_branch_set()),
+                                                                      y = self.all_y_ray_id,
+                                                                      train_idx = self.train_idx_ray,  # Use all training data for final evaluation
+                                                                      valid_idx = self.val_idx_ray,
+                                                                      pop_id = uint32_t(pipeline_id)))
 
 
             # process results as they come in
             while len(ray_jobs) > 0:
                 finished, ray_jobs = ray.wait(ray_jobs)
-                r2, pop_id, error = ray.get(finished)[0]
+                r2, pop_id, error, alpha_base, alpha_joint, base_r2_train, base_r2_valid, joint_r2_train, joint_r2_valid = ray.get(finished)[0]
                 if error < float32_t(0.0):
                     print(f"Error during post analysis evaluation of pipeline {pop_id}", flush=True)
                     continue
+
+                # Store all R² values
                 pareto_validation_r2[pop_id]['validation_r2'] = float32_t(r2)
-        print("Post analysis on validation set completed.", flush=True)
+                pareto_validation_r2[pop_id]['base_r2_train'] = float32_t(base_r2_train)
+                pareto_validation_r2[pop_id]['base_r2_valid'] = float32_t(base_r2_valid)
+                pareto_validation_r2[pop_id]['joint_r2_train'] = float32_t(joint_r2_train)
+                pareto_validation_r2[pop_id]['joint_r2_valid'] = float32_t(joint_r2_valid)
+                pareto_validation_r2[pop_id]['alpha_base'] = alpha_base
+                pareto_validation_r2[pop_id]['alpha_joint'] = alpha_joint
+
+                # Compute deltas
+                delta_base = base_r2_valid - base_r2_train
+                delta_joint = joint_r2_valid - joint_r2_train
+
+                print(f"\nPipeline {pop_id} Validation Results:", flush=True)
+                print(f"  Model 0 (Base) - Train R²: {base_r2_train:.6f}, Valid R²: {base_r2_valid:.6f}, Delta: {delta_base:.6f}", flush=True)
+                print(f"  Model 1 (Joint) - Train R²: {joint_r2_train:.6f}, Valid R²: {joint_r2_valid:.6f}, Delta: {delta_joint:.6f}", flush=True)
+                print(f"  Epistasis R²: {r2:.6f}", flush=True)
+                print(f"  GCV Alpha - Base: {alpha_base:.4f}, Joint: {alpha_joint:.4f}", flush=True)
+
+        print("\nPost analysis on validation set completed.", flush=True)
 
         # sort pareto_validation_r2 by key (pipeline_id)
         pareto_validation_r2 = dict(sorted(pareto_validation_r2.items()))
@@ -1261,22 +1281,31 @@ class K2_Evolver(EA):
 
         # Calculate train + validation R² using ray remote function - this will be the R² of the final model trained on combined train+validation data and evaluated on the same combined train+validation data (to check for overfitting)
         print("Calculating train + validation R²...", flush=True)
-        train_valid_r2_job = ray_utils.ray_eval_pipeline_r2.remote(
+        train_valid_r2_job = ray_utils.ray_eval_pipeline_r2_gcv.remote(
             component_map=self.hub.build_component_map(pipeline_data['pipeline'].get_branch_set()),
             y=self.all_y_ray_id,
             train_idx=combined_idx_ray_id,
             valid_idx=combined_idx_ray_id,  # Use combined train+validation indices for evaluation
             pop_id=uint32_t(0)
         )
-        train_val_r2, _, error = ray.get(train_valid_r2_job)
+        train_val_r2, _, error, alpha_base_tv, alpha_joint_tv, base_r2_tv_train, base_r2_tv_valid, joint_r2_tv_train, joint_r2_tv_valid = ray.get(train_valid_r2_job)
         if error < float32_t(0.0):
             print(f"Error during train + validation R² calculation", flush=True)
             train_val_r2 = float32_t(-1.0)
-        print(f'Train + Validation R² Score: {train_val_r2}', flush=True)
+            base_r2_tv_train = float32_t(-1.0)
+            base_r2_tv_valid = float32_t(-1.0)
+            joint_r2_tv_train = float32_t(-1.0)
+            joint_r2_tv_valid = float32_t(-1.0)
+
+        print(f'\nTrain + Validation Set Results:', flush=True)
+        print(f'  Model 0 (Base) - Train R²: {base_r2_tv_train:.6f}, Valid R²: {base_r2_tv_valid:.6f}, Delta: {base_r2_tv_valid - base_r2_tv_train:.6f}', flush=True)
+        print(f'  Model 1 (Joint) - Train R²: {joint_r2_tv_train:.6f}, Valid R²: {joint_r2_tv_valid:.6f}, Delta: {joint_r2_tv_valid - joint_r2_tv_train:.6f}', flush=True)
+        print(f'  Epistasis R²: {train_val_r2:.6f}', flush=True)
+        print(f'  GCV Alpha - Base: {alpha_base_tv:.4f}, Joint: {alpha_joint_tv:.4f}', flush=True)
 
         # Calculate test R² using ray remote function
         print("Calculating test R²...", flush=True)
-        test_r2_job = ray_utils.ray_eval_pipeline_r2.remote(
+        test_r2_job = ray_utils.ray_eval_pipeline_r2_gcv.remote(
             component_map=self.hub.build_component_map(pipeline_data['pipeline'].get_branch_set()),
             y=self.all_y_ray_id,
             train_idx=combined_idx_ray_id,
@@ -1284,14 +1313,22 @@ class K2_Evolver(EA):
             pop_id=uint32_t(0)
         )
 
-        test_r2, _, error = ray.get(test_r2_job)
+        test_r2, _, error, alpha_base_test, alpha_joint_test, base_r2_test_train, base_r2_test_test, joint_r2_test_train, joint_r2_test_test = ray.get(test_r2_job)
 
         if error < float32_t(0.0):
             print(f"Error during test R² calculation", flush=True)
             test_r2 = float32_t(-1.0)
+            base_r2_test_train = float32_t(-1.0)
+            base_r2_test_test = float32_t(-1.0)
+            joint_r2_test_train = float32_t(-1.0)
+            joint_r2_test_test = float32_t(-1.0)
 
         pipeline_data['test_r2'] = test_r2
-        print(f'Test R² Score: {test_r2}', flush=True)
+        print(f'\nTest Set Results:', flush=True)
+        print(f'  Model 0 (Base) - Train R²: {base_r2_test_train:.6f}, Test R²: {base_r2_test_test:.6f}, Delta: {base_r2_test_test - base_r2_test_train:.6f}', flush=True)
+        print(f'  Model 1 (Joint) - Train R²: {joint_r2_test_train:.6f}, Test R²: {joint_r2_test_test:.6f}, Delta: {joint_r2_test_test - joint_r2_test_train:.6f}', flush=True)
+        print(f'  Epistasis R²: {test_r2:.6f}', flush=True)
+        print(f'  GCV Alpha - Base: {alpha_base_test:.4f}, Joint: {alpha_joint_test:.4f}', flush=True)
 
         # Calculate PFI on test set using ray_pfi
         print("Calculating permutation feature importance on test set...", flush=True)
@@ -1315,6 +1352,65 @@ class K2_Evolver(EA):
         pfi_results, _ = ray.get(pfi_job)
 
         print(f"PFI calculated for {len(pfi_results)} features", flush=True)
+
+        # Generate correlation heatmaps for validation and test sets
+        print("\nGenerating correlation heatmaps for utopia model features...", flush=True)
+
+        # Get the encoded feature matrices for validation and test sets
+        # For validation set
+        X_valid_features = np.column_stack([ray.get(transformed_snp_ray_ids[snp])[ray.get(self.val_idx_ray)] for snp in snp_names])
+
+        # For test set
+        X_test_features = np.column_stack([ray.get(transformed_snp_ray_ids[snp])[self.test_idx] for snp in snp_names])
+
+        # Create correlation matrices
+        corr_valid = np.corrcoef(X_valid_features, rowvar=False)
+        corr_test = np.corrcoef(X_test_features, rowvar=False)
+
+        # Create feature labels (use encoding type in label)
+        feature_labels = [f"{snp[0]}_{self.hub.get_encoding(snp)}_{snp[1]}" for snp in snp_names]
+
+        # Plot validation set correlation heatmap
+        plt.figure(figsize=(max(10, len(snp_names)), max(8, len(snp_names) * 0.8)))
+        sns.heatmap(corr_valid,
+                    xticklabels=feature_labels,
+                    yticklabels=feature_labels,
+                    cmap='coolwarm',
+                    center=0,
+                    vmin=-1,
+                    vmax=1,
+                    square=True,
+                    linewidths=0.5,
+                    cbar_kws={'label': 'Correlation'})
+        plt.title('Feature Correlation Heatmap - Validation Set', fontsize=14, pad=20)
+        plt.xticks(rotation=45, ha='right', fontsize=8)
+        plt.yticks(rotation=0, fontsize=8)
+        plt.tight_layout()
+        valid_heatmap_path = os.path.join(self.save_directory, 'utopia_correlation_heatmap_validation.png')
+        plt.savefig(valid_heatmap_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"  Validation correlation heatmap saved to {valid_heatmap_path}", flush=True)
+
+        # Plot test set correlation heatmap
+        plt.figure(figsize=(max(10, len(snp_names)), max(8, len(snp_names) * 0.8)))
+        sns.heatmap(corr_test,
+                    xticklabels=feature_labels,
+                    yticklabels=feature_labels,
+                    cmap='coolwarm',
+                    center=0,
+                    vmin=-1,
+                    vmax=1,
+                    square=True,
+                    linewidths=0.5,
+                    cbar_kws={'label': 'Correlation'})
+        plt.title('Feature Correlation Heatmap - Test Set', fontsize=14, pad=20)
+        plt.xticks(rotation=45, ha='right', fontsize=8)
+        plt.yticks(rotation=0, fontsize=8)
+        plt.tight_layout()
+        test_heatmap_path = os.path.join(self.save_directory, 'utopia_correlation_heatmap_test.png')
+        plt.savefig(test_heatmap_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"  Test correlation heatmap saved to {test_heatmap_path}", flush=True)
 
         # Create DataFrame with PFI results
         pfi_df = pd.DataFrame(list(pfi_results.items()), columns=['SNP', 'Importance'])

@@ -670,3 +670,182 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
         return float32_t(-1.0), pop_id, float32_t(-1.0)
 
     return epistasis_r2, pop_id, float32_t(1.0)
+
+
+# new function where alpha for ridge regression is tuned using cross-validation within the training data of each fold during pipeline evaluation. This is used in the ray_eval_pipeline_r2 function to get a more accurate estimate of the pipeline's R2 by ensuring the regularization strength is appropriate for the number of features in the model.
+
+def find_alpha_gcv(X: np.ndarray, y: np.ndarray, alphas: np.ndarray = None) -> float:
+    """
+    Find optimal Ridge alpha via Generalized Cross-Validation.
+
+    No sample splitting required. Computes one SVD of X, then
+    evaluates the GCV criterion analytically for each candidate alpha.
+
+    Parameters
+    ----------
+    X : array (n, p) — design matrix (training data only)
+    y : array (n,)   — response vector (training data only)
+    alphas : array    — candidate alpha values to search over
+
+    Returns
+    -------
+    best_alpha : float — the alpha that minimizes GCV error
+    """
+    if alphas is None:
+        alphas = np.logspace(-2, 2, 30)
+
+    n = X.shape[0]
+    U, s, _ = np.linalg.svd(X, full_matrices=False)
+
+    # Project y onto the SVD basis
+    u_ty = U.T @ y            # rotated response, length p
+
+    # Component of y orthogonal to column space of X
+    y_perp_sq = np.sum(y**2) - np.sum(u_ty**2)
+
+    best_alpha = alphas[0]
+    best_gcv = np.inf
+
+    for a in alphas:
+        # Shrinkage factors per singular component
+        d = s**2 / (s**2 + a)
+
+        # Effective degrees of freedom
+        df = np.sum(d)
+
+        # Residual sum of squares: ||(I - H)y||²
+        rss = np.sum((1 - d)**2 * u_ty**2) + y_perp_sq
+
+        # GCV criterion
+        denom = (1 - df / n) ** 2
+        if denom > 0:
+            gcv = (rss / n) / denom
+        else:
+            gcv = np.inf  # degenerate case: df ≈ n
+
+        if gcv < best_gcv:
+            best_gcv = gcv
+            best_alpha = a
+
+    return best_alpha
+
+
+@ray.remote
+def ray_eval_pipeline_r2_gcv(component_map: Dict[snp_t, Dict],
+                             y: npt.NDArray,
+                             train_idx: npt.NDArray,
+                             valid_idx: npt.NDArray,
+                             pop_id: uint32_t,
+                             alphas: np.ndarray = None) -> Tuple[float32_t, uint32_t, float32_t, float, float, float32_t, float32_t, float32_t, float32_t]:
+    """
+    Evaluate a pipeline with only a regression node using Ray, with GCV-optimized alpha selection.
+
+    Uses Generalized Cross-Validation to independently select optimal regularization
+    strength for both the base model (main effects) and joint model (main + interactions).
+
+    Parameters:
+        component_map (Dict[snp_t, Dict]): Dictionary mapping interaction names to their component information
+            (snp1_name, snp2_name, snp1_ray_id, snp2_ray_id, encoded_ray_id).
+        y (npt.NDArray): Phenotype data array.
+        train_idx (npt.NDArray): Indices for training data.
+        valid_idx (npt.NDArray): Indices for validation data.
+        pop_id (uint32_t): Population ID for tracking.
+        alphas (np.ndarray): Grid of alpha values to search over. Defaults to np.logspace(-2, 2, 30).
+
+    Returns:
+        Tuple containing:
+            float32_t: R² score on validation data (epistasis R²).
+            uint32_t: Population ID.
+            float32_t: Error value (1.0 if success, -1.0 if failure).
+            float: GCV-selected alpha for base model.
+            float: GCV-selected alpha for joint model.
+            float32_t: Base model (Model 0) R² on training data.
+            float32_t: Base model (Model 0) R² on validation data.
+            float32_t: Joint model (Model 1) R² on training data.
+            float32_t: Joint model (Model 1) R² on validation data.
+    """
+    if alphas is None:
+        alphas = np.logspace(-2, 2, 30)
+
+    # extract the interaction and univariate features from the component map
+    interaction_names = list(component_map.keys())
+    X_interaction = [component_map[name]['encoded_ray_id'] for name in interaction_names]
+    X_univariate = []
+    for name in interaction_names:
+        X_univariate.append(component_map[name]['snp1_ray_id'])
+        X_univariate.append(component_map[name]['snp2_ray_id'])
+
+    # create dataset
+    X_interaction_matrix = np.column_stack([ray.get(x) for x in X_interaction])
+    X_univariate_matrix = np.column_stack([ray.get(x) for x in X_univariate])
+
+    # remove any duplicate columns from the univariate matrix (can happen if the same SNP is involved in multiple interactions in the pipeline)
+    _, unique_indices = np.unique(X_univariate_matrix, axis=1, return_index=True)
+    X_univariate_matrix = X_univariate_matrix[:, np.sort(unique_indices)]
+
+    # center all features based on training data for phantom epistasis check
+    X_interaction_matrix_train_centered = X_interaction_matrix[train_idx] - np.mean(X_interaction_matrix[train_idx], axis=0)
+    X_univariate_matrix_train_centered = X_univariate_matrix[train_idx] - np.mean(X_univariate_matrix[train_idx], axis=0)
+    X_interaction_matrix_valid_centered = X_interaction_matrix[valid_idx] - np.mean(X_interaction_matrix[train_idx], axis=0)
+    X_univariate_matrix_valid_centered = X_univariate_matrix[valid_idx] - np.mean(X_univariate_matrix[train_idx], axis=0)
+    y_train_centered = y[train_idx] - np.mean(y[train_idx])
+    y_valid_centered = y[valid_idx] - np.mean(y[train_idx])
+
+    # Fit a base model and then a joint model to correctly calculate the pipeline epistasis R2.
+    # Use GCV to independently select optimal alpha for each model.
+
+    # Step 1: Fit base model (main effects only) with GCV-optimized alpha
+    try:
+        X_base_train_with_const = sm.add_constant(X_univariate_matrix_train_centered, has_constant='add')
+
+        # Find optimal alpha using GCV
+        alpha_base = find_alpha_gcv(X_base_train_with_const, y_train_centered, alphas)
+
+        # Fit model with GCV-selected alpha
+        base_regressor = sm.OLS(y_train_centered, X_base_train_with_const)
+        base_results = base_regressor.fit_regularized(L1_wt=0.0, alpha=alpha_base)
+
+        # Score on training data (Model 0 train R²)
+        base_pred_train = base_results.predict(X_base_train_with_const)
+        base_r2_train = r2_score(y_train_centered, base_pred_train)
+
+        # Score on validation data (Model 0 validation R²)
+        base_pred_valid = base_results.predict(sm.add_constant(X_univariate_matrix_valid_centered, has_constant='add'))
+        base_r2_valid = r2_score(y_valid_centered, base_pred_valid)
+
+    except Exception as e:
+        logging.error(f"Exception while fitting the base model ridge regression with GCV: {e}")
+        print(f"Error fitting ridge regression for pipeline evaluation with GCV: {e}")
+        return float32_t(-1.0), pop_id, float32_t(-1.0), -1.0, -1.0, float32_t(-1.0), float32_t(-1.0), float32_t(-1.0), float32_t(-1.0)
+
+    # Step 2: Fit joint model (main effects + interactions) with GCV-optimized alpha
+    try:
+        X_joint_train = np.column_stack((X_univariate_matrix_train_centered, X_interaction_matrix_train_centered))
+        X_joint_valid = np.column_stack((X_univariate_matrix_valid_centered, X_interaction_matrix_valid_centered))
+
+        X_joint_train_with_const = sm.add_constant(X_joint_train, has_constant='add')
+
+        # Find optimal alpha using GCV (independent of base model alpha)
+        alpha_joint = find_alpha_gcv(X_joint_train_with_const, y_train_centered, alphas)
+
+        # Fit model with GCV-selected alpha
+        joint_regressor = sm.OLS(y_train_centered, X_joint_train_with_const)
+        joint_results = joint_regressor.fit_regularized(L1_wt=0.0, alpha=alpha_joint)
+
+        # Score on training data (Model 1 train R²)
+        joint_pred_train = joint_results.predict(X_joint_train_with_const)
+        joint_r2_train = r2_score(y_train_centered, joint_pred_train)
+
+        # Score on validation data (Model 1 validation R²)
+        joint_pred_valid = joint_results.predict(sm.add_constant(X_joint_valid, has_constant='add'))
+        joint_r2_valid = r2_score(y_valid_centered, joint_pred_valid)
+
+        # Epistasis R2 is strictly the variance added by the interaction features beyond the main effects
+        epistasis_r2 = float32_t(joint_r2_valid - base_r2_valid)
+
+    except Exception as e:
+        logging.error(f"Error while scoring the pipeline with GCV: {e}")
+        print(f"Error scoring the pipeline with GCV: {e}")
+        return float32_t(-1.0), pop_id, float32_t(-1.0), -1.0, -1.0, float32_t(-1.0), float32_t(-1.0), float32_t(-1.0), float32_t(-1.0)
+
+    return epistasis_r2, pop_id, float32_t(1.0), alpha_base, alpha_joint, float32_t(base_r2_train), float32_t(base_r2_valid), float32_t(joint_r2_train), float32_t(joint_r2_valid)
