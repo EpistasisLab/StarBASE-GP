@@ -18,3 +18,4 @@ Source/K2/mdr_check.py
 Source/K2/simulated_data_peaks.py
 Source/K2/COMPONENT_SNP_ARCHITECTURE.md
 Ridge_Grouping_Effect_Briefing.md
+check_sd.py

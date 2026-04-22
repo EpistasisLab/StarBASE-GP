@@ -586,7 +586,7 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
                          y: npt.NDArray,
                          train_idx: npt.NDArray,
                          valid_idx: npt.NDArray,
-                         pop_id: uint32_t) -> Tuple[float32_t, uint32_t, float32_t]:
+                         pop_id: uint32_t) -> Tuple[float32_t, uint32_t, float32_t, float, float, float32_t, float32_t, float32_t, float32_t]:
     """
     Evaluate a pipeline with only a regression node using Ray.
 
@@ -600,9 +600,15 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
 
     Returns:
         Tuple containing:
-            float32_t: R² score on validation data.
+            float32_t: R² score on validation data (epistasis R²).
             uint32_t: Population ID.
             float32_t: Error value (1.0 if success, -1.0 if failure).
+            float: Alpha value for base model.
+            float: Alpha value for joint model.
+            float32_t: Base model (Model 0) R² on training data.
+            float32_t: Base model (Model 0) R² on validation data.
+            float32_t: Joint model (Model 1) R² on training data.
+            float32_t: Joint model (Model 1) R² on validation data.
     """
 
     # extract the interaction and univariate features from the component map
@@ -621,55 +627,68 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
     _, unique_indices = np.unique(X_univariate_matrix, axis=1, return_index=True)
     X_univariate_matrix = X_univariate_matrix[:, np.sort(unique_indices)]
 
-    # center all features based on training data for phantom epistasis check
-    X_interaction_matrix_train_centered = X_interaction_matrix[train_idx] - np.mean(X_interaction_matrix[train_idx], axis=0)
-    X_univariate_matrix_train_centered = X_univariate_matrix[train_idx] - np.mean(X_univariate_matrix[train_idx], axis=0)
-    X_interaction_matrix_valid_centered = X_interaction_matrix[valid_idx] - np.mean(X_interaction_matrix[train_idx], axis=0)
-    X_univariate_matrix_valid_centered = X_univariate_matrix[valid_idx] - np.mean(X_univariate_matrix[train_idx], axis=0)
-    y_train_centered = y[train_idx] - np.mean(y[train_idx])
-    y_valid_centered = y[valid_idx] - np.mean(y[train_idx])
+    # center and scale all features based on training data for phantom epistasis check
+    X_interaction_matrix_train_centered_scaled = (X_interaction_matrix[train_idx] - np.mean(X_interaction_matrix[train_idx], axis=0)) / (np.std(X_interaction_matrix[train_idx]))
+    X_univariate_matrix_train_centered_scaled = (X_univariate_matrix[train_idx] - np.mean(X_univariate_matrix[train_idx], axis=0)) / (np.std(X_univariate_matrix[train_idx]))
+    X_interaction_matrix_valid_centered_scaled = (X_interaction_matrix[valid_idx] - np.mean(X_interaction_matrix[train_idx], axis=0)) / (np.std(X_interaction_matrix[train_idx]))
+    X_univariate_matrix_valid_centered_scaled = (X_univariate_matrix[valid_idx] - np.mean(X_univariate_matrix[train_idx], axis=0)) / (np.std(X_univariate_matrix[train_idx]))
+    y_train_centered_scaled = (y[train_idx] - np.mean(y[train_idx])) / (np.std(y[train_idx]))
+    y_valid_centered_scaled = (y[valid_idx] - np.mean(y[train_idx])) / (np.std(y[train_idx]))
 
     # Fit a base model and then a joint model to correctly calculate the pipeline epistasis R2.
 
     # Step 1: Fit base model (main effects only) to get baseline validation R2
     try:
+        alpha_base = 1.0
 
-        base_regressor = sm.OLS(y_train_centered, sm.add_constant(X_univariate_matrix_train_centered, has_constant='add')) # uses the training data
-        base_results = base_regressor.fit_regularized(L1_wt=0.0, alpha=1) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
-        base_pred = base_results.predict(sm.add_constant(X_univariate_matrix_valid_centered, has_constant='add')) # score on the validation data
-        base_r2 = r2_score(y_valid_centered, base_pred)
-     
+        base_regressor = sm.OLS(y_train_centered_scaled, sm.add_constant(X_univariate_matrix_train_centered_scaled, has_constant='add')) # uses the training data
+        base_results = base_regressor.fit_regularized(L1_wt=0.0, alpha=alpha_base) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
+
+        # Score on training data (Model 0 train R²)
+        base_pred_train = base_results.predict(sm.add_constant(X_univariate_matrix_train_centered_scaled, has_constant='add'))
+        base_r2_train = r2_score(y_train_centered_scaled, base_pred_train)
+
+        # Score on validation data (Model 0 validation R²)
+        base_pred_valid = base_results.predict(sm.add_constant(X_univariate_matrix_valid_centered_scaled, has_constant='add'))
+        base_r2_valid = r2_score(y_valid_centered_scaled, base_pred_valid)
+
     except Exception as e:
         logging.error(f"Exception while fitting the base model ridge regression: {e}")
         print(f"Error fitting ridge regression for pipeline evaluation: {e}")
-        return float32_t(-1.0), pop_id, float32_t(-1.0)
+        return float32_t(-1.0), pop_id, float32_t(-1.0), -1.0, -1.0, float32_t(-1.0), float32_t(-1.0), float32_t(-1.0), float32_t(-1.0)
 
     # Step 2: Fit joint model (main effects + interactions) and calculate the incremental R2 contributed by the interactions while controlling for main effects (phantom epistasis check)
     try:
-        X_joint_train = np.column_stack((X_univariate_matrix_train_centered, X_interaction_matrix_train_centered))
-        X_joint_valid = np.column_stack((X_univariate_matrix_valid_centered, X_interaction_matrix_valid_centered))
+        X_joint_train = np.column_stack((X_univariate_matrix_train_centered_scaled, X_interaction_matrix_train_centered_scaled))
+        X_joint_valid = np.column_stack((X_univariate_matrix_valid_centered_scaled, X_interaction_matrix_valid_centered_scaled))
 
         # Calculate exactly how much larger the joint model is than the base model
-        num_base_features = X_univariate_matrix_train_centered.shape[1]
+        num_base_features = X_univariate_matrix_train_centered_scaled.shape[1]
         num_joint_features = X_joint_train.shape[1]
         feature_ratio = num_joint_features / num_base_features
 
         # Dynamically scale the alpha penalty based on the true feature ratio
-        dynamic_joint_alpha = 1.0 * feature_ratio
+        alpha_joint = 1.0 * feature_ratio
 
-        joint_regressor = sm.OLS(y_train_centered, sm.add_constant(X_joint_train, has_constant='add')) # uses the training data, note that the main effects and interactions are already centered together to ensure they are on the same scale for regularization
-        joint_results = joint_regressor.fit_regularized(L1_wt=0.0, alpha=dynamic_joint_alpha) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
-        joint_pred = joint_results.predict(sm.add_constant(X_joint_valid, has_constant='add')) # score on the validation data
-        joint_r2 = r2_score(y_valid_centered, joint_pred)
+        joint_regressor = sm.OLS(y_train_centered_scaled, sm.add_constant(X_joint_train, has_constant='add')) # uses the training data, note that the main effects and interactions are already centered together to ensure they are on the same scale for regularization
+        joint_results = joint_regressor.fit_regularized(L1_wt=0.0, alpha=alpha_joint) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
 
-        # Epistais R2 is strictly the variance added by the interaction features beyond the main effects, so we subtract the base_r2 from the joint_r2 to get the incremental R2 contributed by the interactions while controlling for main effects (phantom epistasis check)
-        epistasis_r2 = float32_t(joint_r2 - base_r2)
+        # Score on training data (Model 1 train R²)
+        joint_pred_train = joint_results.predict(sm.add_constant(X_joint_train, has_constant='add'))
+        joint_r2_train = r2_score(y_train_centered_scaled, joint_pred_train)
+
+        # Score on validation data (Model 1 validation R²)
+        joint_pred_valid = joint_results.predict(sm.add_constant(X_joint_valid, has_constant='add'))
+        joint_r2_valid = r2_score(y_valid_centered_scaled, joint_pred_valid)
+
+        # Epistais R2 is strictly the variance added by the interaction features beyond the main effects, so we subtract the base_r2_valid from the joint_r2_valid to get the incremental R2 contributed by the interactions while controlling for main effects (phantom epistasis check)
+        epistasis_r2 = float32_t(joint_r2_valid - base_r2_valid)
     except Exception as e:
         logging.error(f"Error while scoring the pipeline: {e}")
         print(f"Error scoring the pipeline: {e}")
-        return float32_t(-1.0), pop_id, float32_t(-1.0)
+        return float32_t(-1.0), pop_id, float32_t(-1.0), -1.0, -1.0, float32_t(-1.0), float32_t(-1.0), float32_t(-1.0), float32_t(-1.0)
 
-    return epistasis_r2, pop_id, float32_t(1.0)
+    return epistasis_r2, pop_id, float32_t(1.0), alpha_base, alpha_joint, float32_t(base_r2_train), float32_t(base_r2_valid), float32_t(joint_r2_train), float32_t(joint_r2_valid)
 
 
 # new function where alpha for ridge regression is tuned using cross-validation within the training data of each fold during pipeline evaluation. This is used in the ray_eval_pipeline_r2 function to get a more accurate estimate of the pipeline's R2 by ensuring the regularization strength is appropriate for the number of features in the model.
