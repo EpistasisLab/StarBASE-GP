@@ -54,7 +54,8 @@ class K2_Evolver(EA):
                  regression: bool = True,
                  starting_snps_csv_path: str | None = None, # optional path to csv containing starting snps for the initial population (with column name 'snp')
                  branch_batch_eval_size: int32_t = int32_t(400),
-                 pipeline_batch_eval_size: int32_t = int32_t(1000)
+                 pipeline_batch_eval_size: int32_t = int32_t(1000),
+                 l1_wt: float = 0.0 # L1 weight for elastic net regularization (0.0 = Ridge, 1.0 = Lasso)
                  ) -> None:
         """
         K2 Evolver class that extends the EA base class.
@@ -84,6 +85,7 @@ class K2_Evolver(EA):
         self.encoding_flag = encoding_flag
         self.phantom_epistasis_threshold = phantom_epistasis_threshold
         self.starting_snps_csv_path = starting_snps_csv_path
+        self.l1_wt = l1_wt
 
         # initialize reproduction class
         self.reproduction = K2_Reproduction(branch_max=self.branch_max,
@@ -558,7 +560,8 @@ class K2_Evolver(EA):
                                                                               y = self.all_y_ray_id,
                                                                               train_idx = fold_data['train_idx'],
                                                                               valid_idx = fold_data['val_idx'],
-                                                                              pop_id = uint32_t(i)))
+                                                                              pop_id = uint32_t(i),
+                                                                              l1_wt = self.l1_wt))
             r2_job_time = time.time() - r2_job_start
             total_r2_job_time += r2_job_time
 
@@ -1056,7 +1059,8 @@ class K2_Evolver(EA):
                                                                       y = self.all_y_ray_id,
                                                                       train_idx = self.train_idx_ray,  # Use all training data for final evaluation
                                                                       valid_idx = self.val_idx_ray,
-                                                                      pop_id = uint32_t(pipeline_id)))
+                                                                      pop_id = uint32_t(pipeline_id),
+                                                                      l1_wt = self.l1_wt))
 
 
             # process results as they come in
@@ -1084,7 +1088,7 @@ class K2_Evolver(EA):
                 print(f"  Model 0 (Base) - Train R²: {base_r2_train:.6f}, Valid R²: {base_r2_valid:.6f}, Delta: {delta_base:.6f}", flush=True)
                 print(f"  Model 1 (Joint) - Train R²: {joint_r2_train:.6f}, Valid R²: {joint_r2_valid:.6f}, Delta: {delta_joint:.6f}", flush=True)
                 print(f"  Epistasis R²: {r2:.6f}", flush=True)
-                print(f"  Alpha - Base: {alpha_base:.4f}, Joint: {alpha_joint:.4f}", flush=True)
+                print(f"  Alpha - Base: {alpha_base:.4f}, Joint: {alpha_joint:.4f}, L1_wt: {self.l1_wt:.4f}", flush=True)
 
         print("\nPost analysis on validation set completed.", flush=True)
 
@@ -1286,7 +1290,8 @@ class K2_Evolver(EA):
             y=self.all_y_ray_id,
             train_idx=combined_idx_ray_id,
             valid_idx=combined_idx_ray_id,  # Use combined train+validation indices for evaluation
-            pop_id=uint32_t(0)
+            pop_id=uint32_t(0),
+            l1_wt=self.l1_wt
         )
         train_val_r2, _, error, alpha_base_tv, alpha_joint_tv, base_r2_tv_train, base_r2_tv_valid, joint_r2_tv_train, joint_r2_tv_valid = ray.get(train_valid_r2_job)
         if error < float32_t(0.0):
@@ -1301,7 +1306,7 @@ class K2_Evolver(EA):
         print(f'  Model 0 (Base) - Train R²: {base_r2_tv_train:.6f}, Valid R²: {base_r2_tv_valid:.6f}, Delta: {base_r2_tv_valid - base_r2_tv_train:.6f}', flush=True)
         print(f'  Model 1 (Joint) - Train R²: {joint_r2_tv_train:.6f}, Valid R²: {joint_r2_tv_valid:.6f}, Delta: {joint_r2_tv_valid - joint_r2_tv_train:.6f}', flush=True)
         print(f'  Epistasis R²: {train_val_r2:.6f}', flush=True)
-        print(f'  Alpha - Base: {alpha_base_tv:.4f}, Joint: {alpha_joint_tv:.4f}', flush=True)
+        print(f'  Alpha - Base: {alpha_base_tv:.4f}, Joint: {alpha_joint_tv:.4f}, L1_wt: {self.l1_wt:.4f}', flush=True)
 
         # Calculate test R² using ray remote function
         print("Calculating test R²...", flush=True)
@@ -1310,7 +1315,8 @@ class K2_Evolver(EA):
             y=self.all_y_ray_id,
             train_idx=combined_idx_ray_id,
             valid_idx=test_idx_ray_id,
-            pop_id=uint32_t(0)
+            pop_id=uint32_t(0),
+            l1_wt=self.l1_wt
         )
 
         test_r2, _, error, alpha_base_test, alpha_joint_test, base_r2_test_train, base_r2_test_test, joint_r2_test_train, joint_r2_test_test = ray.get(test_r2_job)
@@ -1328,7 +1334,7 @@ class K2_Evolver(EA):
         print(f'  Model 0 (Base) - Train R²: {base_r2_test_train:.6f}, Test R²: {base_r2_test_test:.6f}, Delta: {base_r2_test_test - base_r2_test_train:.6f}', flush=True)
         print(f'  Model 1 (Joint) - Train R²: {joint_r2_test_train:.6f}, Test R²: {joint_r2_test_test:.6f}, Delta: {joint_r2_test_test - joint_r2_test_train:.6f}', flush=True)
         print(f'  Epistasis R²: {test_r2:.6f}', flush=True)
-        print(f'  Alpha - Base: {alpha_base_test:.4f}, Joint: {alpha_joint_test:.4f}', flush=True)
+        print(f'  Alpha - Base: {alpha_base_test:.4f}, Joint: {alpha_joint_test:.4f}, L1_wt: {self.l1_wt:.4f}', flush=True)
 
         # Calculate PFI on test set using ray_pfi
         print("Calculating permutation feature importance on test set...", flush=True)

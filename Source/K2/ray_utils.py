@@ -586,7 +586,8 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
                          y: npt.NDArray,
                          train_idx: npt.NDArray,
                          valid_idx: npt.NDArray,
-                         pop_id: uint32_t) -> Tuple[float32_t, uint32_t, float32_t, float, float, float32_t, float32_t, float32_t, float32_t]:
+                         pop_id: uint32_t,
+                         l1_wt: float = 0.0) -> Tuple[float32_t, uint32_t, float32_t, float, float, float32_t, float32_t, float32_t, float32_t]:
     """
     Evaluate a pipeline with only a regression node using Ray.
 
@@ -597,6 +598,7 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
         train_idx (npt.NDArray): Indices for training data.
         valid_idx (npt.NDArray): Indices for validation data.
         pop_id (uint32_t): Population ID for tracking.
+        l1_wt (float): L1 weight for elastic net regularization (0.0 = Ridge, 1.0 = Lasso). Default is 0.0.
 
     Returns:
         Tuple containing:
@@ -642,7 +644,7 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
         alpha_base = 1.0
 
         base_regressor = sm.OLS(y_train_centered_scaled, sm.add_constant(X_univariate_matrix_train_centered_scaled, has_constant='add')) # uses the training data
-        base_results = base_regressor.fit_regularized(L1_wt=0.0, alpha=alpha_base) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
+        base_results = base_regressor.fit_regularized(L1_wt=l1_wt, alpha=alpha_base) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
 
         # Score on training data (Model 0 train R²)
         base_pred_train = base_results.predict(sm.add_constant(X_univariate_matrix_train_centered_scaled, has_constant='add'))
@@ -672,7 +674,7 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
         alpha_joint = 1.0
 
         joint_regressor = sm.OLS(y_train_centered_scaled, sm.add_constant(X_joint_train, has_constant='add')) # uses the training data, note that the main effects and interactions are already centered together to ensure they are on the same scale for regularization
-        joint_results = joint_regressor.fit_regularized(L1_wt=0.0, alpha=alpha_joint) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
+        joint_results = joint_regressor.fit_regularized(L1_wt=l1_wt, alpha=alpha_joint) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
         
         # Score on training data (Model 1 train R²)
         joint_pred_train = joint_results.predict(sm.add_constant(X_joint_train, has_constant='add'))
