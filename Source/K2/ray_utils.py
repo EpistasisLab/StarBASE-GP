@@ -668,11 +668,11 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
         feature_ratio = num_joint_features / num_base_features
 
         # Dynamically scale the alpha penalty based on the true feature ratio
-        alpha_joint = 1.0 * feature_ratio
+        #alpha_joint = 1.0 * feature_ratio
+        alpha_joint = 1.0
 
         joint_regressor = sm.OLS(y_train_centered_scaled, sm.add_constant(X_joint_train, has_constant='add')) # uses the training data, note that the main effects and interactions are already centered together to ensure they are on the same scale for regularization
-        #joint_results = joint_regressor.fit_regularized(L1_wt=0.0, alpha=alpha_joint) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
-        joint_results = joint_regressor.fit_regularized(L1_wt=0.0, alpha=1) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
+        joint_results = joint_regressor.fit_regularized(L1_wt=0.0, alpha=alpha_joint) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
         
         # Score on training data (Model 1 train R²)
         joint_pred_train = joint_results.predict(sm.add_constant(X_joint_train, has_constant='add'))
