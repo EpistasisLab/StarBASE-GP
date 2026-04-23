@@ -55,7 +55,7 @@ class K2_Evolver(EA):
                  starting_snps_csv_path: str | None = None, # optional path to csv containing starting snps for the initial population (with column name 'snp')
                  branch_batch_eval_size: int32_t = int32_t(400),
                  pipeline_batch_eval_size: int32_t = int32_t(1000),
-                 l1_wt: float = 0.0 # L1 weight for elastic net regularization (0.0 = Ridge, 1.0 = Lasso)
+                 l1_wt: float32_t = 0.0 # L1 weight for elastic net regularization (0.0 = Ridge, 1.0 = Lasso)
                  ) -> None:
         """
         K2 Evolver class that extends the EA base class.

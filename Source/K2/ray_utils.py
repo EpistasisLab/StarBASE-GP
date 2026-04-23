@@ -587,7 +587,7 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
                          train_idx: npt.NDArray,
                          valid_idx: npt.NDArray,
                          pop_id: uint32_t,
-                         l1_wt: float = 0.0) -> Tuple[float32_t, uint32_t, float32_t, float, float, float32_t, float32_t, float32_t, float32_t]:
+                         l1_wt: float32_t = float32_t(0.0)) -> Tuple[float32_t, uint32_t, float32_t, float, float, float32_t, float32_t, float32_t, float32_t]:
     """
     Evaluate a pipeline with only a regression node using Ray.
 
