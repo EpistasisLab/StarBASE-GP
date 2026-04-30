@@ -1135,7 +1135,7 @@ class K2_Evolver(EA):
 
         # print the details of the utopia point pipeline
         print(f"Utopia Point Pipeline ID: {utopia_point_pipeline_id}", flush=True)
-        print(f"Utopia Point Pipeline Train R2: {pareto_validation_r2[utopia_point_pipeline_id]['train_r2']}", flush=True)
+        print(f"Utopia Point Pipeline Cross-validated Train R2: {pareto_validation_r2[utopia_point_pipeline_id]['train_r2']}", flush=True)
         print(f"Utopia Point Pipeline Validation R2: {pareto_validation_r2[utopia_point_pipeline_id]['validation_r2']}", flush=True)
         print(f"Utopia Point Pipeline Feature Count: {pareto_validation_r2[utopia_point_pipeline_id]['feature_cnt']}", flush=True)
         print(f"Utopia Point Pipeline Feature Set: {pareto_validation_r2[utopia_point_pipeline_id]['feature_set']}", flush=True)
@@ -1281,7 +1281,7 @@ class K2_Evolver(EA):
             self.hub.update_enc_ray_id(snp, transformed_snp_ray_ids[snp])
 
         # Create column names for PFI (include encoding type)
-        column_names_with_encoding = [f'chr{snp}_{self.hub.get_encoding(snp)}' for snp in snp_names]
+        column_names_with_encoding = [f'chr{snp[0]}_chr{snp[1]}_{self.hub.get_encoding(snp)}' for snp in snp_names]
 
         # Calculate train + validation R² using ray remote function - this will be the R² of the final model trained on combined train+validation data and evaluated on the same combined train+validation data (to check for overfitting)
         print("Calculating train + validation R²...", flush=True)
@@ -1423,7 +1423,6 @@ class K2_Evolver(EA):
         pfi_df = pfi_df.sort_values(by='Importance', ascending=False)
         pfi_df['Cross-validated Train R2'] = train_r2
         pfi_df['Validation R2'] = validation_r2
-        pfi_df['Train+Valid R2'] = train_val_r2
         pfi_df['Test R2'] = test_r2
         pfi_df['Model Size'] = size
 
