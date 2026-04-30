@@ -645,7 +645,8 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
         alpha_base = 0.1
 
         base_regressor = sm.OLS(y_train_centered_scaled, sm.add_constant(X_univariate_matrix_train_centered_scaled, has_constant='add')) # uses the training data
-        base_results = base_regressor.fit_regularized(L1_wt=l1_wt, alpha=alpha_base) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
+        #base_results = base_regressor.fit_regularized(L1_wt=l1_wt, alpha=alpha_base) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
+        base_results = base_regressor.fit() # just OLS without regularization
 
         # Score on training data (Model 0 train R²)
         base_pred_train = base_results.predict(sm.add_constant(X_univariate_matrix_train_centered_scaled, has_constant='add'))
@@ -675,8 +676,9 @@ def ray_eval_pipeline_r2(component_map: Dict[snp_t, Dict],
         alpha_joint = alpha_base * feature_ratio
 
         joint_regressor = sm.OLS(y_train_centered_scaled, sm.add_constant(X_joint_train, has_constant='add')) # uses the training data, note that the main effects and interactions are already centered together to ensure they are on the same scale for regularization
-        joint_results = joint_regressor.fit_regularized(L1_wt=l1_wt, alpha=alpha_joint) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
-        
+        #joint_results = joint_regressor.fit_regularized(L1_wt=l1_wt, alpha=alpha_joint) # alpha is a hyperparameter that controls the strength of regularization, can be tuned if needed but 0.1 is a common starting point for ridge regression
+        joint_results = joint_regressor.fit() # just OLS without regularization
+
         # Score on training data (Model 1 train R²)
         joint_pred_train = joint_results.predict(sm.add_constant(X_joint_train, has_constant='add'))
         joint_r2_train = r2_score(y_train_centered_scaled, joint_pred_train)
