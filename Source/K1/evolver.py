@@ -47,7 +47,8 @@ class K1_Evolver(EA):
                  branch_explainability_threshold: float32_t = float32_t(0.0),
                  ld_flag: bool = True,
                  encoding_flag: bool = True,
-                 regression: bool = True
+                 regression: bool = True,
+                 branch_batch_eval_size: int32_t = int32_t(400)
                  ) -> None:
         """
         K1 Evolver class that extends the EA base class.
@@ -75,6 +76,7 @@ class K1_Evolver(EA):
                          ld_flag=ld_flag)
         self.regression = regression
         self.encoding_flag = encoding_flag
+        self.branch_batch_eval_size = branch_batch_eval_size
 
         self.encoder_types = [ snp_t('additive'), snp_t('dominant'), snp_t('recessive'),
                               snp_t('heterosis'), snp_t('underdominant'), snp_t('overdominant'),
@@ -342,12 +344,12 @@ class K1_Evolver(EA):
 
         sampling_time = time.time() - sampling_start
 
-        # break up unseen_branches into chunks of 2000 to avoid ray overload and then run evaluate_unseen_branches on each chunk
+        # break up unseen_branches into chunks of self.branch_batch_eval_size to avoid ray overload and then run evaluate_unseen_branches on each chunk
         eval_unseen_start = time.time()
         unseen_branches_list = list(unseen_branches)
-        for i in range(0, len(unseen_branches_list), 1000):
-            print(f"Evaluating unseen branches chunk {i // 1000 + 1} / {(len(unseen_branches_list) - 1) // 1000 + 1}", flush=True)
-            chunk = set(unseen_branches_list[i:i+1000])
+        for i in range(0, len(unseen_branches_list), self.branch_batch_eval_size):
+            print(f"Evaluating unseen branches chunk {i // self.branch_batch_eval_size + 1} / {(len(unseen_branches_list) - 1) // self.branch_batch_eval_size + 1}", flush=True)
+            chunk = set(unseen_branches_list[i:i+self.branch_batch_eval_size])
             self.evaluate_unseen_branches(chunk, gen_seen=int16_t(0))
         eval_unseen_time = time.time() - eval_unseen_start
 
@@ -600,11 +602,11 @@ class K1_Evolver(EA):
 
         # evaluate all unseen snps if we have any to evaluate
         if len(unseen_snps) > 0:
-            # break up unseen_branches into chunks of 2000 to avoid ray overload and then run evaluate_unseen_branches on each chunk
+            # break up unseen_branches into chunks of self.branch_batch_eval_size to avoid ray overload and then run evaluate_unseen_branches on each chunk
             unseen_branches_list = list(unseen_snps)
-            for i in range(0, len(unseen_branches_list), 1000):
-                print(f"Evaluating unseen branches chunk {i // 1000 + 1} / {(len(unseen_branches_list) - 1) // 1000 + 1}", flush=True)
-                chunk = set(unseen_branches_list[i:i+1000])
+            for i in range(0, len(unseen_branches_list), self.branch_batch_eval_size):
+                print(f"Evaluating unseen branches chunk {i // self.branch_batch_eval_size + 1} / {(len(unseen_branches_list) - 1) // self.branch_batch_eval_size + 1}", flush=True)
+                chunk = set(unseen_branches_list[i:i+self.branch_batch_eval_size])
                 self.evaluate_unseen_branches(chunk, gen_seen=int16_t(gen_info))
 
         # offspring pipelines with no good snps
