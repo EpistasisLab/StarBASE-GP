@@ -1359,9 +1359,27 @@ class K2_Evolver(EA):
 
         print(f"PFI calculated for {len(pfi_results)} features", flush=True)
 
+        # Create DataFrame with PFI results
+        pfi_df = pd.DataFrame(list(pfi_results.items()), columns=['SNP', 'Importance'])
+        pfi_df = pfi_df.sort_values(by='Importance', ascending=False)
+        pfi_df['Cross-validated Train R2'] = train_r2
+        pfi_df['Validation R2'] = validation_r2
+        pfi_df['Test R2'] = test_r2
+        pfi_df['Model Size'] = size
+
+        # Save to CSV
+        output_path = os.path.join(self.save_directory, file_name)
+        pfi_df.to_csv(output_path, index=False)
+        print(f"Results saved to {file_name}", flush=True)
+
         # Generate correlation heatmaps for validation and test sets
         print("\nGenerating correlation heatmaps for utopia model features...", flush=True)
 
+        # if only one feature, skip heatmap and print a message instead since correlation heatmap is not meaningful with only one feature
+        if len(snp_names) == 1:
+            print("Only one feature in the utopia model, skipping correlation heatmap.", flush=True)
+            return
+         
         # Get the encoded feature matrices for validation and test sets
         # For validation set
         X_valid_features = np.column_stack([ray.get(transformed_snp_ray_ids[snp])[ray.get(self.val_idx_ray)] for snp in snp_names])
@@ -1418,18 +1436,7 @@ class K2_Evolver(EA):
         plt.close()
         print(f"  Test correlation heatmap saved to {test_heatmap_path}", flush=True)
 
-        # Create DataFrame with PFI results
-        pfi_df = pd.DataFrame(list(pfi_results.items()), columns=['SNP', 'Importance'])
-        pfi_df = pfi_df.sort_values(by='Importance', ascending=False)
-        pfi_df['Cross-validated Train R2'] = train_r2
-        pfi_df['Validation R2'] = validation_r2
-        pfi_df['Test R2'] = test_r2
-        pfi_df['Model Size'] = size
 
-        # Save to CSV
-        output_path = os.path.join(self.save_directory, file_name)
-        pfi_df.to_csv(output_path, index=False)
-        print(f"Results saved to {file_name}", flush=True)
 
     def save_and_plot_pareto_front(self):
         """
