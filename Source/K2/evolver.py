@@ -1372,69 +1372,29 @@ class K2_Evolver(EA):
         pfi_df.to_csv(output_path, index=False)
         print(f"Results saved to {file_name}", flush=True)
 
-        # Generate correlation heatmaps for validation and test sets
-        print("\nGenerating correlation heatmaps for utopia model features...", flush=True)
+        # Generate correlation R2 for the test set
+        print("\nCalculating correlation R2 for utopia model features on the test set...", flush=True)
 
-        # if only one feature, skip heatmap and print a message instead since correlation heatmap is not meaningful with only one feature
+        # if only one feature, skip calculation and print a message instead since correlation is not meaningful with only one feature
         if len(snp_names) == 1:
-            print("Only one feature in the utopia model, skipping correlation heatmap.", flush=True)
+            print("Only one feature in the utopia model, skipping correlation R2 calculation.", flush=True)
             return
          
-        # Get the encoded feature matrices for validation and test sets
-        # For validation set
-        X_valid_features = np.column_stack([ray.get(transformed_snp_ray_ids[snp])[ray.get(self.val_idx_ray)] for snp in snp_names])
-
-        # For test set
+        # Get the encoded feature matrices for the test set
         X_test_features = np.column_stack([ray.get(transformed_snp_ray_ids[snp])[self.test_idx] for snp in snp_names])
 
-        # Create correlation matrices
-        corr_valid = np.corrcoef(X_valid_features, rowvar=False)
+        # Create correlation matrix and calculate R2
         corr_test = np.corrcoef(X_test_features, rowvar=False)
+        corr_test_r2 = corr_test ** 2
 
         # Create feature labels (use encoding type in label)
         feature_labels = [f"{snp[0]}_{self.hub.get_encoding(snp)}_{snp[1]}" for snp in snp_names]
 
-        # Plot validation set correlation heatmap
-        plt.figure(figsize=(max(10, len(snp_names)), max(8, len(snp_names) * 0.8)))
-        sns.heatmap(corr_valid,
-                    xticklabels=feature_labels,
-                    yticklabels=feature_labels,
-                    cmap='coolwarm',
-                    center=0,
-                    vmin=-1,
-                    vmax=1,
-                    square=True,
-                    linewidths=0.5,
-                    cbar_kws={'label': 'Correlation'})
-        plt.title('Feature Correlation Heatmap - Validation Set', fontsize=14, pad=20)
-        plt.xticks(rotation=45, ha='right', fontsize=8)
-        plt.yticks(rotation=0, fontsize=8)
-        plt.tight_layout()
-        valid_heatmap_path = os.path.join(self.save_directory, 'utopia_correlation_heatmap_validation.png')
-        plt.savefig(valid_heatmap_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        print(f"  Validation correlation heatmap saved to {valid_heatmap_path}", flush=True)
-
-        # Plot test set correlation heatmap
-        plt.figure(figsize=(max(10, len(snp_names)), max(8, len(snp_names) * 0.8)))
-        sns.heatmap(corr_test,
-                    xticklabels=feature_labels,
-                    yticklabels=feature_labels,
-                    cmap='coolwarm',
-                    center=0,
-                    vmin=-1,
-                    vmax=1,
-                    square=True,
-                    linewidths=0.5,
-                    cbar_kws={'label': 'Correlation'})
-        plt.title('Feature Correlation Heatmap - Test Set', fontsize=14, pad=20)
-        plt.xticks(rotation=45, ha='right', fontsize=8)
-        plt.yticks(rotation=0, fontsize=8)
-        plt.tight_layout()
-        test_heatmap_path = os.path.join(self.save_directory, 'utopia_correlation_heatmap_test.png')
-        plt.savefig(test_heatmap_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        print(f"  Test correlation heatmap saved to {test_heatmap_path}", flush=True)
+        # Save to CSV
+        corr_df = pd.DataFrame(corr_test_r2, index=feature_labels, columns=feature_labels)
+        csv_path = os.path.join(self.save_directory, 'correlation_coefficients.csv')
+        corr_df.to_csv(csv_path)
+        print(f"  Test correlation R2 saved to {csv_path}", flush=True)
 
 
 
