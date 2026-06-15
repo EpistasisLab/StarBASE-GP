@@ -19,3 +19,5 @@ Source/K2/simulated_data_peaks.py
 Source/K2/COMPONENT_SNP_ARCHITECTURE.md
 Ridge_Grouping_Effect_Briefing.md
 check_sd.py
+correlation_coefficients.csv
+runner_k2.py

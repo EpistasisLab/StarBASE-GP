@@ -54,8 +54,7 @@ class K2_Evolver(EA):
                  regression: bool = True,
                  starting_snps_csv_path: str | None = None, # optional path to csv containing starting snps for the initial population (with column name 'snp')
                  branch_batch_eval_size: int32_t = int32_t(400),
-                 pipeline_batch_eval_size: int32_t = int32_t(1000),
-                 l1_wt: float32_t = 0.0 # L1 weight for elastic net regularization (0.0 = Ridge, 1.0 = Lasso)
+                 pipeline_batch_eval_size: int32_t = int32_t(1000)
                  ) -> None:
         """
         K2 Evolver class that extends the EA base class.
@@ -85,7 +84,8 @@ class K2_Evolver(EA):
         self.encoding_flag = encoding_flag
         self.phantom_epistasis_threshold = phantom_epistasis_threshold
         self.starting_snps_csv_path = starting_snps_csv_path
-        self.l1_wt = l1_wt
+        # run-wide ridge alpha; overwritten by find_run_alpha() before evolution begins
+        self.ridge_alpha = float32_t(0.1)
 
         # initialize reproduction class
         self.reproduction = K2_Reproduction(branch_max=self.branch_max,
@@ -164,6 +164,10 @@ class K2_Evolver(EA):
         print('', flush=True)
         # list to store the generation details - front zero size, still consider interaction set size, number of snps pruned
         generation_details = []
+        # determine the run-wide ridge alpha with a throwaway dummy population (no hub state leaks)
+        print('Determining run-wide ridge alpha...', flush=True)
+        self.find_run_alpha()
+
         # create the initial population
         print('Initializing population...', flush=True)
         start_time = time.time()
@@ -436,6 +440,207 @@ class K2_Evolver(EA):
         print(f"  - Filtering:      {filter_time:6.2f}s ({pct_filter:5.1f}%)", flush=True)
         print(f"  - Eval population:{eval_pop_time:6.2f}s ({pct_eval_pop:5.1f}%)\n", flush=True)
         return
+    
+    def find_run_alpha(self) -> float32_t:
+        """
+        Determine the single ridge alpha to use for the entire run.
+
+        Before evolution begins, a throwaway dummy population is built exactly like a normal
+        population (random branches -> unseen branch evaluation -> LD + FS). Instead of
+        scoring R2, each dummy pipeline is cross-validated to find its best ridge alpha (the
+        mean of its per-fold best alphas). Exactly dummy_pop_size valid alphas are collected:
+        any pipeline that errors out (no active branches, LD/FS failure, or all folds failing)
+        is replaced by a freshly generated pipeline. The median of those alphas becomes the
+        run-wide alpha (self.ridge_alpha).
+
+        The hub is snapshotted before and restored after, so this dummy population leaves
+        no trace (no seen/viable interactions, no flipped active flags) on the real run.
+
+        Returns:
+            float32_t: The run-wide ridge alpha (also stored in self.ridge_alpha).
+        """
+
+        # quick check
+        assert self.hub is not None, "Hub must be initialized before finding the run alpha."
+
+        # number of dummy pipelines whose alphas we want; we collect exactly this many valid
+        # alphas, replacing any pipeline that errors out with a freshly generated one.
+        # (lower this for a quick smoke test; the median logic holds for any value.)
+        dummy_pop_size = 101
+        # maximum number of rounds to try generating dummy pipelines before giving up and erroring out; each round generates a full batch of pipelines, so this is not per-pipeline
+        max_rounds = 500
+
+        print(f"Finding run-wide ridge alpha from a dummy population of {dummy_pop_size} pipelines...", flush=True)
+        alpha_start = time.time()
+
+        # Snapshot the hub so the dummy population leaves no trace. Only the epi_db and the
+        # viable interactions are mutated during branch evaluation. Each value list is
+        # shallow-copied so in-place flag flips on the live hub do not touch the snapshot,
+        # and ray object refs are referenced (not deep-copied).
+        epi_db_snapshot = {k: list(v) for k, v in self.hub.epi_db.hub.items()}
+        viable_list_snapshot = list(self.hub.viable_interactions.interaction_list)
+        viable_dict_snapshot = dict(self.hub.viable_interactions.interaction_dict)
+
+        collected_alphas = []
+        try:
+            # keep generating dummy pipelines until we have exactly dummy_pop_size valid alphas
+            rounds = 0
+            while len(collected_alphas) < dummy_pop_size:
+                rounds += 1
+                assert rounds <= max_rounds, f"Could not collect {dummy_pop_size} valid dummy alphas after {max_rounds} rounds."
+
+                # only generate as many pipelines as we still need
+                needed = dummy_pop_size - len(collected_alphas)
+
+                print(f"  Dummy population round {rounds}: collecting {needed} more alpha(s) "
+                      f"({len(collected_alphas)}/{dummy_pop_size} collected so far)...", flush=True)
+
+                # build `needed` random branch sets (same construction as initialize_population)
+                pop_branch_sets = []
+                while len(pop_branch_sets) < needed:
+                    branches = set()
+                    while len(branches) < self.branch_max:
+                        branches.add(self.hub.get_ran_interaction(self.rng))
+                    pop_branch_sets.append(branches)
+
+                # evaluate any interactions not yet seen during this dummy run so encodings exist
+                all_branches = set()
+                for b_set in pop_branch_sets:
+                    all_branches.update(b_set)
+                unseen = self.hub.get_unseen_interactions(all_branches)
+                if len(unseen) > 0:
+                    unseen_list = list(unseen)
+                    for i in range(0, len(unseen_list), self.branch_batch_eval_size):
+                        chunk = set(unseen_list[i:i + self.branch_batch_eval_size])
+                        self.evaluate_unseen_branches(chunk, gen_seen=int16_t(0))
+
+                # build pipelines from the active branches
+                dummy_population = []
+                for b_set in pop_branch_sets:
+                    b_set_active = self.hub.remove_inactive_branches(b_set)
+                    if len(b_set_active) == 0:
+                        continue
+                    dummy_population.append(self.reproduction.generate_random_pipeline(self.rng, b_set_active, self.seed))
+
+                # all branch sets were inactive this round; regenerate
+                if len(dummy_population) == 0:
+                    continue
+
+                # collect the mean alpha of every pipeline that evaluated successfully
+                collected_alphas.extend(self.evaluate_pipelines_for_alpha(dummy_population))
+
+            # a round may overshoot; keep exactly dummy_pop_size alphas
+            collected_alphas = collected_alphas[:dummy_pop_size]
+
+            # the run-wide alpha is the median of the per-pipeline mean alphas
+            self.ridge_alpha = float32_t(np.median(collected_alphas))
+
+            print(f"Collected {dummy_pop_size} dummy-population alphas in {rounds} round(s).", flush=True)
+            print(f"Per-pipeline alphas ({len(collected_alphas)}): "
+                  f"{[round(a, 6) for a in collected_alphas]}", flush=True)
+            print(f"Median alpha selected for the run: {self.ridge_alpha}", flush=True)
+        finally:
+            # clear the hub of all dummy-population state before the real generational process
+            print("Clearing hub of dummy-population interactions before the generational process...", flush=True)
+            self.hub.epi_db.hub = epi_db_snapshot
+            self.hub.viable_interactions.interaction_list = viable_list_snapshot
+            self.hub.viable_interactions.interaction_dict = viable_dict_snapshot
+
+        print(f"Run-wide ridge alpha found in {time.time() - alpha_start:.2f}s", flush=True)
+        return self.ridge_alpha
+
+    def evaluate_pipelines_for_alpha(self, pipelines: List[Pipeline]) -> List[float]:
+        """
+        Evaluate dummy pipelines to obtain a cross-validated mean ridge alpha per pipeline.
+
+        Each pipeline first goes through LD + FS (identical to the normal evaluation) to
+        select its final interactions. Then, for every CV fold, ray_find_best_alpha_for_fold
+        is run on the selected features to find that fold's best alpha. A pipeline's alpha is
+        the mean of its per-fold best alphas. No hub state or pipeline traits are written.
+
+        Parameters:
+            pipelines (List[Pipeline]): Dummy pipelines to evaluate.
+
+        Returns:
+            List[float]: One mean alpha per pipeline that survived LD/FS without error.
+        """
+
+        # quick checks
+        assert len(pipelines) > 0, "No pipelines to evaluate for alpha."
+
+        # per-pipeline LD/FS results, keyed by the pipeline's global id (no Pipeline attrs are mutated)
+        pipeline_details = {global_id: {'error': False, 'feature_cnt': None, 'features': None}
+                            for global_id in range(len(pipelines))}
+
+        # ---- Stage 1: LD + FS to select each pipeline's final interactions ----
+        ld_fs_jobs = []
+        for global_id, pipeline in enumerate(pipelines):
+            # LD pruning only when ld_flag is set and the pipeline shares a hyperchromosome
+            if self.ld_flag and self.interactions_on_same_hyperchromosome(pipeline.get_branch_set()):
+                ld_fs_jobs.append(ray_utils.ray_eval_pipeline_ld_fs.remote(
+                    component_map=self.hub.build_component_map(pipeline.get_branch_set()),
+                    y_train=self.all_y_ray_id,
+                    train_idx=self.train_idx_ray,
+                    selector_node=pipeline.get_selector_node(),
+                    ld_node=pipeline.get_ld_node(),
+                    pop_id=uint32_t(global_id),
+                    interaction_r2_set=self.hub.generate_r2_set(pipeline.get_branch_set())))
+            else:
+                ld_fs_jobs.append(ray_utils.ray_eval_pipeline_fs.remote(
+                    component_map=self.hub.build_component_map(pipeline.get_branch_set()),
+                    y_train=self.all_y_ray_id,
+                    train_idx=self.train_idx_ray,
+                    selector_node=pipeline.get_selector_node(),
+                    pop_id=uint32_t(global_id)))
+
+        while len(ld_fs_jobs) > 0:
+            finished, ld_fs_jobs = ray.wait(ld_fs_jobs)
+            error, feature_cnt, pop_id, features, _ = ray.get(finished[0])
+            assert feature_cnt == len(features), "Feature count does not match number of features returned."
+            pipeline_details[pop_id]['feature_cnt'] = feature_cnt
+            pipeline_details[pop_id]['features'] = features
+            if error < float32_t(0.0):
+                pipeline_details[pop_id]['error'] = True
+
+        # ---- Stage 2: per-fold best alpha for each non-errored pipeline ----
+        # tag each job with the pipeline's global id via pop_id so results map back correctly
+        alpha_jobs = []
+        for global_id in range(len(pipelines)):
+            if pipeline_details[global_id]['error']:
+                continue
+
+            # rebuild the selected feature set (same as evaluation())
+            feature = set()
+            for f in pipeline_details[global_id]['features']:
+                feature.add((snp_t(f[0]), snp_t(f[1])))
+            if len(feature) == 0:
+                continue
+
+            for _, fold_data in self.train_fold_dict_ray.items():
+                alpha_jobs.append(ray_utils.ray_find_best_alpha_for_fold.remote(
+                    component_map=self.hub.build_component_map(feature),
+                    y=self.all_y_ray_id,
+                    train_idx=fold_data['train_idx'],
+                    valid_idx=fold_data['val_idx'],
+                    pop_id=uint32_t(global_id)))
+
+        # accumulate per-fold alphas, keyed by pop_id (the pipeline's global id)
+        fold_alphas_per_pipeline = {}
+        while len(alpha_jobs) > 0:
+            finished, alpha_jobs = ray.wait(alpha_jobs)
+            alpha, _, pop_id = ray.get(finished[0])
+            if alpha < 0.0:
+                # this fold failed to find a valid alpha; skip it
+                continue
+            fold_alphas_per_pipeline.setdefault(int(pop_id), []).append(alpha)
+
+        # a pipeline's alpha is the mean of its per-fold best alphas
+        pipeline_mean_alphas = [float(np.mean(fold_alphas))
+                                for fold_alphas in fold_alphas_per_pipeline.values()
+                                if len(fold_alphas) > 0]
+
+        return pipeline_mean_alphas
+
 
     def evaluation(self, pipelines: List[Pipeline], gen_info: int16_t) -> Tuple[List[Pipeline], Dict]:
         """
@@ -561,7 +766,7 @@ class K2_Evolver(EA):
                                                                               train_idx = fold_data['train_idx'],
                                                                               valid_idx = fold_data['val_idx'],
                                                                               pop_id = uint32_t(i),
-                                                                              l1_wt = self.l1_wt))
+                                                                              alpha = self.ridge_alpha))
             r2_job_time = time.time() - r2_job_start
             total_r2_job_time += r2_job_time
 
@@ -1060,7 +1265,7 @@ class K2_Evolver(EA):
                                                                       train_idx = self.train_idx_ray,  # Use all training data for final evaluation
                                                                       valid_idx = self.val_idx_ray,
                                                                       pop_id = uint32_t(pipeline_id),
-                                                                      l1_wt = self.l1_wt))
+                                                                      alpha = self.ridge_alpha))
 
 
             # process results as they come in
@@ -1088,7 +1293,7 @@ class K2_Evolver(EA):
                 print(f"  Model 0 (Base) - Train R²: {base_r2_train:.6f}, Valid R²: {base_r2_valid:.6f}, Delta: {delta_base:.6f}", flush=True)
                 print(f"  Model 1 (Joint) - Train R²: {joint_r2_train:.6f}, Valid R²: {joint_r2_valid:.6f}, Delta: {delta_joint:.6f}", flush=True)
                 print(f"  Epistasis R²: {r2:.6f}", flush=True)
-                print(f"  Alpha - Base: {alpha_base:.4f}, Joint: {alpha_joint:.4f}, L1_wt: {self.l1_wt:.4f}", flush=True)
+                print(f"  Alpha - Base: {alpha_base:.4f}, Joint: {alpha_joint:.4f}, L1_wt: 0.0000 (ridge)", flush=True)
 
         print("\nPost analysis on validation set completed.", flush=True)
 
@@ -1291,7 +1496,7 @@ class K2_Evolver(EA):
             train_idx=combined_idx_ray_id,
             valid_idx=combined_idx_ray_id,  # Use combined train+validation indices for evaluation
             pop_id=uint32_t(0),
-            l1_wt=self.l1_wt
+            alpha=self.ridge_alpha
         )
         train_val_r2, _, error, alpha_base_tv, alpha_joint_tv, base_r2_tv_train, base_r2_tv_valid, joint_r2_tv_train, joint_r2_tv_valid = ray.get(train_valid_r2_job)
         if error < float32_t(0.0):
@@ -1306,7 +1511,7 @@ class K2_Evolver(EA):
         print(f'  Model 0 (Base) - Train R²: {base_r2_tv_train:.6f}, Valid R²: {base_r2_tv_valid:.6f}, Delta: {base_r2_tv_valid - base_r2_tv_train:.6f}', flush=True)
         print(f'  Model 1 (Joint) - Train R²: {joint_r2_tv_train:.6f}, Valid R²: {joint_r2_tv_valid:.6f}, Delta: {joint_r2_tv_valid - joint_r2_tv_train:.6f}', flush=True)
         print(f'  Epistasis R²: {train_val_r2:.6f}', flush=True)
-        print(f'  Alpha - Base: {alpha_base_tv:.4f}, Joint: {alpha_joint_tv:.4f}, L1_wt: {self.l1_wt:.4f}', flush=True)
+        print(f'  Alpha - Base: {alpha_base_tv:.4f}, Joint: {alpha_joint_tv:.4f}, L1_wt: 0.0000 (ridge)', flush=True)
 
         # Calculate test R² using ray remote function
         print("Calculating test R²...", flush=True)
@@ -1316,7 +1521,7 @@ class K2_Evolver(EA):
             train_idx=combined_idx_ray_id,
             valid_idx=test_idx_ray_id,
             pop_id=uint32_t(0),
-            l1_wt=self.l1_wt
+            alpha=self.ridge_alpha
         )
 
         test_r2, _, error, alpha_base_test, alpha_joint_test, base_r2_test_train, base_r2_test_test, joint_r2_test_train, joint_r2_test_test = ray.get(test_r2_job)
@@ -1334,7 +1539,7 @@ class K2_Evolver(EA):
         print(f'  Model 0 (Base) - Train R²: {base_r2_test_train:.6f}, Test R²: {base_r2_test_test:.6f}, Delta: {base_r2_test_test - base_r2_test_train:.6f}', flush=True)
         print(f'  Model 1 (Joint) - Train R²: {joint_r2_test_train:.6f}, Test R²: {joint_r2_test_test:.6f}, Delta: {joint_r2_test_test - joint_r2_test_train:.6f}', flush=True)
         print(f'  Epistasis R²: {test_r2:.6f}', flush=True)
-        print(f'  Alpha - Base: {alpha_base_test:.4f}, Joint: {alpha_joint_test:.4f}, L1_wt: {self.l1_wt:.4f}', flush=True)
+        print(f'  Alpha - Base: {alpha_base_test:.4f}, Joint: {alpha_joint_test:.4f}, L1_wt: 0.0000 (ridge)', flush=True)
 
         # Calculate PFI on test set using ray_pfi
         print("Calculating permutation feature importance on test set...", flush=True)
