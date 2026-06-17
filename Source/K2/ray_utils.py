@@ -781,3 +781,60 @@ def ray_find_best_alpha_for_fold(component_map: Dict[snp_t, Dict],
         logging.error("No valid alpha found during cross-validation")
         return float(-1.0), float('inf'), pop_id
     return float(best_alpha), float(best_error), pop_id
+
+# function to find the smallest eigen value from the branches/features in a pipeline for the entire training data
+@ray.remote
+def ray_find_smallest_eigenvalue(component_map: Dict[snp_t, Dict],
+                                 y_train: npt.NDArray,
+                                 train_idx: npt.NDArray,
+                                 pop_id: uint32_t) -> Tuple[float32_t, uint32_t]:
+    """
+    Find the smallest eigenvalue from the branches/features in a pipeline for the entire training data.
+
+    Parameters:
+        component_map (Dict[snp_t, Dict]): Dictionary mapping interaction names to their component information (snp1_name, snp2_name, snp1_ray_id, snp2_ray_id, encoded_ray_id).
+        y_train (npt.NDArray): Phenotype data array.
+        train_idx (npt.NDArray): Indices for training data.
+        pop_id (uint32_t): Population ID for tracking.      
+
+    Returns:
+        Tuple containing:
+            float32_t: Smallest eigenvalue among features in the pipeline
+            uint32_t: Population ID 
+    """
+
+    # extract the interaction features from the component map
+    interaction_names = list(component_map.keys())
+    X_interaction = [component_map[name]['encoded_ray_id'] for name in interaction_names]
+
+    # extract the univariate features from the component map
+    X_univariate = []
+    for name in interaction_names:
+        X_univariate.append(component_map[name]['snp1_ray_id'])
+        X_univariate.append(component_map[name]['snp2_ray_id'])
+
+    # get the training data for the interaction features
+    X_interaction_matrix = np.column_stack([ray.get(x)[train_idx] for x in X_interaction])
+    # get the training data for the univariate features
+    X_univariate_matrix = np.column_stack([ray.get(x)[train_idx] for x in X_univariate])
+    # remove any duplicate columns from the univariate matrix (can happen if the same SNP is involved in multiple interactions in the pipeline)
+    _, unique_indices = np.unique(X_univariate_matrix, axis=1, return_index=True)
+    X_univariate_matrix = X_univariate_matrix[:, np.sort(unique_indices)]
+
+    # center and scale the interaction features based on training data
+    X_interaction_matrix_train_centered_scaled = (X_interaction_matrix - np.mean(X_interaction_matrix, axis=0)) / (np.std(X_interaction_matrix, axis=0))
+
+    # center and scale the univariate features based on training data
+    X_univariate_matrix_train_centered_scaled = (X_univariate_matrix - np.mean(X_univariate_matrix, axis=0)) / (np.std(X_univariate_matrix, axis=0))
+
+    # combine the centered and scaled interaction and univariate features into a single matrix
+    X_combined = np.column_stack((X_univariate_matrix_train_centered_scaled, X_interaction_matrix_train_centered_scaled))
+
+    # calculate the eigen values using the function eigvalsh 
+    try:
+        eigenvalues = np.linalg.eigvalsh(X_combined.T @ X_combined)/X_combined.shape[0] # dividing by n to get the eigenvalues of the covariance matrix instead of the scatter matrix, which is more interpretable for checking multicollinearity
+        smallest_eigenvalue = float32_t(np.min(eigenvalues))
+    except Exception as e:
+        logging.error(f"Error calculating eigenvalues for pipeline: {e}")
+        return float32_t(-1.0), pop_id
+    return smallest_eigenvalue, pop_id

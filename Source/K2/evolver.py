@@ -465,7 +465,6 @@ class K2_Evolver(EA):
 
         # number of dummy pipelines whose alphas we want; we collect exactly this many valid
         # alphas, replacing any pipeline that errors out with a freshly generated one.
-        # (lower this for a quick smoke test; the median logic holds for any value.)
         dummy_pop_size = 101
         # maximum number of rounds to try generating dummy pipelines before giving up and erroring out; each round generates a full batch of pipelines, so this is not per-pipeline
         max_rounds = 500
@@ -568,7 +567,7 @@ class K2_Evolver(EA):
         # quick checks
         assert len(pipelines) > 0, "No pipelines to evaluate for alpha."
 
-        # per-pipeline LD/FS results, keyed by the pipeline's global id (no Pipeline attrs are mutated)
+        # per-pipeline LD/FS results, keyed by the pipeline's global id, which is just its index in the input list; each value is a dict with keys 'error', 'feature_cnt', and 'features'
         pipeline_details = {global_id: {'error': False, 'feature_cnt': None, 'features': None}
                             for global_id in range(len(pipelines))}
 
@@ -1667,3 +1666,189 @@ class K2_Evolver(EA):
         plt.tight_layout()
         plt.savefig(os.path.join(self.save_directory, 'pareto_front_plot.png'), dpi=300, bbox_inches='tight')
         print("Pareto front plot saved to pareto_front_plot.png", flush=True)
+
+    def evaluate_pipelines_for_eigenvalue(self, pipelines: List[Pipeline]) -> List[float]:
+        """
+        Evaluate dummy pipelines to obtain the smallest eigenvalue of each pipeline's
+        feature matrix (X^T X) on the full training data.
+
+        Each pipeline first goes through LD + FS (identical to the normal evaluation) to
+        select its final interactions. Then ray_find_smallest_eigenvalue is run once per
+        pipeline on the selected features (full training data, no folds). No hub state or
+        pipeline traits are written.
+
+        Parameters:
+            pipelines (List[Pipeline]): Dummy pipelines to evaluate.
+
+        Returns:
+            List[float]: One smallest eigenvalue per pipeline that evaluated successfully.
+        """
+
+        # quick checks
+        assert len(pipelines) > 0, "No pipelines to evaluate for eigenvalue."
+
+        # per-pipeline LD/FS results, keyed by the pipeline's global id (no Pipeline attrs are mutated)
+        pipeline_details = {global_id: {'error': False, 'feature_cnt': None, 'features': None}
+                            for global_id in range(len(pipelines))}
+
+        # ---- Stage 1: LD + FS to select each pipeline's final interactions ----
+        ld_fs_jobs = []
+        for global_id, pipeline in enumerate(pipelines):
+            # LD pruning only when ld_flag is set and the pipeline shares a hyperchromosome
+            if self.ld_flag and self.interactions_on_same_hyperchromosome(pipeline.get_branch_set()):
+                ld_fs_jobs.append(ray_utils.ray_eval_pipeline_ld_fs.remote(
+                    component_map=self.hub.build_component_map(pipeline.get_branch_set()),
+                    y_train=self.all_y_ray_id,
+                    train_idx=self.train_idx_ray,
+                    selector_node=pipeline.get_selector_node(),
+                    ld_node=pipeline.get_ld_node(),
+                    pop_id=uint32_t(global_id),
+                    interaction_r2_set=self.hub.generate_r2_set(pipeline.get_branch_set())))
+            else:
+                ld_fs_jobs.append(ray_utils.ray_eval_pipeline_fs.remote(
+                    component_map=self.hub.build_component_map(pipeline.get_branch_set()),
+                    y_train=self.all_y_ray_id,
+                    train_idx=self.train_idx_ray,
+                    selector_node=pipeline.get_selector_node(),
+                    pop_id=uint32_t(global_id)))
+
+        while len(ld_fs_jobs) > 0:
+            finished, ld_fs_jobs = ray.wait(ld_fs_jobs)
+            error, feature_cnt, pop_id, features, _ = ray.get(finished[0])
+            assert feature_cnt == len(features), "Feature count does not match number of features returned."
+            pipeline_details[pop_id]['feature_cnt'] = feature_cnt
+            pipeline_details[pop_id]['features'] = features
+            if error < float32_t(0.0):
+                pipeline_details[pop_id]['error'] = True
+
+        # ---- Stage 2: smallest eigenvalue for each non-errored pipeline (full training data) ----
+        # tag each job with the pipeline's global id via pop_id so results map back correctly
+        eigen_jobs = []
+        for global_id in range(len(pipelines)):
+            if pipeline_details[global_id]['error']:
+                continue
+
+            # rebuild the selected feature set (same as evaluation())
+            feature = set()
+            for f in pipeline_details[global_id]['features']:
+                feature.add((snp_t(f[0]), snp_t(f[1])))
+            if len(feature) == 0:
+                continue
+
+            eigen_jobs.append(ray_utils.ray_find_smallest_eigenvalue.remote(
+                component_map=self.hub.build_component_map(feature),
+                y_train=self.all_y_ray_id,
+                train_idx=self.train_idx_ray,
+                pop_id=uint32_t(global_id)))
+
+        # collect one smallest eigenvalue per pipeline (failures return -1.0 and are skipped)
+        eigenvalues = []
+        while len(eigen_jobs) > 0:
+            finished, eigen_jobs = ray.wait(eigen_jobs)
+            smallest_eigenvalue, _ = ray.get(finished[0])
+            if smallest_eigenvalue < float32_t(0.0):
+                continue
+            eigenvalues.append(float(smallest_eigenvalue))
+
+        return eigenvalues
+
+    def make_dummy_population_and_find_smallest_eigenvalue(self) -> float32_t:
+        """
+        Build a throwaway dummy population (random branches -> unseen branch evaluation ->
+        LD + FS), then compute the smallest eigenvalue of each pipeline's feature matrix on
+        the full training data via ray_find_smallest_eigenvalue. Exactly dummy_pop_size valid
+        eigenvalues are collected (any pipeline that errors out is replaced by a freshly
+        generated one), and the full list plus its median are printed.
+
+        The hub is snapshotted before and restored after, so this dummy population leaves no
+        trace (no seen/viable interactions, no flipped active flags) on the real run.
+
+        Returns:
+            float32_t: The median of the per-pipeline smallest eigenvalues.
+        """
+
+        # quick check
+        assert self.hub is not None, "Hub must be initialized before computing eigenvalues."
+
+        # number of dummy pipelines whose eigenvalues we want; collect exactly this many,
+        # replacing any pipeline that errors out with a freshly generated one.
+        dummy_pop_size = 101
+        # safety backstop so a pathological dataset cannot loop forever
+        max_rounds = 1000
+
+        print(f"Computing smallest eigenvalues from a dummy population of {dummy_pop_size} pipelines...", flush=True)
+        eigen_start = time.time()
+
+        # Snapshot the hub so the dummy population leaves no trace (see find_run_alpha).
+        epi_db_snapshot = {k: list(v) for k, v in self.hub.epi_db.hub.items()}
+        viable_list_snapshot = list(self.hub.viable_interactions.interaction_list)
+        viable_dict_snapshot = dict(self.hub.viable_interactions.interaction_dict)
+
+        collected_eigenvalues = []
+        median_eigenvalue = float32_t(-1.0)
+        try:
+            # keep generating dummy pipelines until we have exactly dummy_pop_size valid eigenvalues
+            rounds = 0
+            while len(collected_eigenvalues) < dummy_pop_size:
+                rounds += 1
+                assert rounds <= max_rounds, f"Could not collect {dummy_pop_size} valid eigenvalues after {max_rounds} rounds."
+
+                # only generate as many pipelines as we still need
+                needed = dummy_pop_size - len(collected_eigenvalues)
+
+                print(f"  Dummy population round {rounds}: collecting {needed} more eigenvalue(s) "
+                      f"({len(collected_eigenvalues)}/{dummy_pop_size} collected so far)...", flush=True)
+
+                # build `needed` random branch sets (same construction as initialize_population)
+                pop_branch_sets = []
+                while len(pop_branch_sets) < needed:
+                    branches = set()
+                    while len(branches) < self.branch_max:
+                        branches.add(self.hub.get_ran_interaction(self.rng))
+                    pop_branch_sets.append(branches)
+
+                # evaluate any interactions not yet seen during this dummy run so encodings exist
+                all_branches = set()
+                for b_set in pop_branch_sets:
+                    all_branches.update(b_set)
+                unseen = self.hub.get_unseen_interactions(all_branches)
+                if len(unseen) > 0:
+                    unseen_list = list(unseen)
+                    for i in range(0, len(unseen_list), self.branch_batch_eval_size):
+                        chunk = set(unseen_list[i:i + self.branch_batch_eval_size])
+                        self.evaluate_unseen_branches(chunk, gen_seen=int16_t(0))
+
+                # build pipelines from the active branches
+                dummy_population = []
+                for b_set in pop_branch_sets:
+                    b_set_active = self.hub.remove_inactive_branches(b_set)
+                    if len(b_set_active) == 0:
+                        continue
+                    dummy_population.append(self.reproduction.generate_random_pipeline(self.rng, b_set_active, self.seed))
+
+                # all branch sets were inactive this round; regenerate
+                if len(dummy_population) == 0:
+                    continue
+
+                # collect the smallest eigenvalue of every pipeline that evaluated successfully
+                collected_eigenvalues.extend(self.evaluate_pipelines_for_eigenvalue(dummy_population))
+
+            # a round may overshoot; keep exactly dummy_pop_size eigenvalues
+            collected_eigenvalues = collected_eigenvalues[:dummy_pop_size]
+
+            # median of the per-pipeline smallest eigenvalues
+            median_eigenvalue = float32_t(np.median(collected_eigenvalues))
+
+            print(f"Collected {dummy_pop_size} dummy-population eigenvalues in {rounds} round(s).", flush=True)
+            print(f"Per-pipeline smallest eigenvalues ({len(collected_eigenvalues)}): "
+                  f"{[round(e, 6) for e in collected_eigenvalues]}", flush=True)
+            print(f"Median smallest eigenvalue: {median_eigenvalue}", flush=True)
+        finally:
+            # clear the hub of all dummy-population state before anything else proceeds
+            print("Clearing hub of dummy-population interactions...", flush=True)
+            self.hub.epi_db.hub = epi_db_snapshot
+            self.hub.viable_interactions.interaction_list = viable_list_snapshot
+            self.hub.viable_interactions.interaction_dict = viable_dict_snapshot
+
+        print(f"Smallest-eigenvalue computation finished in {time.time() - eigen_start:.2f}s", flush=True)
+        return median_eigenvalue
