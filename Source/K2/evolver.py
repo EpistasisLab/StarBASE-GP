@@ -165,8 +165,8 @@ class K2_Evolver(EA):
         # list to store the generation details - front zero size, still consider interaction set size, number of snps pruned
         generation_details = []
         # determine the run-wide ridge alpha with a throwaway dummy population (no hub state leaks)
-        print('Determining run-wide ridge alpha...', flush=True)
-        self.find_run_alpha()
+        print('Determining run-wide ridge alpha using eigenvalues...', flush=True)
+        self.alpha = self.make_dummy_population_and_find_smallest_eigenvalue()
 
         # create the initial population
         print('Initializing population...', flush=True)
@@ -1851,4 +1851,7 @@ class K2_Evolver(EA):
             self.hub.viable_interactions.interaction_dict = viable_dict_snapshot
 
         print(f"Smallest-eigenvalue computation finished in {time.time() - eigen_start:.2f}s", flush=True)
+
+        # # set the alpha to the median eigenvalue
+        # self.alpha = median_eigenvalue # all the generations will be using this value
         return median_eigenvalue
