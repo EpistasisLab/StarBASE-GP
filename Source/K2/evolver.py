@@ -85,7 +85,7 @@ class K2_Evolver(EA):
         self.phantom_epistasis_threshold = phantom_epistasis_threshold
         self.starting_snps_csv_path = starting_snps_csv_path
         # run-wide ridge alpha; overwritten by find_run_alpha() before evolution begins
-        self.ridge_alpha = float32_t(0.1)
+        self.alpha = float32_t(0.1)
 
         # initialize reproduction class
         self.reproduction = K2_Reproduction(branch_max=self.branch_max,
@@ -531,8 +531,8 @@ class K2_Evolver(EA):
             # a round may overshoot; keep exactly dummy_pop_size alphas
             collected_alphas = collected_alphas[:dummy_pop_size]
 
-            # the run-wide alpha is the median of the per-pipeline mean alphas
-            self.ridge_alpha = float32_t(np.median(collected_alphas))
+            # # the run-wide alpha is the median of the per-pipeline mean alphas
+            # self.ridge_alpha = float32_t(np.median(collected_alphas))
 
             print(f"Collected {dummy_pop_size} dummy-population alphas in {rounds} round(s).", flush=True)
             print(f"Per-pipeline alphas ({len(collected_alphas)}): "
@@ -765,7 +765,7 @@ class K2_Evolver(EA):
                                                                               train_idx = fold_data['train_idx'],
                                                                               valid_idx = fold_data['val_idx'],
                                                                               pop_id = uint32_t(i),
-                                                                              alpha = self.ridge_alpha))
+                                                                              alpha = self.alpha))
             r2_job_time = time.time() - r2_job_start
             total_r2_job_time += r2_job_time
 
@@ -1264,7 +1264,7 @@ class K2_Evolver(EA):
                                                                       train_idx = self.train_idx_ray,  # Use all training data for final evaluation
                                                                       valid_idx = self.val_idx_ray,
                                                                       pop_id = uint32_t(pipeline_id),
-                                                                      alpha = self.ridge_alpha))
+                                                                      alpha = self.alpha))
 
 
             # process results as they come in
@@ -1495,7 +1495,7 @@ class K2_Evolver(EA):
             train_idx=combined_idx_ray_id,
             valid_idx=combined_idx_ray_id,  # Use combined train+validation indices for evaluation
             pop_id=uint32_t(0),
-            alpha=self.ridge_alpha
+            alpha=self.alpha
         )
         train_val_r2, _, error, alpha_base_tv, alpha_joint_tv, base_r2_tv_train, base_r2_tv_valid, joint_r2_tv_train, joint_r2_tv_valid = ray.get(train_valid_r2_job)
         if error < float32_t(0.0):
@@ -1520,7 +1520,7 @@ class K2_Evolver(EA):
             train_idx=combined_idx_ray_id,
             valid_idx=test_idx_ray_id,
             pop_id=uint32_t(0),
-            alpha=self.ridge_alpha
+            alpha=self.alpha
         )
 
         test_r2, _, error, alpha_base_test, alpha_joint_test, base_r2_test_train, base_r2_test_test, joint_r2_test_train, joint_r2_test_test = ray.get(test_r2_job)
